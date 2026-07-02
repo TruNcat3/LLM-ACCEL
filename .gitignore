@@ -1,0 +1,28 @@
+# HLS projects and reports
+qwen_hls*_prj/
+reports/
+logs/
+
+# Vitis/Vivado products
+vitis_8x64/
+.Xil/
+.ipcache/
+*.xo
+*.xclbin
+*.dcp
+*.jou
+*.log
+*.str
+
+# Emulation output
+emconfig.json
+xsim.dir/
+
+# Host build products
+*.exe
+
+# Editor and language caches
+.vscode/
+.idea/
+__pycache__/
+*.pyc

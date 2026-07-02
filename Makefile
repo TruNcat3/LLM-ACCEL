@@ -1,0 +1,188 @@
+TARGET ?= sw_emu
+FREQUENCY ?= 300
+THREADS ?= 16
+OPT_LEVEL ?= 3
+REPORT_LEVEL ?= 2
+
+DETECTED_VITIS := $(shell if command -v v++ >/dev/null 2>&1; then dirname $$(dirname $$(readlink -f $$(command -v v++))); else echo /tools/Xilinx/Vitis/2022.2; fi)
+DETECTED_HLS := $(shell if command -v vitis_hls >/dev/null 2>&1; then dirname $$(dirname $$(readlink -f $$(command -v vitis_hls))); else echo /tools/Xilinx/Vitis_HLS/2022.2; fi)
+
+XILINX_XRT ?= /opt/xilinx/xrt
+XILINX_VITIS ?= $(DETECTED_VITIS)
+XILINX_HLS ?= $(DETECTED_HLS)
+DEVICE ?= xilinx_u50_gen3x16_xdma_5_202210_1
+
+CUR_DIR := $(abspath .)
+XPLATFORM := $(firstword \
+	$(wildcard $(DEVICE)) \
+	$(wildcard $(XILINX_VITIS)/platforms/$(DEVICE)/$(DEVICE).xpfm) \
+	$(wildcard /opt/xilinx/platforms/$(DEVICE)/$(DEVICE).xpfm))
+
+ifeq ($(XPLATFORM),)
+$(warning 未在默认目录找到 $(DEVICE)，v++ 将直接使用设备名称)
+XPLATFORM := $(DEVICE)
+endif
+
+XDEVICE := $(notdir $(basename $(XPLATFORM)))
+XO_DIR := vitis_8x64/xo
+BUILD_DIR := vitis_8x64/build.$(TARGET).$(XDEVICE)
+TEMP_DIR := vitis_8x64/_x.$(TARGET).$(XDEVICE)
+REPORT_DIR := reports/vitis_8x64/$(TARGET).$(XDEVICE)
+
+COMPUTE_XO := $(XO_DIR)/compute_core_8x64_unified_nk.xo
+CONTROL_XO := $(XO_DIR)/control_cache_8x64_dual_core_nk.xo
+STATUS_XO := $(XO_DIR)/cc8_status_sink_nk.xo
+XCLBIN := $(BUILD_DIR)/qwen_8x64_dual.xclbin
+CONN_CFG := conn_u50_8x64_dual.cfg
+
+SMOKE_HOST := $(BUILD_DIR)/host_8x64.exe
+QWEN_HOST := $(BUILD_DIR)/host_qwen_8x64.exe
+EMCONFIG := $(BUILD_DIR)/emconfig.json
+
+CXX := g++
+CXXFLAGS += -std=c++14 -O3 -Wall -Wno-unknown-pragmas
+CXXFLAGS += -Iinclude -Icommon/include
+CXXFLAGS += -I$(XILINX_XRT)/include -I$(XILINX_HLS)/include
+LDFLAGS += -L$(XILINX_XRT)/lib -lOpenCL -lpthread -lrt -ldl
+
+RUN_TIMEOUT ?= 1800
+QWEN_ARGS ?= --mode run --profile small --tokens 0 --zero-model
+RANDOM_ARGS ?= --mode verify-random --profile small --seed 20260701
+
+ifneq ($(filter $(TARGET),sw_emu hw_emu),)
+RUN_ENV := XCL_EMULATION_MODE=$(TARGET)
+RUN_EXTRA_DEPS := $(EMCONFIG)
+else
+RUN_ENV :=
+RUN_EXTRA_DEPS :=
+endif
+
+.PHONY: help
+.PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
+.PHONY: hls_csim_control hls_csynth_control hls_cosim_control
+.PHONY: hls_csim_nk hls_csynth_compute_xo hls_csynth_control_xo
+.PHONY: hls_csynth_status_xo hls_csynth_xo
+.PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts
+.PHONY: vitis_8x64_run_smoke vitis_8x64_run_qwen vitis_8x64_run_random
+.PHONY: clean
+
+help:
+	@echo "双 8x64 Qwen 加速器构建入口"
+	@echo "  make hls_csim_compute"
+	@echo "  make hls_csynth_compute"
+	@echo "  make hls_cosim_compute"
+	@echo "  make hls_csim_control"
+	@echo "  make hls_csynth_control"
+	@echo "  make hls_cosim_control"
+	@echo "  make hls_csim_nk"
+	@echo "  make vitis_8x64_xo"
+	@echo "  make vitis_8x64_link TARGET=sw_emu|hw_emu|hw"
+	@echo "  make vitis_8x64_run_smoke TARGET=sw_emu|hw_emu|hw"
+	@echo "  make vitis_8x64_run_qwen TARGET=sw_emu|hw_emu|hw"
+	@echo "  make vitis_8x64_run_random TARGET=sw_emu|hw_emu|hw"
+
+hls_csim_compute:
+	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_compute_core_8x64_unified.tcl
+
+hls_csynth_compute:
+	HLS_COSIM_PREPARE=1 HLS_COSIM_PREPARE_ONLY=1 HLS_COSIM_SKIP_CSIM=1 \
+		scripts/run_vitis_hls.sh tcl/run_cosim_compute_core_8x64_unified.tcl
+
+hls_cosim_compute:
+	scripts/run_vitis_hls.sh tcl/run_cosim_compute_core_8x64_unified.tcl
+
+hls_csim_control:
+	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_control_cache_8x64_dual_core.tcl
+
+hls_csynth_control:
+	HLS_COSIM_PREPARE=1 HLS_COSIM_PREPARE_ONLY=1 HLS_COSIM_SKIP_CSIM=1 \
+		scripts/run_vitis_hls.sh tcl/run_cosim_control_cache_8x64_dual_core.tcl
+
+hls_cosim_control:
+	scripts/run_vitis_hls.sh tcl/run_cosim_control_cache_8x64_dual_core.tcl
+
+hls_csim_nk:
+	scripts/run_vitis_hls.sh tcl/run_csim_compute_core_8x64_nk.tcl
+	scripts/run_vitis_hls.sh tcl/run_csim_control_cache_8x64_nk.tcl
+
+$(COMPUTE_XO): \
+	kernel/mm_stream_8x64_fused_mac.cpp \
+	kernel/compute_stream.cpp \
+	kernel/compute_core_8x64_unified.cpp \
+	kernel/compute_core_8x64_nk.cpp \
+	include/compute_core_8x64_unified.hpp \
+	include/vitis_stream_8x64.hpp
+	scripts/run_vitis_hls.sh tcl/build_compute_core_8x64_nk_xo.tcl
+
+$(CONTROL_XO): \
+	kernel/mm_controller.cpp \
+	kernel/control_cache_8x64.cpp \
+	kernel/control_cache_8x64_nk.cpp \
+	include/control_cache_8x64.hpp \
+	include/vitis_stream_8x64.hpp
+	scripts/run_vitis_hls.sh tcl/build_control_cache_8x64_nk_xo.tcl
+
+$(STATUS_XO): \
+	kernel/cc8_status_sink.cpp \
+	include/control_cache_8x64.hpp \
+	include/vitis_stream_8x64.hpp
+	scripts/run_vitis_hls.sh tcl/build_cc8_status_sink_nk_xo.tcl
+
+hls_csynth_compute_xo: $(COMPUTE_XO)
+hls_csynth_control_xo: $(CONTROL_XO)
+hls_csynth_status_xo: $(STATUS_XO)
+hls_csynth_xo: $(COMPUTE_XO) $(CONTROL_XO) $(STATUS_XO)
+vitis_8x64_xo: hls_csynth_xo
+
+$(XCLBIN): $(COMPUTE_XO) $(CONTROL_XO) $(STATUS_XO) $(CONN_CFG)
+	mkdir -p $(BUILD_DIR) $(TEMP_DIR) $(REPORT_DIR)
+	v++ -l -t $(TARGET) --platform $(XPLATFORM) --save-temps \
+		--optimize $(OPT_LEVEL) --report_level $(REPORT_LEVEL) \
+		-I$(CUR_DIR)/include \
+		--kernel_frequency $(FREQUENCY) --config $(CONN_CFG) \
+		--vivado.synth.jobs $(THREADS) --vivado.impl.jobs $(THREADS) \
+		--temp_dir $(TEMP_DIR) --report_dir $(REPORT_DIR) \
+		-o $@ $(CONTROL_XO) $(COMPUTE_XO) $(STATUS_XO)
+
+vitis_8x64_link: $(XCLBIN)
+
+$(SMOKE_HOST): common/include/xcl2.cpp common/include/xcl2.hpp host/host_8x64.cpp
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -o $@ common/include/xcl2.cpp host/host_8x64.cpp \
+		$(CXXFLAGS) $(LDFLAGS)
+
+$(QWEN_HOST): common/include/xcl2.cpp common/include/xcl2.hpp host/host_qwen_8x64.cpp
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -o $@ common/include/xcl2.cpp host/host_qwen_8x64.cpp \
+		$(CXXFLAGS) $(LDFLAGS)
+
+vitis_8x64_hosts: $(SMOKE_HOST) $(QWEN_HOST)
+
+$(EMCONFIG):
+	mkdir -p $(BUILD_DIR)
+	emconfigutil --platform $(XPLATFORM) --od $(BUILD_DIR)
+
+vitis_8x64_run_smoke: $(XCLBIN) $(SMOKE_HOST) $(RUN_EXTRA_DEPS)
+	cd $(BUILD_DIR) && $(RUN_ENV) timeout $(RUN_TIMEOUT) \
+		./host_8x64.exe --xclbin ./qwen_8x64_dual.xclbin --case all
+
+vitis_8x64_run_qwen: $(XCLBIN) $(QWEN_HOST) $(RUN_EXTRA_DEPS)
+	cd $(BUILD_DIR) && $(RUN_ENV) timeout $(RUN_TIMEOUT) \
+		./host_qwen_8x64.exe --xclbin ./qwen_8x64_dual.xclbin $(QWEN_ARGS)
+
+vitis_8x64_run_random: $(XCLBIN) $(QWEN_HOST) $(RUN_EXTRA_DEPS)
+	cd $(BUILD_DIR) && $(RUN_ENV) timeout $(RUN_TIMEOUT) \
+		./host_qwen_8x64.exe --xclbin ./qwen_8x64_dual.xclbin $(RANDOM_ARGS)
+
+clean:
+	rm -rf \
+		qwen_hls_cosim_compute_core_8x64_unified_prj \
+		qwen_hls_cosim_compute_core_8x64_unified_csim_prj \
+		qwen_hls_cosim_control_cache_8x64_dual_core_prj \
+		qwen_hls_cosim_control_cache_8x64_dual_core_csim_prj \
+		qwen_hls_compute_core_8x64_nk_csim_prj \
+		qwen_hls_control_cache_8x64_nk_csim_prj \
+		qwen_hls_compute_core_8x64_nk_prj \
+		qwen_hls_control_cache_8x64_nk_prj \
+		qwen_hls_cc8_status_sink_nk_prj \
+		vitis_8x64 reports logs
