@@ -1,6 +1,6 @@
-# LLM-FPGA 双 8x64 统一计算核
+# LLM-FPGA 加速器设计
 
-本项目面向 Xilinx Alveo U50，使用两个 8x64 统一计算核和一个控制兼缓存核
+本项目面向 Xilinx Alveo U50，
 执行 Qwen 类模型。计算核只处理 MM、Norm、Attention、非线性和向量运算；
 模型算子、HBM 地址和多核调度由控制兼缓存核管理。
 
