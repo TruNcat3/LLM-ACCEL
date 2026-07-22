@@ -1,7 +1,8 @@
 cd [file dirname [file dirname [info script]]]
-open_project -reset qwen_hls_control_cache_8x64_nk_csim_prj
+source tcl/common_hls_depth_config.tcl
+open_project -reset qwen_hls_control_cache_8x64_nk_csim_prj[llm_fpga_depth_project_suffix]
 set_top control_cache_8x64_dual_core_nk
-set cflags "-I./include -std=c++14 -DQWEN_TEST_SMALL"
+set cflags "-I./include -std=c++14 -DQWEN_TEST_SMALL[llm_fpga_depth_cflags]"
 add_files kernel/mm_controller.cpp -cflags $cflags
 add_files kernel/control_cache_8x64.cpp -cflags $cflags
 add_files kernel/control_cache_8x64_nk.cpp -cflags $cflags

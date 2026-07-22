@@ -7,7 +7,18 @@ constexpr std::size_t ceildiv_size(std::size_t a, std::size_t b) {
     return (a + b - 1) / b;
 }
 
-#if defined(QWEN_TEST_COSIM_MEDIUM)
+#if defined(QWEN_TEST_WEIGHT_CHUNK)
+constexpr unsigned int VOCAB_SIZE = 128;
+constexpr unsigned int HIDDEN_SIZE = 128;
+constexpr unsigned int INTERMEDIATE_SIZE = 1024;
+constexpr unsigned int NUM_LAYERS = 1;
+constexpr unsigned int NUM_ATTENTION_HEADS = 4;
+constexpr unsigned int NUM_KEY_VALUE_HEADS = 2;
+constexpr unsigned int MAX_SEQ_LEN = 64;
+constexpr unsigned int TEST_PREFILL_LEN = 16;
+constexpr unsigned int ATTENTION_TILE_SIZE = 16;
+constexpr double ROPE_FREQ_RATIO = 0.001;
+#elif defined(QWEN_TEST_COSIM_MEDIUM)
 constexpr unsigned int VOCAB_SIZE = 128;
 constexpr unsigned int HIDDEN_SIZE = 128;
 constexpr unsigned int INTERMEDIATE_SIZE = 256;

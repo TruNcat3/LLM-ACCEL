@@ -22,6 +22,7 @@ void cc8_status_sink(
     #pragma HLS interface m_axi port=status_output offset=slave bundle=status depth=1 max_widen_bitwidth=512
     #pragma HLS interface s_axilite port=status_output bundle=control
     #pragma HLS interface s_axilite port=return bundle=control
+    #pragma HLS interface ap_ctrl_hs port=return
     #pragma HLS inline off
 
     status_output[0] = pack_cc8_status(status_stream.read());
@@ -35,9 +36,10 @@ void cc8_status_sink_nk(
     #pragma HLS interface m_axi port=status_output offset=slave bundle=status depth=1 max_widen_bitwidth=512
     #pragma HLS interface s_axilite port=status_output bundle=control
     #pragma HLS interface s_axilite port=return bundle=control
+    #pragma HLS interface ap_ctrl_hs port=return
     #pragma HLS inline off
 
-    fm_word_t word = 0;
-    word.range(CU8_NK_STATUS_BITS - 1, 0) = status_stream.read();
-    status_output[0] = word;
+    status_output[0] = pack_cc8_status(
+        unpack_cu8_nk_status(status_stream.read())
+    );
 }

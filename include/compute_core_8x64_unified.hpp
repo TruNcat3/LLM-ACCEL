@@ -2,6 +2,7 @@
 #define LLM_FPGA_COMPUTE_CORE_8X64_UNIFIED_HPP
 
 #include "mm_stream_8x64.hpp"
+#include "stream_depth_config.hpp"
 
 constexpr unsigned int CU8_MAX_TASKS_PER_LAUNCH = 256;
 constexpr unsigned int CU8_MAX_MM_REPEATS = 256;
@@ -18,8 +19,16 @@ enum cu8_mode_t {
     CU8_MODE_STOP = 8
 };
 
+enum cu8_result_policy_t {
+    CU8_RESULT_RELEASE = 0,
+    CU8_RESULT_HOLD = 1,
+    CU8_RESULT_EMIT = 2,
+    CU8_RESULT_BYPASS = 3
+};
+
 struct cu8_task_t {
     cu8_mode_t mode;
+    cu8_result_policy_t result_policy;
     unsigned int k_count;
     unsigned int token_count;
     unsigned int elem_count;

@@ -1,3 +1,7 @@
+if {[lsearch [info procs] llm_fpga_cosim_options] < 0} {
+    source tcl/common_hls_depth_config.tcl
+}
+
 set prepare 0
 set repo_root [pwd]
 if {[info exists ::env(HLS_COSIM_PREPARE)] && $::env(HLS_COSIM_PREPARE) ne "0"} {
@@ -73,8 +77,10 @@ if {$prepare} {
     open_solution "solution1"
 }
 
+set cosim_cmd "cosim_design [llm_fpga_cosim_options]"
+puts "Running: $cosim_cmd"
 set cosim_rc [catch {
-    cosim_design -rtl verilog -tool xsim -trace_level none -disable_deadlock_detection
+    eval $cosim_cmd
 } cosim_msg]
 cd $repo_root
 if {$cosim_rc != 0} {

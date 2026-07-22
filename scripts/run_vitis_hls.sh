@@ -8,11 +8,6 @@ fi
 
 cd "$(dirname "$0")/.."
 
-vitis_env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
-if [ -f "$vitis_env_script" ]; then
-    source "$vitis_env_script" >/dev/null 2>&1
-fi
-
 tcl_script="$1"
 if [ ! -f "$tcl_script" ]; then
     echo "HLS launcher: TCL script not found: $tcl_script" >&2
@@ -30,23 +25,26 @@ if [ "$available_kib" -lt "$required_kib" ]; then
     exit 75
 fi
 
-project_name="$(
-    awk '
-        $1 == "open_project" {
-            for (i = 2; i <= NF; i++) {
-                if ($i == "-reset") {
-                    continue
+project_name="${LLM_FPGA_HLS_PROJECT_NAME:-}"
+if [ -z "$project_name" ]; then
+    project_name="$(
+        awk '
+            $1 == "open_project" {
+                for (i = 2; i <= NF; i++) {
+                    if ($i == "-reset") {
+                        continue
+                    }
+                    print $i
+                    exit
                 }
-                print $i
+            }
+            $1 == "set" && $2 == "project_name" {
+                print $3
                 exit
             }
-        }
-        $1 == "set" && $2 == "project_name" {
-            print $3
-            exit
-        }
-    ' "$tcl_script" | tr -d '{}"'
-)"
+        ' "$tcl_script" | tr -d '{}"'
+    )"
+fi
 
 if [ -n "$project_name" ] && [ -d "$project_name/solution1" ]; then
     archive_needed=false

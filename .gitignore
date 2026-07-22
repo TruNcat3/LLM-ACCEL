@@ -1,5 +1,5 @@
 # HLS projects and reports
-qwen_hls*_prj/
+qwen_hls*_prj*/
 reports/
 logs/
 
@@ -17,9 +17,21 @@ vitis_8x64/
 # Emulation output
 emconfig.json
 xsim.dir/
+*.wdb
+*.wcfg
+*.protoinst
 
 # Host build products
 *.exe
+
+# Model inputs and local board diagnostics
+data/
+weights/
+models/
+*.bin
+*.safetensors
+core
+core.*
 
 # Editor and language caches
 .vscode/

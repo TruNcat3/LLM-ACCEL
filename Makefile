@@ -3,6 +3,12 @@ FREQUENCY ?= 300
 THREADS ?= 16
 OPT_LEVEL ?= 3
 REPORT_LEVEL ?= 2
+VITIS_8X64_MODEL_PROFILE ?= small
+VITIS_8X64_VALID_MODEL_PROFILES := small medium qwen-layer qwen2.5-3b
+
+ifeq ($(filter $(VITIS_8X64_MODEL_PROFILE),$(VITIS_8X64_VALID_MODEL_PROFILES)),)
+$(error Unsupported VITIS_8X64_MODEL_PROFILE=$(VITIS_8X64_MODEL_PROFILE); expected one of $(VITIS_8X64_VALID_MODEL_PROFILES))
+endif
 
 DETECTED_VITIS := $(shell if command -v v++ >/dev/null 2>&1; then dirname $$(dirname $$(readlink -f $$(command -v v++))); else echo /tools/Xilinx/Vitis/2022.2; fi)
 DETECTED_HLS := $(shell if command -v vitis_hls >/dev/null 2>&1; then dirname $$(dirname $$(readlink -f $$(command -v vitis_hls))); else echo /tools/Xilinx/Vitis_HLS/2022.2; fi)
@@ -24,16 +30,19 @@ XPLATFORM := $(DEVICE)
 endif
 
 XDEVICE := $(notdir $(basename $(XPLATFORM)))
-XO_DIR := vitis_8x64/xo
-BUILD_DIR := vitis_8x64/build.$(TARGET).$(XDEVICE)
-TEMP_DIR := vitis_8x64/_x.$(TARGET).$(XDEVICE)
-REPORT_DIR := reports/vitis_8x64/$(TARGET).$(XDEVICE)
+PROFILE_TAG := $(subst .,_,$(subst -,_,$(VITIS_8X64_MODEL_PROFILE)))
+PROFILE_SUFFIX := $(if $(filter small,$(VITIS_8X64_MODEL_PROFILE)),,.$(PROFILE_TAG))
+HLS_PROJECT_SUFFIX := $(if $(filter small,$(VITIS_8X64_MODEL_PROFILE)),,_$(PROFILE_TAG))
+XO_DIR := vitis_8x64/xo$(PROFILE_SUFFIX)
+BUILD_DIR := vitis_8x64/build$(PROFILE_SUFFIX).$(TARGET).$(XDEVICE)
+TEMP_DIR := vitis_8x64/_x$(PROFILE_SUFFIX).$(TARGET).$(XDEVICE)
+REPORT_DIR := reports/vitis_8x64/$(PROFILE_TAG)/$(TARGET).$(XDEVICE)
 
 COMPUTE_XO := $(XO_DIR)/compute_core_8x64_unified_nk.xo
 CONTROL_XO := $(XO_DIR)/control_cache_8x64_dual_core_nk.xo
 STATUS_XO := $(XO_DIR)/cc8_status_sink_nk.xo
 XCLBIN := $(BUILD_DIR)/qwen_8x64_dual.xclbin
-CONN_CFG := conn_u50_8x64_dual.cfg
+CONN_CFG ?= $(if $(filter qwen2.5-3b,$(VITIS_8X64_MODEL_PROFILE)),conn_u50_8x64_dual_full_resident.cfg,conn_u50_8x64_dual.cfg)
 
 SMOKE_HOST := $(BUILD_DIR)/host_8x64.exe
 QWEN_HOST := $(BUILD_DIR)/host_qwen_8x64.exe
@@ -60,9 +69,10 @@ endif
 .PHONY: help
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
-.PHONY: hls_csim_nk hls_csynth_compute_xo hls_csynth_control_xo
+.PHONY: hls_csim_nk hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csynth_compute_xo hls_csynth_control_xo
 .PHONY: hls_csynth_status_xo hls_csynth_xo
-.PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts
+.PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts vitis_8x64_host vitis_8x64_qwen_host vitis_8x64_emconfig
 .PHONY: vitis_8x64_run_smoke vitis_8x64_run_qwen vitis_8x64_run_random
 .PHONY: clean
 
@@ -75,6 +85,7 @@ help:
 	@echo "  make hls_csynth_control"
 	@echo "  make hls_cosim_control"
 	@echo "  make hls_csim_nk"
+	@echo "  make hls_cosim_closed_loop_8x64_resident_layer"
 	@echo "  make vitis_8x64_xo"
 	@echo "  make vitis_8x64_link TARGET=sw_emu|hw_emu|hw"
 	@echo "  make vitis_8x64_run_smoke TARGET=sw_emu|hw_emu|hw"
@@ -105,28 +116,51 @@ hls_csim_nk:
 	scripts/run_vitis_hls.sh tcl/run_csim_compute_core_8x64_nk.tcl
 	scripts/run_vitis_hls.sh tcl/run_csim_control_cache_8x64_nk.tcl
 
+hls_csim_closed_loop_8x64_resident_layer:
+	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_layer.tcl
+
+hls_cosim_closed_loop_8x64_resident_layer:
+	scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_layer.tcl
+
 $(COMPUTE_XO): \
 	kernel/mm_stream_8x64_fused_mac.cpp \
 	kernel/compute_stream.cpp \
 	kernel/compute_core_8x64_unified.cpp \
 	kernel/compute_core_8x64_nk.cpp \
 	include/compute_core_8x64_unified.hpp \
-	include/vitis_stream_8x64.hpp
-	scripts/run_vitis_hls.sh tcl/build_compute_core_8x64_nk_xo.tcl
+	include/vitis_stream_8x64.hpp \
+	include/stream_depth_config.hpp \
+	tcl/common_hls_depth_config.tcl \
+	tcl/common_hls_model_profile.tcl
+	LLM_FPGA_MODEL_PROFILE='$(VITIS_8X64_MODEL_PROFILE)' \
+	LLM_FPGA_XO_DIR='$(abspath $(XO_DIR))' \
+	LLM_FPGA_HLS_PROJECT_NAME='qwen_hls_compute_core_8x64_nk_prj$(HLS_PROJECT_SUFFIX)' \
+		scripts/run_vitis_hls.sh tcl/build_compute_core_8x64_nk_xo.tcl
 
 $(CONTROL_XO): \
 	kernel/mm_controller.cpp \
 	kernel/control_cache_8x64.cpp \
 	kernel/control_cache_8x64_nk.cpp \
 	include/control_cache_8x64.hpp \
-	include/vitis_stream_8x64.hpp
-	scripts/run_vitis_hls.sh tcl/build_control_cache_8x64_nk_xo.tcl
+	include/vitis_stream_8x64.hpp \
+	include/stream_depth_config.hpp \
+	include/weight_pipeline_config.hpp \
+	tcl/common_hls_depth_config.tcl \
+	tcl/common_hls_model_profile.tcl
+	LLM_FPGA_MODEL_PROFILE='$(VITIS_8X64_MODEL_PROFILE)' \
+	LLM_FPGA_XO_DIR='$(abspath $(XO_DIR))' \
+	LLM_FPGA_HLS_PROJECT_NAME='qwen_hls_control_cache_8x64_nk_prj$(HLS_PROJECT_SUFFIX)' \
+		scripts/run_vitis_hls.sh tcl/build_control_cache_8x64_nk_xo.tcl
 
 $(STATUS_XO): \
 	kernel/cc8_status_sink.cpp \
 	include/control_cache_8x64.hpp \
-	include/vitis_stream_8x64.hpp
-	scripts/run_vitis_hls.sh tcl/build_cc8_status_sink_nk_xo.tcl
+	include/vitis_stream_8x64.hpp \
+	tcl/common_hls_model_profile.tcl
+	LLM_FPGA_MODEL_PROFILE='$(VITIS_8X64_MODEL_PROFILE)' \
+	LLM_FPGA_XO_DIR='$(abspath $(XO_DIR))' \
+	LLM_FPGA_HLS_PROJECT_NAME='qwen_hls_cc8_status_sink_nk_prj$(HLS_PROJECT_SUFFIX)' \
+		scripts/run_vitis_hls.sh tcl/build_cc8_status_sink_nk_xo.tcl
 
 hls_csynth_compute_xo: $(COMPUTE_XO)
 hls_csynth_control_xo: $(CONTROL_XO)
@@ -154,13 +188,17 @@ $(SMOKE_HOST): common/include/xcl2.cpp common/include/xcl2.hpp host/host_8x64.cp
 $(QWEN_HOST): common/include/xcl2.cpp common/include/xcl2.hpp host/host_qwen_8x64.cpp
 	mkdir -p $(BUILD_DIR)
 	$(CXX) -o $@ common/include/xcl2.cpp host/host_qwen_8x64.cpp \
-		$(CXXFLAGS) $(LDFLAGS)
+		$(CXXFLAGS) '-DLLM_FPGA_DEVICE_PROFILE="$(VITIS_8X64_MODEL_PROFILE)"' $(LDFLAGS)
 
 vitis_8x64_hosts: $(SMOKE_HOST) $(QWEN_HOST)
+vitis_8x64_host: $(SMOKE_HOST)
+vitis_8x64_qwen_host: $(QWEN_HOST)
 
 $(EMCONFIG):
 	mkdir -p $(BUILD_DIR)
 	emconfigutil --platform $(XPLATFORM) --od $(BUILD_DIR)
+
+vitis_8x64_emconfig: $(EMCONFIG)
 
 vitis_8x64_run_smoke: $(XCLBIN) $(SMOKE_HOST) $(RUN_EXTRA_DEPS)
 	cd $(BUILD_DIR) && $(RUN_ENV) timeout $(RUN_TIMEOUT) \

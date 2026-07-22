@@ -1,4 +1,5 @@
 #include "compute_stream.hpp"
+#include <hls_math.h>
 
 static fm_t cu_clamp_fm(fm_t x, fm_t lo, fm_t hi) {
     #pragma HLS inline
@@ -49,15 +50,8 @@ static fm_t cu_recip_approx(fm_t x) {
 static fm_t cu_exp_approx(fm_t x) {
     #pragma HLS inline
     fm_t xc = cu_clamp_fm(x, fm_t(-8), fm_t(8));
-    bool neg = xc < fm_t(0);
-    fm_t xa = neg ? fm_t(-xc) : xc;
-    fm_t base = fm_t(1) + xa * fm_t(0.03125);
-    fm_t y = base;
-    for (unsigned int i = 0; i < 5; i++) {
-        #pragma HLS unroll
-        y *= y;
-    }
-    return neg ? cu_recip_approx(y) : y;
+    ap_fixed<16, 8> exp_in = ap_fixed<16, 8>(xc);
+    return fm_t(hls::exp(exp_in));
 }
 
 static fm_t cu_rsqrt_approx(fm_accum_t x) {
@@ -400,8 +394,10 @@ void stream_softmax_rows(
     #pragma HLS inline off
 
     fm_t row_cache[CU_SOFTMAX_ELEMS];
+    fm_t exp_cache[CU_SOFTMAX_ELEMS];
     ap_uint<CU_VEC_LANES> masks[CU_SOFTMAX_PACKETS];
     #pragma HLS array_partition variable=row_cache cyclic factor=CU_VEC_LANES dim=1
+    #pragma HLS array_partition variable=exp_cache cyclic factor=CU_VEC_LANES dim=1
     #pragma HLS array_partition variable=masks complete dim=1
 
     unsigned int packet_count = ceildiv(elem_count, CU_VEC_LANES);
@@ -445,7 +441,7 @@ void stream_softmax_rows(
                         fm_t exp_value = cu_exp_approx(
                             row_cache[elem] - row_max
                         );
-                        row_cache[elem] = exp_value;
+                        exp_cache[elem] = exp_value;
                         sum += fm_accum_t(exp_value);
                     }
                 }
@@ -472,7 +468,7 @@ void stream_softmax_rows(
                         unsigned int elem = packet * CU_VEC_LANES + lane;
                         out_packet.data[lane] =
                             elem < elem_count && masks[packet][lane] ?
-                            fm_t(row_cache[elem] * inv_sum) :
+                            fm_t(exp_cache[elem] * inv_sum) :
                             fm_t(0);
                     }
                     out_stream.write(out_packet);

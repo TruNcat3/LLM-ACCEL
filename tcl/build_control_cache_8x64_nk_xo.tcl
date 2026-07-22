@@ -1,10 +1,19 @@
 cd [file dirname [file dirname [info script]]]
+source tcl/common_hls_depth_config.tcl
+source tcl/common_hls_model_profile.tcl
 
-set project_name qwen_hls_control_cache_8x64_nk_prj
+if {[info exists ::env(LLM_FPGA_HLS_PROJECT_NAME)] &&
+    $::env(LLM_FPGA_HLS_PROJECT_NAME) ne ""} {
+    set project_name $::env(LLM_FPGA_HLS_PROJECT_NAME)
+} else {
+    set project_name [llm_fpga_profiled_project_name qwen_hls_control_cache_8x64_nk_prj]
+}
 set kernel_name control_cache_8x64_dual_core_nk
-set output_dir [file normalize vitis_8x64/xo]
+set output_dir [llm_fpga_profiled_xo_dir]
 set output_xo [file join $output_dir ${kernel_name}.xo]
-set cflags "-I[file normalize include] -std=c++14 -DQWEN_TEST_SMALL"
+set cflags "-I[file normalize include] -std=c++14[llm_fpga_model_cflags][llm_fpga_depth_cflags]"
+
+puts "Model profile: [llm_fpga_model_profile]"
 
 file mkdir $output_dir
 open_project -reset $project_name

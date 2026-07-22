@@ -12,6 +12,7 @@ static cu8_task_t make_task(
 ) {
     cu8_task_t task;
     task.mode = mode;
+    task.result_policy = CU8_RESULT_RELEASE;
     task.k_count = k_count;
     task.token_count = 1;
     task.elem_count = CU_VEC_LANES;
@@ -150,12 +151,21 @@ int main() {
     vector_input0_stream.write(make_vector_packet(fm_t(1), 23, false));
     vector_input1_stream.write(make_vector_packet(fm_t(1), 23, false));
 
+    cu8_task_t bypass_task =
+        make_task(CU8_MODE_RESIDUAL_ADD, 0, 1, 24, false);
+    bypass_task.result_policy = CU8_RESULT_BYPASS;
+    task_stream.write(bypass_task);
+    vector_input0_stream.write(make_vector_packet(fm_t(7), 24, false));
+    vector_input1_stream.write(make_vector_packet(fm_t(9), 24, false));
+
     cu8_task_t softmax_task =
-        make_task(CU8_MODE_SOFTMAX, 0, 1, 24, true);
+        make_task(CU8_MODE_SOFTMAX, 0, 1, 25, false);
     softmax_task.token_count = 1;
     softmax_task.elem_count = CU_VEC_LANES;
     task_stream.write(softmax_task);
-    vector_input0_stream.write(make_vector_packet(fm_t(0), 24, true));
+    vector_input0_stream.write(make_vector_packet(fm_t(0), 25, true));
+
+    task_stream.write(make_task(CU8_MODE_STOP, 0, 0, 0, true));
 
     compute_core_8x64_unified(
         out_stream,
@@ -268,6 +278,7 @@ int main() {
     cu_vec16_packet_t add = out_stream.read();
     cu_vec16_packet_t silu = out_stream.read();
     cu_vec16_packet_t rmsnorm = out_stream.read();
+    cu_vec16_packet_t bypass = out_stream.read();
     cu_vec16_packet_t softmax = out_stream.read();
     for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
         if (silu_mul.data[lane] != fm_t(0)) {
@@ -290,6 +301,10 @@ int main() {
                 lane,
                 float(rmsnorm.data[lane])
             );
+            errors++;
+        }
+        if (bypass.data[lane] != fm_t(7)) {
+            std::printf("unified BYPASS mismatch lane=%u\n", lane);
             errors++;
         }
         if (std::fabs(float(softmax.data[lane]) - 0.0625f) > 0.02f) {
@@ -316,7 +331,7 @@ int main() {
         return 1;
     }
     std::printf(
-        "COMPUTE CORE 8X64 UNIFIED CSIM PASS tasks=9 mm_blocks=5\n"
+        "COMPUTE CORE 8X64 UNIFIED CSIM PASS tasks=11 mm_blocks=5\n"
     );
     return 0;
 }

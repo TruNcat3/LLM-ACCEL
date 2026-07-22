@@ -42,88 +42,82 @@ static void unpack_cu8_nk_inputs(
                 unsigned int repeats =
                     task.repeat_count == 0 ? 1 : task.repeat_count;
                 for (unsigned int repeat = 0;
-                     repeat < CU8_MAX_MM_REPEATS;
+                     repeat < repeats;
                      repeat++) {
-                    if (repeat < repeats) {
-                        for (unsigned int k = 0;
-                             k < MAX_LINEAR_IN_DIM;
-                             k++) {
-                            #pragma HLS pipeline II=1
-                            if (k < task.k_count) {
-                                activation_stream.write(
-                                    unpack_cu8_nk_activation(
-                                        nk_activation_stream.read()
-                                    )
-                                );
-                                weight_stream0.write(unpack_cu8_nk_weight(
-                                    nk_weight_stream0.read()
-                                ));
-                                weight_stream1.write(unpack_cu8_nk_weight(
-                                    nk_weight_stream1.read()
-                                ));
-                                weight_stream2.write(unpack_cu8_nk_weight(
-                                    nk_weight_stream2.read()
-                                ));
-                                weight_stream3.write(unpack_cu8_nk_weight(
-                                    nk_weight_stream3.read()
-                                ));
-                            }
-                        }
+                    #pragma HLS loop_tripcount min=1 max=CU8_MAX_MM_REPEATS avg=1
+                    for (unsigned int k = 0;
+                         k < task.k_count;
+                         k++) {
+                        #pragma HLS pipeline II=1
+                        #pragma HLS loop_tripcount min=16 max=MAX_LINEAR_IN_DIM avg=HIDDEN_SIZE
+                        activation_stream.write(
+                            unpack_cu8_nk_activation(
+                                nk_activation_stream.read()
+                            )
+                        );
+                        weight_stream0.write(unpack_cu8_nk_weight(
+                            nk_weight_stream0.read()
+                        ));
+                        weight_stream1.write(unpack_cu8_nk_weight(
+                            nk_weight_stream1.read()
+                        ));
+                        weight_stream2.write(unpack_cu8_nk_weight(
+                            nk_weight_stream2.read()
+                        ));
+                        weight_stream3.write(unpack_cu8_nk_weight(
+                            nk_weight_stream3.read()
+                        ));
                     }
                 }
             } else if (task.mode == CU8_MODE_RMSNORM) {
                 unsigned int weight_packets =
                     ceildiv(task.elem_count, CU_VEC_LANES);
                 for (unsigned int packet = 0;
-                     packet < MAX_LINEAR_OUT_BLOCKS;
+                     packet < weight_packets;
                      packet++) {
                     #pragma HLS pipeline II=1
-                    if (packet < weight_packets) {
-                        vector_input1_stream.write(unpack_cu8_nk_vector(
-                            nk_vector_input1_stream.read()
-                        ));
-                    }
+                    #pragma HLS loop_tripcount min=1 max=MAX_LINEAR_OUT_BLOCKS
+                    vector_input1_stream.write(unpack_cu8_nk_vector(
+                        nk_vector_input1_stream.read()
+                    ));
                 }
                 for (unsigned int packet = 0;
-                     packet < CU_STREAM_MAX_PACKETS;
+                     packet < task.packet_count;
                      packet++) {
                     #pragma HLS pipeline II=1
-                    if (packet < task.packet_count) {
-                        vector_input0_stream.write(unpack_cu8_nk_vector(
-                            nk_vector_input0_stream.read()
-                        ));
-                    }
+                    #pragma HLS loop_tripcount min=1 max=CU_STREAM_MAX_PACKETS
+                    vector_input0_stream.write(unpack_cu8_nk_vector(
+                        nk_vector_input0_stream.read()
+                    ));
                 }
             } else if (
                 task.mode == CU8_MODE_SILU_MUL ||
                 task.mode == CU8_MODE_RESIDUAL_ADD
             ) {
                 for (unsigned int packet = 0;
-                     packet < CU_STREAM_MAX_PACKETS;
+                     packet < task.packet_count;
                      packet++) {
                     #pragma HLS pipeline II=1
-                    if (packet < task.packet_count) {
-                        vector_input0_stream.write(unpack_cu8_nk_vector(
-                            nk_vector_input0_stream.read()
-                        ));
-                        vector_input1_stream.write(unpack_cu8_nk_vector(
-                            nk_vector_input1_stream.read()
-                        ));
-                    }
+                    #pragma HLS loop_tripcount min=1 max=CU_STREAM_MAX_PACKETS
+                    vector_input0_stream.write(unpack_cu8_nk_vector(
+                        nk_vector_input0_stream.read()
+                    ));
+                    vector_input1_stream.write(unpack_cu8_nk_vector(
+                        nk_vector_input1_stream.read()
+                    ));
                 }
             } else if (
                 task.mode == CU8_MODE_SILU ||
                 task.mode == CU8_MODE_SOFTMAX
             ) {
                 for (unsigned int packet = 0;
-                     packet < CU_STREAM_MAX_PACKETS;
+                     packet < task.packet_count;
                      packet++) {
                     #pragma HLS pipeline II=1
-                    if (packet < task.packet_count) {
-                        vector_input0_stream.write(unpack_cu8_nk_vector(
-                            nk_vector_input0_stream.read()
-                        ));
-                    }
+                    #pragma HLS loop_tripcount min=1 max=CU_STREAM_MAX_PACKETS
+                    vector_input0_stream.write(unpack_cu8_nk_vector(
+                        nk_vector_input0_stream.read()
+                    ));
                 }
             }
             done = task.last_task || task.mode == CU8_MODE_STOP;
@@ -147,19 +141,19 @@ static void pack_cu8_nk_results(
             unsigned int repeats = cu8_nk_mode_uses_mm(task.mode) ?
                 (task.repeat_count == 0 ? 1 : task.repeat_count) :
                 1;
-            for (unsigned int repeat = 0;
-                 repeat < CU8_MAX_MM_REPEATS;
-                 repeat++) {
-                if (repeat < repeats && task.mode != CU8_MODE_STOP) {
+            if (task.mode != CU8_MODE_STOP) {
+                for (unsigned int repeat = 0;
+                     repeat < repeats;
+                     repeat++) {
+                    #pragma HLS loop_tripcount min=1 max=CU8_MAX_MM_REPEATS
                     for (unsigned int packet = 0;
-                         packet < CU_STREAM_MAX_PACKETS;
+                         packet < task.packet_count;
                          packet++) {
                         #pragma HLS pipeline II=1
-                        if (packet < task.packet_count) {
-                            nk_out_stream.write(
-                                pack_cu8_nk_vector(out_stream.read())
-                            );
-                        }
+                        #pragma HLS loop_tripcount min=1 max=CU_STREAM_MAX_PACKETS
+                        nk_out_stream.write(
+                            pack_cu8_nk_vector(out_stream.read())
+                        );
                     }
                 }
             }
@@ -201,16 +195,16 @@ void compute_core_8x64_unified_nk(
     hls::stream<cu_vec16_packet_t> typed_vector_input0_stream;
     hls::stream<cu_vec16_packet_t> typed_vector_input1_stream;
     hls::stream<cu_vec16_packet_t> typed_out_stream;
-    #pragma HLS stream variable=typed_task_stream depth=2
-    #pragma HLS stream variable=result_task_stream depth=2
-    #pragma HLS stream variable=typed_activation_stream depth=16
-    #pragma HLS stream variable=typed_weight_stream0 depth=16
-    #pragma HLS stream variable=typed_weight_stream1 depth=16
-    #pragma HLS stream variable=typed_weight_stream2 depth=16
-    #pragma HLS stream variable=typed_weight_stream3 depth=16
-    #pragma HLS stream variable=typed_vector_input0_stream depth=16
-    #pragma HLS stream variable=typed_vector_input1_stream depth=16
-    #pragma HLS stream variable=typed_out_stream depth=16
+    #pragma HLS stream variable=typed_task_stream depth=CU8_NK_TASK_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=result_task_stream depth=CU8_NK_TASK_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_activation_stream depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_weight_stream0 depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_weight_stream1 depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_weight_stream2 depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_weight_stream3 depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_vector_input0_stream depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_vector_input1_stream depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=typed_out_stream depth=CU8_NK_DATA_STREAM_DEPTH_VALUE
 
     unpack_cu8_nk_inputs(
         task_stream,

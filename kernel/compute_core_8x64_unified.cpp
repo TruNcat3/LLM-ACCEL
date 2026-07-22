@@ -74,8 +74,8 @@ static void run_cu8_mm_once(
 
     hls::stream<cu_accum16_packet_t> accum_stream;
     hls::stream<cu_vec16_packet_t> converted_stream;
-    #pragma HLS stream variable=accum_stream depth=MM_STREAM_8X64_PACKETS_PER_BLOCK
-    #pragma HLS stream variable=converted_stream depth=2
+    #pragma HLS stream variable=accum_stream depth=CU8_UNIFIED_ACCUM_STREAM_DEPTH_VALUE
+    #pragma HLS stream variable=converted_stream depth=CU8_UNIFIED_CONVERTED_STREAM_DEPTH_VALUE
     #pragma HLS dataflow
 
     mm_stream_8x64_task_t mm_task;
@@ -110,27 +110,26 @@ static void run_cu8_mm_task(
     unsigned int repeat_count =
         task.repeat_count == 0 ? 1 : task.repeat_count;
     for (unsigned int repeat = 0;
-         repeat < CU8_MAX_MM_REPEATS;
+         repeat < repeat_count;
          repeat++) {
-        if (repeat < repeat_count) {
-            cu8_task_t repeated = task;
-            repeated.elem_base =
-                task.elem_base + repeat * task.elem_stride;
-            repeated.block_id =
-                task.block_id + repeat * task.block_stride;
-            repeated.repeat_count = 1;
-            repeated.last_task =
-                task.last_task && repeat + 1 == repeat_count;
-            run_cu8_mm_once(
-                out_stream,
-                repeated,
-                activation_stream,
-                weight_stream0,
-                weight_stream1,
-                weight_stream2,
-                weight_stream3
-            );
-        }
+        #pragma HLS loop_tripcount min=1 max=CU8_MAX_MM_REPEATS avg=1
+        cu8_task_t repeated = task;
+        repeated.elem_base =
+            task.elem_base + repeat * task.elem_stride;
+        repeated.block_id =
+            task.block_id + repeat * task.block_stride;
+        repeated.repeat_count = 1;
+        repeated.last_task =
+            task.last_task && repeat + 1 == repeat_count;
+        run_cu8_mm_once(
+            out_stream,
+            repeated,
+            activation_stream,
+            weight_stream0,
+            weight_stream1,
+            weight_stream2,
+            weight_stream3
+        );
     }
 }
 
@@ -173,6 +172,49 @@ static void run_cu8_rmsnorm_task(
     }
 }
 
+static bool cu8_mode_uses_vector_input1(cu8_mode_t mode) {
+    #pragma HLS inline
+    return mode == CU8_MODE_SILU_MUL ||
+        mode == CU8_MODE_RMSNORM ||
+        mode == CU8_MODE_RESIDUAL_ADD;
+}
+
+static void run_cu8_vector_bypass_task(
+    hls::stream<cu_vec16_packet_t>& out_stream,
+    hls::stream<cu_vec16_packet_t>& input0_stream,
+    hls::stream<cu_vec16_packet_t>& input1_stream,
+    const cu8_task_t& task
+) {
+    #pragma HLS inline off
+
+    if (task.mode == CU8_MODE_RMSNORM) {
+        unsigned int weight_packets = ceildiv(task.elem_count, CU_VEC_LANES);
+        for (unsigned int packet = 0;
+             packet < MAX_LINEAR_OUT_BLOCKS;
+             packet++) {
+            #pragma HLS pipeline II=1
+            if (packet < weight_packets) {
+                (void)input1_stream.read();
+            }
+        }
+    }
+
+    bool consume_input1 = cu8_mode_uses_vector_input1(task.mode) &&
+        task.mode != CU8_MODE_RMSNORM;
+    for (unsigned int packet = 0;
+         packet < CU_STREAM_MAX_PACKETS;
+         packet++) {
+        #pragma HLS pipeline II=1
+        if (packet < task.packet_count) {
+            cu_vec16_packet_t forwarded = input0_stream.read();
+            if (consume_input1) {
+                (void)input1_stream.read();
+            }
+            out_stream.write(forwarded);
+        }
+    }
+}
+
 static void run_cu8_vector_task(
     hls::stream<cu_vec16_packet_t>& out_stream,
     hls::stream<cu_vec16_packet_t>& input0_stream,
@@ -180,6 +222,16 @@ static void run_cu8_vector_task(
     const cu8_task_t& task
 ) {
     #pragma HLS inline off
+
+    if (task.result_policy == CU8_RESULT_BYPASS) {
+        run_cu8_vector_bypass_task(
+            out_stream,
+            input0_stream,
+            input1_stream,
+            task
+        );
+        return;
+    }
 
     switch (task.mode) {
     case CU8_MODE_SILU:

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -18,6 +19,7 @@ constexpr unsigned int kHiddenSize = 64;
 constexpr unsigned int kIntermediateSize = 128;
 constexpr unsigned int kValuesPerWord = 32;
 constexpr unsigned int kFeatureWordStride = 4;
+constexpr unsigned int kKvCacheWords = 128;
 constexpr unsigned int kWeightTileSize = 16;
 constexpr unsigned int kWeightTileWords = 8;
 constexpr unsigned int kGateBaseTile = 48;
@@ -35,6 +37,10 @@ constexpr unsigned int kControllerTokenCountArg = 27;
 constexpr unsigned int kControllerPositionArg = 28;
 constexpr unsigned int kControllerTileLenArg = 29;
 constexpr unsigned int kControllerWeight0Arg = 30;
+constexpr unsigned int kControllerKvCacheKArg =
+    kControllerWeight0Arg + kWeightShardCount;
+constexpr unsigned int kControllerKvCacheVArg =
+    kControllerKvCacheKArg + 1;
 constexpr unsigned int kStatusOutputArg = 1;
 
 constexpr unsigned int kOpNop = 0;
@@ -129,16 +135,84 @@ std::string get_option(
     return fallback;
 }
 
+bool has_flag(int argc, const char* argv[], const std::string& option) {
+    for (int i = 1; i < argc; i++) {
+        if (option == argv[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+enum class init_stop_t {
+    none,
+    program,
+    queues,
+    kernels,
+    buffers,
+    args
+};
+
+init_stop_t parse_init_stop(const std::string& stage) {
+    if (stage.empty() || stage == "none") {
+        return init_stop_t::none;
+    }
+    if (stage == "program") {
+        return init_stop_t::program;
+    }
+    if (stage == "queues") {
+        return init_stop_t::queues;
+    }
+    if (stage == "kernels") {
+        return init_stop_t::kernels;
+    }
+    if (stage == "buffers") {
+        return init_stop_t::buffers;
+    }
+    if (stage == "args") {
+        return init_stop_t::args;
+    }
+    std::cerr
+        << "invalid --stop-after stage '" << stage
+        << "'; expected none|program|queues|kernels|buffers|args\n";
+    std::exit(EXIT_FAILURE);
+}
+
+const char* init_stop_name(init_stop_t stage) {
+    switch (stage) {
+    case init_stop_t::none:
+        return "none";
+    case init_stop_t::program:
+        return "program";
+    case init_stop_t::queues:
+        return "queues";
+    case init_stop_t::kernels:
+        return "kernels";
+    case init_stop_t::buffers:
+        return "buffers";
+    case init_stop_t::args:
+        return "args";
+    }
+    return "unknown";
+}
+
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable
         << " --xclbin <qwen_8x64_dual.xclbin>"
-        << " [--case all|nop|residual-add|gate-mm]\n";
+        << " [--case all|nop|residual-add|gate-mm]"
+        << " [--skip-weight-preload]"
+        << " [--load-only]"
+        << " [--stop-after none|program|queues|kernels|buffers|args]\n";
 }
 
 class smoke_runtime_t {
 public:
-    explicit smoke_runtime_t(const std::string& xclbin)
+    smoke_runtime_t(
+        const std::string& xclbin,
+        bool skip_weight_preload,
+        init_stop_t stop_after
+    )
         : data_words_{
               aligned_word_vector(kBufferWords),
               aligned_word_vector(kBufferWords),
@@ -147,15 +221,43 @@ public:
               aligned_word_vector(kBufferWords),
               aligned_word_vector(kBufferWords)
           },
-          status_words_(kBufferWords) {
+          kv_cache_k_words_(kKvCacheWords),
+          kv_cache_v_words_(kKvCacheWords),
+          status_words_(kBufferWords),
+          stop_after_(stop_after) {
         for (auto& shard : weight_words_) {
             shard.resize(kBufferWords);
         }
         initialize_gate_weights();
         initialize_opencl(xclbin);
+        if (diagnostic_stop(init_stop_t::program)) {
+            return;
+        }
+        create_queues();
+        if (diagnostic_stop(init_stop_t::queues)) {
+            return;
+        }
+        create_kernels();
+        if (diagnostic_stop(init_stop_t::kernels)) {
+            return;
+        }
         create_buffers();
+        if (diagnostic_stop(init_stop_t::buffers)) {
+            return;
+        }
         initialize_kernel_args();
-        migrate_constant_buffers();
+        if (diagnostic_stop(init_stop_t::args)) {
+            return;
+        }
+        if (skip_weight_preload) {
+            std::cout << "diagnostic: skipped weight H2C preload\n";
+        } else {
+            migrate_constant_buffers();
+        }
+    }
+
+    bool diagnostic_done() const {
+        return diagnostic_done_;
     }
 
     bool run_nop() {
@@ -244,6 +346,16 @@ public:
     }
 
 private:
+    bool diagnostic_stop(init_stop_t stage) {
+        if (stop_after_ != stage) {
+            return false;
+        }
+        diagnostic_done_ = true;
+        std::cout << "STOP_AFTER_" << init_stop_name(stage)
+                  << " 8X64 PASS\n";
+        return true;
+    }
+
     void initialize_gate_weights() {
         for (auto& shard : weight_words_) {
             clear_words(shard);
@@ -316,6 +428,13 @@ private:
             std::exit(EXIT_FAILURE);
         }
 
+        std::cout << "programmed "
+                  << device_.getInfo<CL_DEVICE_NAME>()
+                  << " with qwen_8x64_dual xclbin\n";
+    }
+
+    void create_queues() {
+        cl_int err = CL_SUCCESS;
         constexpr cl_command_queue_properties queue_flags =
             CL_QUEUE_PROFILING_ENABLE;
         transfer_queue_ =
@@ -333,7 +452,11 @@ private:
         controller_queue_ =
             cl::CommandQueue(context_, device_, queue_flags, &err);
         check_cl(err, "create controller queue");
+        std::cout << "created five command queues\n";
+    }
 
+    void create_kernels() {
+        cl_int err = CL_SUCCESS;
         compute0_kernel_ = cl::Kernel(
             program_,
             "compute_core_8x64_unified_nk:{cc8_cu0}",
@@ -359,9 +482,7 @@ private:
         );
         check_cl(err, "create cc8_ctrl kernel");
 
-        std::cout << "programmed "
-                  << device_.getInfo<CL_DEVICE_NAME>()
-                  << " with four connected CUs\n";
+        std::cout << "created four connected CU handles\n";
     }
 
     void create_buffers() {
@@ -401,6 +522,34 @@ private:
             );
             check_cl(err, "create weight HBM buffer");
         }
+
+        kv_cache_k_ext_.obj = kv_cache_k_words_.data();
+        kv_cache_k_ext_.param = 0;
+        kv_cache_k_ext_.flags = hbm_bank(20);
+        kv_cache_k_buffer_ = cl::Buffer(
+            context_,
+            CL_MEM_EXT_PTR_XILINX |
+                CL_MEM_USE_HOST_PTR |
+                CL_MEM_READ_WRITE,
+            kv_cache_k_words_.size() * sizeof(word512_t),
+            &kv_cache_k_ext_,
+            &err
+        );
+        check_cl(err, "create K cache HBM buffer");
+
+        kv_cache_v_ext_.obj = kv_cache_v_words_.data();
+        kv_cache_v_ext_.param = 0;
+        kv_cache_v_ext_.flags = hbm_bank(21);
+        kv_cache_v_buffer_ = cl::Buffer(
+            context_,
+            CL_MEM_EXT_PTR_XILINX |
+                CL_MEM_USE_HOST_PTR |
+                CL_MEM_READ_WRITE,
+            kv_cache_v_words_.size() * sizeof(word512_t),
+            &kv_cache_v_ext_,
+            &err
+        );
+        check_cl(err, "create V cache HBM buffer");
 
         status_ext_.obj = status_words_.data();
         status_ext_.param = 0;
@@ -473,6 +622,20 @@ private:
             );
             check_cl(err, "set weight shard");
         }
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerKvCacheKArg,
+                kv_cache_k_buffer_
+            ),
+            "set K cache buffer"
+        );
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerKvCacheVArg,
+                kv_cache_v_buffer_
+            ),
+            "set V cache buffer"
+        );
     }
 
     void migrate_constant_buffers() {
@@ -480,9 +643,14 @@ private:
         for (const auto& buffer : weight_buffers_) {
             buffers.push_back(buffer);
         }
+        buffers.push_back(kv_cache_k_buffer_);
+        buffers.push_back(kv_cache_v_buffer_);
         cl_int err = transfer_queue_.enqueueMigrateMemObjects(buffers, 0);
-        check_cl(err, "migrate weight buffers");
-        check_cl(transfer_queue_.finish(), "finish weight migration");
+        check_cl(err, "migrate weight and KV cache buffers");
+        check_cl(
+            transfer_queue_.finish(),
+            "finish weight and KV cache migration"
+        );
     }
 
     void clear_case_buffers() {
@@ -720,13 +888,21 @@ private:
 
     std::array<aligned_word_vector, 6> data_words_;
     std::array<aligned_word_vector, kWeightShardCount> weight_words_;
+    aligned_word_vector kv_cache_k_words_;
+    aligned_word_vector kv_cache_v_words_;
     aligned_word_vector status_words_;
     std::array<cl_mem_ext_ptr_t, 6> data_ext_{};
     std::array<cl_mem_ext_ptr_t, kWeightShardCount> weight_ext_{};
+    cl_mem_ext_ptr_t kv_cache_k_ext_{};
+    cl_mem_ext_ptr_t kv_cache_v_ext_{};
     cl_mem_ext_ptr_t status_ext_{};
     std::array<cl::Buffer, 6> data_buffers_;
     std::array<cl::Buffer, kWeightShardCount> weight_buffers_;
+    cl::Buffer kv_cache_k_buffer_;
+    cl::Buffer kv_cache_v_buffer_;
     cl::Buffer status_buffer_;
+    init_stop_t stop_after_ = init_stop_t::none;
+    bool diagnostic_done_ = false;
 };
 
 }  // namespace
@@ -734,6 +910,10 @@ private:
 int main(int argc, const char* argv[]) {
     std::string xclbin = get_option(argc, argv, "--xclbin");
     std::string test_case = get_option(argc, argv, "--case", "all");
+    bool skip_weight_preload = has_flag(argc, argv, "--skip-weight-preload");
+    bool load_only = has_flag(argc, argv, "--load-only");
+    init_stop_t stop_after =
+        parse_init_stop(get_option(argc, argv, "--stop-after", "none"));
     if (xclbin.empty() || (
         test_case != "all" &&
         test_case != "nop" &&
@@ -745,7 +925,19 @@ int main(int argc, const char* argv[]) {
     }
 
     auto begin = std::chrono::steady_clock::now();
-    smoke_runtime_t runtime(xclbin);
+    smoke_runtime_t runtime(xclbin, skip_weight_preload, stop_after);
+    if (runtime.diagnostic_done()) {
+        return 0;
+    }
+    if (load_only) {
+        auto end = std::chrono::steady_clock::now();
+        double total_seconds =
+            std::chrono::duration<double>(end - begin).count();
+        std::cout << "LOAD_ONLY 8X64 PASS"
+                  << " total_seconds=" << total_seconds << "\n";
+        return 0;
+    }
+
     bool pass = true;
     if (test_case == "all" || test_case == "nop") {
         pass = runtime.run_nop() && pass;
