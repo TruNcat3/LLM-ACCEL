@@ -892,6 +892,7 @@ static void load_cc8_weight_panel_range(
 #endif
 }
 
+template <typename SourceBufferT>
 static void emit_cc8_mm_wave_inputs_flat(
     hls::stream<mm_stream_8x64_activation_packet_t>& core0_activation_stream,
     hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream0,
@@ -905,8 +906,7 @@ static void emit_cc8_mm_wave_inputs_flat(
     hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream3,
     hls::stream<mm_stream_8x64_weight_packet_t>
         tile_stream[CC8_MM_CORE_COUNT][MM_STREAM_8X64_WEIGHT_GROUPS],
-    const mm_input_block_t* __restrict source,
-    unsigned int source_stride,
+    const SourceBufferT& source,
     unsigned int token_count,
     unsigned int in_dim,
     unsigned int core_mask
@@ -929,7 +929,7 @@ static void emit_cc8_mm_wave_inputs_flat(
             activation.data[token] =
                 token < token_count ?
                 unpack_mm_input_block_lane(
-                    source[token * source_stride + in_tile],
+                    source.block[token][in_tile],
                     k_lane
                 ) :
                 fm_t(0);
@@ -1025,9 +1025,9 @@ static void store_cc8_result_packet(
     }
 }
 
+template <typename DestinationBufferT>
 static void collect_cc8_mm_wave_results_flat(
-    mm_input_block_t* __restrict destination,
-    unsigned int destination_stride,
+    DestinationBufferT& destination,
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
     unsigned int token_count,
@@ -1042,9 +1042,8 @@ static void collect_cc8_mm_wave_results_flat(
         #pragma HLS pipeline II=1
         if ((core_mask & 1u) != 0u) {
             cu_vec16_packet_t packet0 = core0_result_stream.read();
-            store_cc8_result_packet_flat(
+            store_cc8_result_packet(
                 destination,
-                destination_stride,
                 packet0,
                 token_count,
                 out_dim
@@ -1052,9 +1051,8 @@ static void collect_cc8_mm_wave_results_flat(
         }
         if ((core_mask & 2u) != 0u) {
             cu_vec16_packet_t packet1 = core1_result_stream.read();
-            store_cc8_result_packet_flat(
+            store_cc8_result_packet(
                 destination,
-                destination_stride,
                 packet1,
                 token_count,
                 out_dim
@@ -1063,6 +1061,7 @@ static void collect_cc8_mm_wave_results_flat(
     }
 }
 
+template <typename SourceBufferT, typename DestinationBufferT>
 static void run_cc8_mm_wave_flat(
     hls::stream<mm_stream_8x64_activation_packet_t>& core0_activation_stream,
     hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream0,
@@ -1076,10 +1075,8 @@ static void run_cc8_mm_wave_flat(
     hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream2,
     hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream3,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
-    const mm_input_block_t* __restrict source,
-    unsigned int source_stride,
-    mm_input_block_t* __restrict destination,
-    unsigned int destination_stride,
+    const SourceBufferT& source,
+    DestinationBufferT& destination,
     unsigned int output_wave,
     unsigned int token_count,
     unsigned int active_in_dim,
@@ -1123,14 +1120,12 @@ static void run_cc8_mm_wave_flat(
         core1_weight_stream3,
         tile_stream,
         source,
-        source_stride,
         token_count,
         active_in_dim,
         core_mask
     );
     collect_cc8_mm_wave_results_flat(
         destination,
-        destination_stride,
         core0_result_stream,
         core1_result_stream,
         token_count,
@@ -2034,6 +2029,7 @@ static unsigned int run_cc8_vector_gbuf_task_inplace_binary(
         (core1_token_count != 0 ? 1u : 0u);
 }
 
+template <typename SourceBufferT, typename DestinationBufferT>
 static void run_cc8_projection_waves_flat(
     hls::stream<cu8_task_t>& core0_task_stream,
     hls::stream<mm_stream_8x64_activation_packet_t>& core0_activation_stream,
@@ -2049,10 +2045,8 @@ static void run_cc8_projection_waves_flat(
     hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream2,
     hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream3,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
-    const mm_input_block_t* __restrict source,
-    unsigned int source_stride,
-    mm_input_block_t* __restrict destination,
-    unsigned int destination_stride,
+    const SourceBufferT& source,
+    DestinationBufferT& destination,
     unsigned int wave_begin,
     unsigned int wave_end,
     unsigned int token_count,
@@ -2143,9 +2137,7 @@ static void run_cc8_projection_waves_flat(
             core1_weight_stream3,
             core1_result_stream,
             source,
-            source_stride,
             destination,
-            destination_stride,
             output_wave,
             token_count,
             active_in_dim,
@@ -2212,10 +2204,8 @@ static void run_cc8_projection_waves(
         core1_weight_stream2,
         core1_weight_stream3,
         core1_result_stream,
-        &source.block[0][0],
-        SourceBufferT::kBlockCount,
-        &destination.block[0][0],
-        DestinationBufferT::kBlockCount,
+        source,
+        destination,
         wave_begin,
         wave_end,
         token_count,
@@ -6486,6 +6476,10 @@ void control_cache_8x64_dual_core(
             return;
         }
 
+        // Keep the token dimension explicit across synthesis.  Flattening
+        // the completely partitioned [token][block] GBUF into a pointer made
+        // software simulation look correct, but RTL only preserved row zero
+        // for multi-token MM projections.
         run_cc8_projection_waves(
             core0_task_stream,
             core0_activation_stream,

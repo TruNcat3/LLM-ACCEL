@@ -11,6 +11,7 @@
 - 控制核实现片上大块缓存、按 8×64 tile 分 wave、双缓存和跨 wave DATAFLOW，使 HBM load、stream 驱动、结果收集与提交重叠。
 - RoPE、KV Cache 管理以及在线 Softmax/FlashAttention 均在设备侧完成，不经过 PCIe 回传中间结果。
 - resident-layer CSim 与开启死锁检测的 C/RTL CoSim 已通过；完整随机权重 decoder layer 的 hw_emu 已通过，2048 个输出逐位一致。
+- 标准尺寸 8-token prefill 诊断版本已完成 hw_emu：Q/K/V、position 0..7 causal FlashAttention、O、Gate/Up/Down 与向量通路全部通过；总活跃区间约 635,399 cycles，双 CU 有效利用率 94.78%。该全 profile controller 的 HLS 资源仍超过 U50，性能通路需要收敛到精简的 resident 静态调度后才能部署。
 - 当前 `.cw1` hw_emu 记录约 683,601 cycles/layer，比未重叠基线 714,495 cycles 降低 4.32%。按 200 MHz 时钟模型折算约 3.418 ms/layer、22.55 GMAC/s。
 - 真实 U50 上板验证暂缓：本机板卡 SC firmware 未进入 ready 状态，这不是 kernel 功能失败。公开仓库不包含生成的 XO、xclbin、日志或模型权重。
 
@@ -105,9 +106,23 @@ make vitis_8x64_run_qwen TARGET=hw_emu VITIS_8X64_MODEL_PROFILE=qwen-layer \
 
 `small`、`medium`、`qwen-layer` 和 `qwen2.5-3b` 是 Makefile 支持的模型 profile。完整 3B 权重需要使用 `conn_u50_8x64_dual_full_resident.cfg` 的跨 HBM bank 映射。
 
+正常尺寸 8-token prefill 使用保留分算子 profile 通路的 controller：
+
+```bash
+make vitis_8x64_xo TARGET=hw_emu FREQUENCY=200 \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer
+make vitis_8x64_link vitis_8x64_qwen_host vitis_8x64_emconfig \
+  TARGET=hw_emu FREQUENCY=200 VITIS_8X64_MODEL_PROFILE=qwen-layer
+make vitis_8x64_run_qwen TARGET=hw_emu FREQUENCY=200 \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer RUN_TIMEOUT=604800 \
+  QWEN_ARGS="--mode profile-prefill-block --profile qwen-layer --prefill-len 8 --random-model --seed 20260722"
+```
+
+标准尺寸 prefill 的测试口径、周期计算和限制见 [8-token Prefill hw_emu 性能](docs/8-token_Prefill_hw_emu性能_20260723.md)。
+
 ## 验证边界
 
-hw_emu 的周期来自仿真时钟模型，可用于比较设计版本和定位流水停顿，但不等同于板上实测延迟。完整多层 3B 模型、长上下文 prefill 和真实 U50 功耗/吞吐仍需后续验证；当前可复现的强结论是标准尺寸随机权重单层 decoder 在 hw_emu 中功能闭环通过。
+hw_emu 的周期来自仿真时钟模型，可用于比较设计版本和定位流水停顿，但不等同于板上实测延迟。当前 prefill 测试覆盖一个 8-token block 和 position 0..7 的单 attention tile；完整多层 3B 模型、长上下文 prefill 和真实 U50 功耗/吞吐仍需后续验证。
 
 ## 生成物
 
