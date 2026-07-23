@@ -1,0 +1,199 @@
+# Usage and Reproduction
+
+## 1. Toolchain
+
+The recorded experiments use:
+
+- Ubuntu 20.04;
+- Vitis, Vivado, and Vitis HLS 2022.2;
+- XRT 2022.2;
+- platform `xilinx_u50_gen3x16_xdma_5_202210_1` for Vitis integration.
+
+Set the environment script without modifying repository files:
+
+```bash
+export VITIS_ENV_SCRIPT=/path/to/vitis_env_22.sh
+source "$VITIS_ENV_SCRIPT"
+```
+
+The scripts default to `/home/hepc/env/vitis_env_22.sh` when the variable is
+not supplied.
+
+## 2. Repository profiles
+
+| Profile | Purpose |
+| --- | --- |
+| `small` | Fast software/HLS development |
+| `medium` | Larger protocol and pipeline checks |
+| `qwen-layer` | Standard one-layer shape: 2048/11008 |
+| `qwen2.5-3b` | Full-model layout configuration |
+
+Select a profile with `VITIS_8X64_MODEL_PROFILE`. Generated artifacts are
+placed under profile-specific `vitis_8x64/` and `reports/` directories and are
+ignored by Git.
+
+## 3. Validation ladder
+
+### Focused and closed-loop CSim
+
+```bash
+make hls_csim_compute
+make hls_csim_control
+make hls_csim_closed_loop_8x64_resident_layer
+```
+
+The closed loop instantiates the controller, two compute paths, feedback
+streams, and status behavior in one testbench.
+
+### RTL CoSim with bounded streams
+
+```bash
+scripts/run_hls_resident_layer_cosim.sh
+```
+
+Deadlock detection is enabled by default. Do not add
+`-disable_deadlock_detection` when evaluating FIFO depth or scheduling
+changes. A successful run must report completed RTL transactions and a passing
+C post-check, not merely successful compilation.
+
+### Export multi-kernel XO files
+
+```bash
+make vitis_8x64_xo \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer
+```
+
+This exports controller, compute, and status kernels with matching model and
+packet configurations.
+
+### Build hardware emulation
+
+```bash
+make vitis_8x64_link \
+  TARGET=hw_emu \
+  FREQUENCY=200 \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer
+
+make vitis_8x64_qwen_host vitis_8x64_emconfig \
+  TARGET=hw_emu \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer
+```
+
+### Run the resource-pruned resident layer
+
+The convenience script isolates artifacts by pipeline configuration:
+
+```bash
+scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+scripts/build_vitis_8x64_resident_layer_hwemu.sh run
+```
+
+Equivalent model-level host arguments are:
+
+```text
+--mode verify-resident-layer
+--profile qwen-layer
+--random-model
+--seed 20260718
+--position 0
+```
+
+### Run the 8-token diagnostic prefill
+
+```bash
+make vitis_8x64_run_qwen \
+  TARGET=hw_emu \
+  FREQUENCY=200 \
+  VITIS_8X64_MODEL_PROFILE=qwen-layer \
+  RUN_TIMEOUT=604800 \
+  QWEN_ARGS="--mode profile-prefill-block --profile qwen-layer --prefill-len 8 --random-model --seed 20260722"
+```
+
+The prefill profile is intentionally diagnostic: it performs operator-level
+golden checks and should not be interpreted as a resource-pruned deployment
+image.
+
+## 4. Pipeline parameters
+
+| Variable | Default research setting | Meaning |
+| --- | ---: | --- |
+| `CC8_WEIGHT_TILE_FIFO_DEPTH` | 2 | 512-bit weight-block FIFO depth |
+| `CC8_WEIGHT_TILE_LOAD_II` | 2 | Weight producer initiation interval |
+| `CC8_MM_WAVE_RESULT_FIFO_DEPTH` | 33 | Cross-wave result buffering |
+| `CC8_ENABLE_MM_CROSS_WAVE_DATAFLOW` | 1 | Overlap load/drive/collect across waves |
+| `CC8_ENABLE_MM_WAVE_REPEAT` | 0 | Multi-wave command reuse; disabled in release path |
+| `FREQUENCY` | flow dependent | Requested Vitis kernel frequency in MHz |
+| `THREADS` | 16 | HLS/Vivado worker count |
+
+Example depth experiment:
+
+```bash
+CC8_WEIGHT_TILE_FIFO_DEPTH=4 \
+CC8_WEIGHT_TILE_LOAD_II=2 \
+CC8_ENABLE_MM_CROSS_WAVE_DATAFLOW=1 \
+scripts/run_hls_resident_layer_cosim.sh
+```
+
+Always compare CoSim progress, HLS II/timing, resource reports, and hw_emu
+cycles. A deeper FIFO is not an optimization unless at least one measured
+bottleneck improves.
+
+## 5. Reading results
+
+### Functional output
+
+The model host prints named comparisons such as Q projection, attention output,
+FFN paths, status counters, and final hidden checksums. A valid experiment must
+end with `PASS` and process the expected task and packet counts.
+
+### Hardware-emulation cycles
+
+Use `profile_kernels.csv` from the simulation directory. The `Running Time`
+field is simulated kernel-active time. Convert it with the clock embedded in
+the xclbin:
+
+```text
+cycles = running_time_us * frequency_MHz
+```
+
+Do not use XSim CPU wall time as accelerator latency. Hardware emulation can
+take hours while simulating only milliseconds of device time.
+
+### HLS reports
+
+For each exported kernel, inspect:
+
+- estimated clock period and the named critical path;
+- achieved loop initiation intervals;
+- BRAM, DSP, FF, LUT, and URAM totals;
+- unexpected array replication, mux growth, or FIFO warnings.
+
+Top-level HLS latency for a free-running or command-bounded network may use
+conservative tripcount bounds. Prefer measured hw_emu active cycles for the
+integrated workload, while retaining HLS reports for local structure and
+resource analysis.
+
+## 6. Expected checkpoints
+
+The published standard experiments use deterministic seeds:
+
+| Experiment | Seed | Expected checkpoint |
+| --- | ---: | --- |
+| Resident single-token layer | 20260718 | 2048 outputs match bit-for-bit |
+| 8-token prefill | 20260722 | final checksum `0xb72a92cb5224f0c7` |
+
+The 8-token run must also report 48 attention MM tasks and 1536 completed
+packets.
+
+## 7. Generated artifacts
+
+The following are intentionally excluded from the repository:
+
+- HLS/Vivado project directories and reports;
+- XO, xclbin, DCP, waveform, and emulator output;
+- executable host binaries and logs;
+- model checkpoints and generated weight binaries.
+
+This keeps the repository source-oriented. A publication artifact should
+archive exact generated reports and binaries separately and associate them
+with the cited Git commit.
