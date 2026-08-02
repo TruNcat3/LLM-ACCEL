@@ -197,3 +197,54 @@ The following are intentionally excluded from the repository:
 This keeps the repository source-oriented. A publication artifact should
 archive exact generated reports and binaries separately and associate them
 with the cited Git commit.
+
+## 8. Case 2: Streaming split architecture
+
+The `cases/streaming-split/` directory contains a second architecture case
+with its own kernels, host programs, and connectivity configuration. It is
+self-contained and does not depend on the Case 1 source files.
+
+### Quick validation
+
+```bash
+cd cases/streaming-split
+
+# Compile both kernels (sw_emu)
+v++ -c -t sw_emu --platform $PLATFORM -I include \
+  --hls.clock 300000000:control_cache_core \
+  -k control_cache_core kernel/control_cache_core.cpp -o build/cc.xo
+
+v++ -c -t sw_emu --platform $PLATFORM -I include \
+  --hls.clock 300000000:qkv_tile_kernel_cc_qwen_small_core_v8_2_s \
+  -k qkv_tile_kernel_cc_qwen_small_core_v8_2_s \
+  kernel/qkv_tile_kernel_cc_qwen_small_core_v8_2_s.cpp -o build/v82.xo
+
+# Link with 4-PC weight connectivity
+v++ -l -t sw_emu --platform $PLATFORM --config conn_v8_2x2.cfg \
+  --kernel_frequency 300 build/cc.xo build/v82.xo -o build/v8_2x2.xclbin
+
+# Build and run hosts
+g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
+  host/host_v8_2x2.cpp host/xcl2.cpp -o build/host_v8_2x2 \
+  -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
+
+g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
+  host/host_accum.cpp host/xcl2.cpp -o build/host_accum \
+  -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
+
+# 7-op integrated layer (Q/K/V/O/Gate/Up/Down)
+XCL_EMULATION_MODE=sw_emu ./build/host_v8_2x2 build/v8_2x2.xclbin
+
+# Variable-depth accumulate (e.g., 16-chunk = reduction 256)
+XCL_EMULATION_MODE=sw_emu ./build/host_accum build/v8_2x2.xclbin 16
+
+# Full hidden=2048 reduction (512 op)
+XCL_EMULATION_MODE=sw_emu ./build/host_accum build/v8_2x2.xclbin 512
+```
+
+### Expected output
+
+All seven projections should report `miss=0/2048 ✅` and the accumulate
+test should report `sample=<N*16>` for `N` chunks. See
+[`docs/design.md`](../cases/streaming-split/docs/design.md) for architecture
+details, performance tables, and the optimization history.

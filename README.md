@@ -122,12 +122,13 @@ inner-layer schedule.
 
 | Path | Purpose |
 | --- | --- |
-| `kernel/` | Controller, unified compute core, status sink, and closed-loop wrappers |
-| `include/` | Model profiles, fixed-point types, packet ABI, and pipeline parameters |
-| `host/` | XRT host, deterministic random-model generation, and CPU golden checks |
-| `tests/` | Focused CSim and closed-loop C/RTL CoSim testbenches |
-| `tcl/` | Vitis HLS simulation, synthesis, CoSim, and XO export flows |
-| `scripts/` | Reproducible long-running HLS and hardware-emulation entry points |
+| `kernel/` | Case 1: Controller, unified compute core, status sink, closed-loop wrappers |
+| `include/` | Case 1: Model profiles, fixed-point types, packet ABI, pipeline parameters |
+| `host/` | Case 1: XRT host, deterministic random-model generation, CPU golden checks |
+| `tests/` | Case 1: Focused CSim and closed-loop C/RTL CoSim testbenches |
+| `tcl/` | Case 1: Vitis HLS simulation, synthesis, CoSim, XO export flows |
+| `scripts/` | Case 1: Reproducible long-running HLS and hardware-emulation entry points |
+| `cases/streaming-split/` | **Case 2**: Streaming split architecture (cc + V8-2_s, D=16 + 4-PC weight) |
 | `docs/` | Architecture, design alternatives, usage, and experimental evidence |
 
 ## Reproduce the core validation
@@ -165,13 +166,18 @@ prefill evaluation, expected outputs, and artifact locations.
 ## Documentation
 
 - [Architecture](docs/architecture.md): system decomposition, dataflow,
-  packet ABI, resident state, and attention implementation.
+  packet ABI, resident state, attention implementation, and **case studies**
+  (Case 1 resident closed-loop + Case 2 streaming split).
 - [Design Space](docs/design-space.md): candidate architectures, measured
   trade-offs, rejected approaches, and open research directions.
 - [Usage and Reproduction](docs/usage.md): environment, HLS/RTL/Vitis flows,
   configuration parameters, and result inspection.
 - [Experiments](docs/experiments.md): evidence levels, performance/resource
   tables, metric definitions, and limitations.
+- **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
+  split architecture with `operator_program` scheduling, INPUT_DIM=16,
+  4-PC weight multi-bank, ~50 token/s decode (csynth). See
+  [design](cases/streaming-split/docs/design.md).
 
 ## Scope
 

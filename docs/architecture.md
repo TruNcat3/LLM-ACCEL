@@ -194,3 +194,48 @@ Each level answers a different question:
   throughput claims.
 
 Current evidence is summarized in [Experiments](experiments.md).
+
+## 10. Case studies
+
+The repository contains two architecture cases that share the
+model-aware-control + model-agnostic-compute principle but differ in
+their concrete realization:
+
+### Case 1: Resident closed-loop (default)
+
+The primary prototype (`kernel/control_cache_8x64.cpp` +
+`kernel/compute_core_8x64_unified.cpp`) implements a fully resident
+Qwen decoder layer with online attention, RoPE, KV cache, and a
+status-sink completion drain. Two 8×64 compute CUs (1024 MAC/cycle peak)
+are connected to the controller through fixed-width stream packets.
+The controller owns all HBM traffic and model state.
+
+See [Usage](usage.md) for build and validation instructions.
+
+### Case 2: Streaming split (cc + V8-2_s)
+
+A **separated streaming architecture** (`cases/streaming-split/`)
+where a lightweight dataflow orchestrator (`control_cache_core`) drives
+a single fixed compute core (`V8-2_s`) through an `operator_program`
+schedule. Key differences from Case 1:
+
+| Aspect | Case 1 (resident) | Case 2 (streaming-split) |
+| --- | --- | --- |
+| Compute CUs | 2 × 8×64 (1024 MAC/cyc) | 1 × V8-2_s (2048 DSP) |
+| INPUT_DIM | 4 | **16** (reduction depth 4×) |
+| Weight ports | 1 m_axi | **4 m_axi** (HBM[2:5], 3.67× bandwidth) |
+| I/O width | 128-bit input | **512-bit** packed input/output |
+| Controller style | Resident loop (attention/KV inline) | **Dataflow DAG** (dispatch→input/output_path) |
+| Schedule | Hardcoded layer loop | **operator_program** (flat uint32, reconfigurable) |
+| Accumulate | Internal wave scheduling | **op_program accumulate sequence** (caller-driven) |
+| Decode throughput | ~11 token/s (est.) | **~50 token/s** (csynth est.) |
+
+Case 2 demonstrates that a **fixed compute core** can serve arbitrary LLM
+dimensions through operator-program scheduling, achieving ~7× speedup over
+the original D=4 single-stream configuration through three orthogonal
+optimizations: INPUT_DIM 4→16 (reduction depth), weight 4-PC multi-bank
+(load bandwidth), and streaming compute (eliminating local buffer port
+conflicts).
+
+See [`cases/streaming-split/docs/design.md`](../cases/streaming-split/docs/design.md)
+for the detailed design document.
