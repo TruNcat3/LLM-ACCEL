@@ -1,0 +1,31 @@
+Vitis HLS version: 2022.2 (Build 3670227)
+Report date: 2026-08-16 20:13:53 CST
+Top: control_cache_8x64_dual_core_nk
+Profile: qwen-layer
+Target device: xcu50-fsvh2104-2-e
+Target period: 3.333 ns
+Estimated period: 3.746 ns
+Estimated Fmax: 266.93 MHz
+
+Resource summary:
+  BRAM_18K: 488
+  DSP: 102
+  FF: 446153
+  LUT: 406003
+  URAM: 0
+
+Full-device percentages reported by HLS:
+  BRAM_18K: 18%
+  DSP: 1%
+  FF: 25%
+  LUT: 46%
+
+Single-SLR reference percentages reported by HLS:
+  BRAM_18K: 36%
+  DSP: 3%
+  FF: 51%
+  LUT: 93%
+
+The 300-MHz HLS request is not met by the estimate, but the 3.746-ns estimate
+is inside the 5.000-ns period of the selected 200-MHz physical target. HLS
+resource/timing estimates are not a substitute for post-route results.

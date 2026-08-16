@@ -1,3 +1,6 @@
-profile	scope	layers	tasks	xsim_active_us	xsim_clock_mhz	xsim_cycles	projected_us_200mhz	checked_values	max_raw_error	intermediate_host_copy	result
-small	one_layer_attention_ffn	1	2	48.598	300	14579.4	72.897	64	0	0	PASS
-small	two_layer_stack_final_norm	2	5	96.724	300	29017.2	145.086	64	0	0	PASS
+profile	variant	scope	layers	tasks	xsim_active_us	xsim_clock_mhz	xsim_cycles	projected_us_200mhz	checked_values	max_raw_error	intermediate_host_copy	result
+small	coarse_task_baseline	one_layer_attention_ffn	1	2	48.598	300	14579.4	72.897	64	0	0	PASS
+small	coarse_task_baseline	two_layer_stack_final_norm	2	5	96.724	300	29017.2	145.086	64	0	0	PASS
+small	persistent_aux	one_layer_attention_ffn	1	2	47.665	300	14299.5	71.4975	64	0	0	PASS
+small	persistent_aux	two_layer_stack_final_norm	2	5	95.809	300	28742.7	143.7135	64	0	0	PASS
+small	persistent_aux	serial_prompt_decode_e2e_p2_g3	2	20	365.248	300	109574.4	547.872	NA	NA	0	PASS

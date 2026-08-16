@@ -149,6 +149,11 @@ and sampling policy while keeping PCIe out of intermediate-tensor and KV-cache
 traffic. Task descriptors carry tensor addresses/handles and shape metadata;
 controller status records completion and the next valid residency state.
 
+Norm coefficients and the position-indexed RoPE table are persistent model
+state. The host initializes all layer rows and positions once; individual
+Tasks 18--20 do not migrate auxiliary tensors. Task 18 reads the selected RoPE
+position and updates the layer/position KV slot through controller HBM ports.
+
 The Q2.14 P/D profile remains an operator-level diagnostic path for visibility
 and golden checking. The coarse tasks above are now implemented and validated
 as a separate runtime: closed-loop RTL CoSim passes Tasks 18/19/20, and a
@@ -181,6 +186,12 @@ operator, materialize the sublayer boundary in one of two HBM feature pairs,
 or release. Task 18 writes pair A, Task 19 consumes A and writes B, and the next
 layer consumes B directly. Only status is returned between tasks; the final
 hidden tensor is migrated once after Task 20.
+
+The current model host composes these tasks across prompt and generated-token
+forwards. Embedding and LM-head/sampling remain software boundaries, while all
+selected decoder layers, final RMSNorm, intermediate hidden tensors, and KV
+updates stay on the accelerator. Prompt traversal in this path is currently
+serial-token; blockwise prefill is the next task-level schedule extension.
 
 ## 8. Online attention and KV-cache ownership
 

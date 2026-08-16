@@ -158,7 +158,7 @@ The Q2.14 implementation was exercised with deterministic non-zero weights,
 activations, and KV fixtures at four context lengths. Prefill measures the
 final 8-token query block; Decode measures one new token.
 
-| Phase | Context | Active query tokens | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
+| Phase | Context | Query tokens / block | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P | 64 | 8 | 637,103 | 3.1855 ms | 194.174 | 94.812% |
 | P | 256 | 8 | 685,489 | 3.4274 ms | 182.304 | 89.016% |
@@ -173,7 +173,7 @@ Every Q2.14 bit-accurate comparison passed. The maximum raw error was 1;
 comparisons against the higher-precision attention reference also passed with
 a maximum raw error of 5. Task and result-packet counts matched in all cases.
 
-The `Active query tokens` column is the query-block height, not total prompt
+The `Query tokens / block` column is the query-block height, not total prompt
 length or request batch size.
 P1024 covers positions 1016--1023; it is the final-block cost and not the sum
 of all 128 blocks in a complete 1024-token prefill.
@@ -205,21 +205,31 @@ status is returned until the final hidden migration.
 | Controller route CSim | PASS, 21 cases |
 | Three-task closed-loop CSim | PASS |
 | Three-task RTL CoSim | PASS, 7,983 cycles, deadlock detection enabled |
+| Persistent Norm/RoPE/KV focused test | PASS, no row aliasing and banked cache layout exact |
 | Small two-layer/five-task HW Emu | PASS, 64/64 exact, no intermediate host copy |
+| Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV |
 
 The small profile validates cross-layer HBM residency rather than Qwen-layer
 throughput:
 
 | Scope | Layers | Tasks | XSim cycles | Projected latency at 200 MHz |
 | --- | ---: | ---: | ---: | ---: |
-| Attention+FFN layer | 1 | 2 | 14,579 | 72.897 us |
-| Stack plus final norm | 2 | 5 | 29,017 | 145.086 us |
+| Attention+FFN layer | 1 | 2 | 14,300 | 71.498 us |
+| Stack plus final norm | 2 | 5 | 28,743 | 143.714 us |
+| Serial prompt/decode composition | 2 | 20 across 4 forwards | 109,574 | 547.872 us |
 
 Cycles use the generated 300-MHz XSim clock and are projected to the 200-MHz
 physical target. Host/OpenCL event durations under HW Emu are simulator
 wall-time proxies. Standard-dimension data and raw profiles are maintained in
 [`results/coarse-task-20260816/`](../results/coarse-task-20260816/); see the
 [runtime report](coarse-task-runtime.md) for the task and measurement boundary.
+
+The composition case uses two prompt tokens and three sampled tokens. Its four
+forwards comprise two prompt forwards and two generated-token forwards; the
+last sampled token is returned without a redundant decoder pass. It validates
+cross-position KV state and the real host task-composition path, but its small
+shape and serial-token prompt traversal are not a full-model performance
+proxy.
 
 ## 10. Interpretation
 
@@ -250,14 +260,13 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Complete the standard Qwen-layer Task-18/19 HW-Emu correctness and cycle
-   gate, then include Task 20 in the same standard-shape image.
-2. Move the small per-layer norm/RoPE coefficient migration into persistent
-   model-initialization storage so a task sequence needs only descriptors and
-   status traffic.
-3. Exercise the multi-layer host composition path with the full model shape,
+1. Complete the standard Qwen-layer Task-18/19/20 HW-Emu correctness and cycle
+   gate using the persistent auxiliary-state image.
+2. Exercise the multi-layer host composition path with the full model shape,
    recording both kernel-active cycles and host-observed sequence latency.
-4. Extend the same coarse-task contract from single-token decode to blockwise
-   prefill while preserving controller-owned KV update.
+3. Extend the same coarse-task contract from serial-token prompt traversal to
+   blockwise prefill while preserving controller-owned KV update.
+4. Add accelerator-side vocabulary projection or quantify the host LM-head
+   boundary separately from the decoder-stack measurement.
 5. After functional closure, evaluate multi-request row batching for M=1
    decode and repeat physical placement/resource checks.

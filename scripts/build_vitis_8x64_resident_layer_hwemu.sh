@@ -5,9 +5,9 @@ cd "$(dirname "$0")/.."
 
 phase="${1:-all}"
 case "${phase}" in
-    control-xo|status-xo|link|host|all|run|run-composed|run-stack) ;;
+    control-xo|status-xo|link|host|all|run|run-composed|run-stack|run-generate) ;;
     *)
-        echo "usage: $0 [control-xo|status-xo|link|host|all|run|run-composed|run-stack]" >&2
+        echo "usage: $0 [control-xo|status-xo|link|host|all|run|run-composed|run-stack|run-generate]" >&2
         exit 2
         ;;
 esac
@@ -25,22 +25,35 @@ frequency="${FREQUENCY:-200}"
 threads="${THREADS:-16}"
 device="${DEVICE:-xilinx_u50_gen3x16_xdma_5_202210_1}"
 platform="${XPLATFORM:-/opt/xilinx/platforms/${device}/${device}.xpfm}"
-conn_cfg="${VITIS_8X64_CONN_CFG:-conn_u50_8x64_dual.cfg}"
 timeout_seconds="${VITIS_8X64_HW_EMU_TIMEOUT:-43200}"
 seed="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 debug_build="${VITIS_8X64_HWEMU_DEBUG:-0}"
+variant_tag="${VITIS_8X64_RESIDENT_VARIANT_TAG:-persistent_aux}"
+e2e_tokens="${VITIS_8X64_E2E_TOKENS:-0,1}"
+e2e_max_new_tokens="${VITIS_8X64_E2E_MAX_NEW_TOKENS:-3}"
+e2e_layers="${VITIS_8X64_E2E_LAYERS:-0}"
 
 case "${profile}" in
-    qwen-layer|small) ;;
+    qwen-layer|qwen2.5-3b|small) ;;
     *)
-        echo "resident-layer hw_emu supports VITIS_8X64_MODEL_PROFILE=qwen-layer or small" >&2
+        echo "resident-layer hw_emu supports VITIS_8X64_MODEL_PROFILE=qwen-layer, qwen2.5-3b, or small" >&2
         exit 2
         ;;
 esac
 
+if [ -n "${VITIS_8X64_CONN_CFG:-}" ]; then
+    conn_cfg="${VITIS_8X64_CONN_CFG}"
+elif [ "${profile}" = "qwen2.5-3b" ]; then
+    conn_cfg="conn_u50_8x64_dual_full_resident.cfg"
+else
+    conn_cfg="conn_u50_8x64_dual.cfg"
+fi
+
 profile_tag="${profile//./_}"
 profile_tag="${profile_tag//-/_}"
-tag="${profile_tag}.resident_layer.d${fifo_depth}.ii${load_ii}.r${wave_repeat}.wr${wave_result_depth}.cw${cross_wave_dataflow}.scratch"
+variant_tag="${variant_tag//./_}"
+variant_tag="${variant_tag//-/_}"
+tag="${profile_tag}.resident_layer.d${fifo_depth}.ii${load_ii}.r${wave_repeat}.wr${wave_result_depth}.cw${cross_wave_dataflow}.${variant_tag}"
 
 if [ "${profile}" = "small" ]; then
     default_compute_dir="vitis_8x64/xo"
@@ -164,6 +177,30 @@ run_hwemu() {
     )
 }
 
+run_generate_hwemu() {
+    for input in "${xclbin}" "${host_exe}" "${emconfig}"; do
+        if [ ! -s "${input}" ]; then
+            echo "Missing or empty resident-layer hw_emu input: ${input}" >&2
+            exit 66
+        fi
+    done
+    (
+        cd "${build_dir}"
+        XCL_EMULATION_MODE=hw_emu \
+        timeout "${timeout_seconds}" \
+            ./host_qwen_8x64.exe \
+            --xclbin ./qwen_8x64_dual.xclbin \
+            --mode generate \
+            --profile "${profile}" \
+            --random-model \
+            --seed "${seed}" \
+            --tokens "${e2e_tokens}" \
+            --max-new-tokens "${e2e_max_new_tokens}" \
+            --layers "${e2e_layers}" \
+            --coarse-tasks
+    )
+}
+
 case "${phase}" in
     control-xo) build_control_xo ;;
     status-xo) build_status_xo ;;
@@ -172,6 +209,7 @@ case "${phase}" in
     run) run_hwemu verify-resident-layer ;;
     run-composed) run_hwemu verify-composed-layer ;;
     run-stack) run_hwemu verify-composed-stack ;;
+    run-generate) run_generate_hwemu ;;
     all)
         build_control_xo
         build_status_xo

@@ -1,0 +1,21 @@
+profile=qwen2.5-3b
+  vocab=151936 hidden=2048 intermediate=11008 layers=36
+  heads=16 kv_heads=2 head_dim=128 max_seq=2048
+  feature_stride_words=344 data_port_words=8192
+  weight_shard_words=5419008 weight_shard_bytes=346816512 hbm_channels_per_shard=3 hbm_capacity_per_shard=805306368
+  embedding_bytes=622329856 norm_bytes=299008
+  paired_weight_kv_group_payload=769130496 paired_weight_kv_group_capacity=805306368 paired_weight_kv_group_headroom=36175872
+coarse-task decoder token plan:
+  embedding(host) -> one initial hidden H2D
+  repeat layer Task 18: RMS -> Q/K/V -> RoPE(controller)
+    -> controller-owned HBM KV append/read -> online-softmax + PV -> O -> residual
+  repeat layer Task 19: RMS -> Gate/Up -> SiLU-Mul -> Down -> residual
+  Task 20: final RMS -> one final hidden D2H
+  dedicated or explicitly tied LM head(host)
+hardware contract:
+  one controller invocation launches cc8_ctrl + cc8_cu0 + cc8_cu1 + cc8_status
+  all norm rows and the position-indexed RoPE table are preloaded once in auxiliary HBM
+  hidden tensors ping-pong between two HBM pairs without intermediate host copies
+  feature tensors use fixed max-dimension token stride
+  attention rows and K/V panels use tight 512-bit row packing
+  the selected --profile must match the xclbin build profile

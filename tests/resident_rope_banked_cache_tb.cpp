@@ -3,7 +3,8 @@
 #include <cstdio>
 
 static fm_word_t kv_cache_k[CC8_KV_CACHE_WORDS];
-static fm_word_t aux_words[CC8_DATA_PORT_WORDS];
+static fm_word_t norm_words[CC8_DATA_PORT_WORDS];
+static fm_word_t rope_words[CC8_DATA_PORT_WORDS];
 
 static fm_t test_value(
     unsigned int major,
@@ -27,15 +28,25 @@ static void set_gbuf_value(
 }
 
 static void set_aux_value(
+    fm_word_t words[CC8_DATA_PORT_WORDS],
     unsigned int word_offset,
     unsigned int elem,
     fm_t value
 ) {
     const unsigned int word_idx = word_offset + elem / FM_BLOCK_SIZE;
     const unsigned int lane = elem % FM_BLOCK_SIZE;
-    fm_word_t word = aux_words[word_idx];
+    fm_word_t word = words[word_idx];
     set_fm_word_lane(word, lane, value);
-    aux_words[word_idx] = word;
+    words[word_idx] = word;
+}
+
+static fm_t get_gbuf_value(
+    const cc8_global_buffer_t& gbuf,
+    unsigned int elem
+) {
+    const unsigned int block = elem / MM_PE_IN;
+    const unsigned int lane = elem % MM_PE_IN;
+    return unpack_mm_input_block_lane(gbuf.block[0][block], lane);
 }
 
 int main() {
@@ -44,10 +55,65 @@ int main() {
         source.block[0][block] = 0;
     }
     for (unsigned int word = 0; word < CC8_DATA_PORT_WORDS; word++) {
-        aux_words[word] = 0;
+        norm_words[word] = 0;
+        rope_words[word] = 0;
     }
     for (unsigned int word = 0; word < CC8_KV_CACHE_WORDS; word++) {
         kv_cache_k[word] = 0;
+    }
+
+    int errors = 0;
+
+    // Give the two layer-1 norm rows and the final norm row distinct values.
+    // Loading them through the same offset helpers used by Tasks 18, 19, and
+    // 20 catches row-aliasing in the persistent auxiliary-HBM layout.
+    constexpr unsigned int kNormLayer = NUM_LAYERS > 1 ? 1 : 0;
+    const unsigned int norm_offsets[3] = {
+        cc8_attention_norm_word_offset(kNormLayer),
+        cc8_ffn_norm_word_offset(kNormLayer),
+        cc8_final_norm_word_offset()
+    };
+    const fm_t norm_expected[3] = {
+        fm_t(0.5),
+        fm_t(1.25),
+        fm_t(-0.75)
+    };
+    for (unsigned int row = 0; row < 3; row++) {
+        for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+            set_aux_value(
+                norm_words,
+                norm_offsets[row],
+                elem,
+                norm_expected[row]
+            );
+        }
+    }
+    for (unsigned int row = 0; row < 3; row++) {
+        cc8_global_buffer_t loaded_norm;
+        for (unsigned int block = 0; block < CC8_GBUF_BLOCKS; block++) {
+            loaded_norm.block[0][block] = 0;
+        }
+        load_cc8_feature_gbuf(
+            loaded_norm,
+            norm_words,
+            norm_words,
+            1,
+            1,
+            HIDDEN_SIZE,
+            norm_offsets[row]
+        );
+        for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+            if (get_gbuf_value(loaded_norm, elem) != norm_expected[row]) {
+                if (errors < 8) {
+                    std::printf(
+                        "norm row mismatch row=%u elem=%u\n",
+                        row,
+                        elem
+                    );
+                }
+                errors++;
+            }
+        }
     }
 
     fm_t query_source[NUM_ATTENTION_HEADS][HEAD_DIM];
@@ -91,16 +157,34 @@ int main() {
 
     fm_t cosine[CC8_ROPE_HALF_ELEMS];
     fm_t sine[CC8_ROPE_HALF_ELEMS];
+    constexpr unsigned int position = 3;
+    const unsigned int position_word_offset =
+        position * CC8_ROPE_POSITION_WORDS;
     for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
         cosine[i] = fm_t(0.75) + fm_t(i % 3) / fm_t(32);
         sine[i] = fm_t(-0.25) + fm_t(i % 5) / fm_t(64);
-        set_aux_value(CC8_ROPE_COS_WORD_OFFSET, i, cosine[i]);
-        set_aux_value(CC8_ROPE_SIN_WORD_OFFSET, i, sine[i]);
+        set_aux_value(
+            rope_words,
+            position_word_offset + CC8_ROPE_COS_WORD_OFFSET,
+            i,
+            cosine[i]
+        );
+        set_aux_value(
+            rope_words,
+            position_word_offset + CC8_ROPE_SIN_WORD_OFFSET,
+            i,
+            sine[i]
+        );
     }
 
-    apply_cc8_rope_from_aux(query0, query1, current_k, aux_words);
+    apply_cc8_rope_from_aux(
+        query0,
+        query1,
+        current_k,
+        rope_words,
+        position
+    );
 
-    int errors = 0;
     for (unsigned int head = 0; head < NUM_ATTENTION_HEADS; head++) {
         const bool second_group = head >= GQA_GROUP_SIZE;
         const unsigned int row = second_group ?
@@ -192,7 +276,7 @@ int main() {
     }
 
     std::printf(
-        "RESIDENT ROPE BANKED CACHE TEST %s errors=%d\n",
+        "RESIDENT ROPE BANKED CACHE TEST %s errors=%d norm_rows=3\n",
         errors == 0 ? "PASS" : "FAIL",
         errors
     );

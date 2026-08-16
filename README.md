@@ -89,7 +89,7 @@ measurements. The standard layer shape is
 `hidden=2048`, `intermediate=11008`, 16 query heads, 2 KV heads, and
 head dimension 128.
 
-| Phase | KV context | Active query tokens | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| Phase | KV context | Query tokens / block | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Prefill | 64 | 8 | 637,103 | 3.186 ms | 194.17 | 94.81% |
 | Prefill | 256 | 8 | 685,489 | 3.427 ms | 182.30 | 89.02% |
@@ -100,7 +100,7 @@ head dimension 128.
 | Decode | 512 | 1 | 622,231 | 3.111 ms | 25.45 | 12.43% |
 | Decode | 1024 | 1 | 683,754 | 3.419 ms | 23.77 | 11.61% |
 
-`Active query tokens=8` means one full 8-row prefill block, not an eight-token
+`Query tokens / block = 8` means one full 8-row prefill block, not an eight-token
 prompt. P1024 measures positions 1016--1023 against a causal history of up to
 1024 KV entries. A full 1024-token prefill requires 128 context-dependent
 blocks and is not represented by the P1024 latency alone.
@@ -124,14 +124,18 @@ The new coarse-task
 runtime implements the production boundary separately: Task 18 owns the full
 attention sublayer including RoPE and KV update, Task 19 owns the FFN sublayer,
 and Task 20 owns final RMSNorm. Hidden state remains in HBM across tasks and
-layers; the host reads status records until the final output migration.
+layers; Norm/RoPE tables are initialized once as persistent model state, and
+the host reads status records until the final output migration.
 
 The two-layer small-profile HW-Emu contract test runs five tasks and passes all
 64 final-hidden values exactly with `intermediate_host_copy=0`. Closed-loop RTL
 CoSim also passes all three task types in 7,983 cycles with deadlock detection
-enabled. These are residency/protocol results; standard Qwen-layer performance
-is reported in the dedicated [coarse-task runtime](docs/coarse-task-runtime.md)
-artifact after its HW-Emu gate completes.
+enabled. A prompt/decode composition test also passes four complete forwards
+and 20 coarse tasks with controller-owned KV and no intermediate host copy.
+These are small-shape residency/protocol results; standard Qwen-layer
+performance is reported in the dedicated
+[coarse-task runtime](docs/coarse-task-runtime.md) artifact after its HW-Emu
+gate completes.
 
 ## Decoder schedule
 
@@ -146,7 +150,9 @@ RMSNorm
 
 Intermediate tensors can be committed to memory, retained in on-chip storage,
 or released according to the task policy. The host is not part of the intended
-inner-layer schedule.
+inner-layer schedule. In the current end-to-end host path, software retains
+embedding and LM-head/sampling, while the decoder stack, final normalization,
+hidden residency, and KV-cache updates use coarse accelerator tasks.
 
 ## Repository map
 

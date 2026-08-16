@@ -50,7 +50,7 @@ kernel still requires separate optimization.
 | --- | --- | --- |
 | Dense projection | Monolithic GEMM; operator-specific arrays; unified tiled MM | Unified 8x64 MM with output-wave Split-N across two CUs |
 | RMSNorm | Host preprocessing; controller reduction; CU vector task | CU vector task so normalized features remain in the stream/resident path |
-| RoPE | Host transform; CU vector opcode; controller-local banked transform | Controller-local transform using coefficients supplied through auxiliary memory |
+| RoPE | Host transform; CU vector opcode; controller-local banked transform | Controller-local transform using a model-initialized persistent coefficient table |
 | Exponential/normalization | Custom iterative exponential; lookup approximation; HLS math primitive | `hls::exp` on a bounded fixed-point input, followed by online normalization state |
 | SiLU and gated product | Separate kernels; controller arithmetic; unified CU vector path | Unified CU vector task to avoid intermediate host/memory traffic |
 | Residual addition | Host or external-memory round trip; controller; CU vector path | CU vector task with resident operands |
@@ -175,6 +175,9 @@ The selected target keeps intermediate tensors and KV state in HBM/on-chip
 buffers while allowing the host to combine several task types into complete
 prefill and decode inference. End-to-end reporting must include both the
 controller-active intervals and the host-observed task-sequence latency.
+The current generate path realizes this boundary for serial-token prompt and
+decode traversal; blockwise coarse-task prefill remains the next schedule
+extension.
 
 ## 11. Evaluation principles
 

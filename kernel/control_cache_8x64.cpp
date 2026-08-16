@@ -148,7 +148,8 @@ static void load_cc8_feature_gbuf(
     const fm_word_t port1[CC8_DATA_PORT_WORDS],
     unsigned int token_slots,
     unsigned int valid_tokens,
-    unsigned int elem_count
+    unsigned int elem_count,
+    unsigned int word_offset = 0
 ) {
     #pragma HLS inline off
     #pragma HLS array_partition variable=gbuf.block complete dim=1
@@ -166,6 +167,7 @@ static void load_cc8_feature_gbuf(
                 fm_word_t word = 0;
                 if (token < valid_tokens) {
                     unsigned int port_word =
+                        word_offset +
                         token_in_port * CC8_FEATURE_WORDS_PER_TOKEN +
                         word_idx;
                     word = read_cc8_feature_word(
@@ -5282,27 +5284,30 @@ static fm_t read_cc8_layer_aux_value(
 
 static void load_cc8_rope_coefficients(
     cc8_rope_coefficient_buffer_t& coefficients,
-    const fm_word_t aux0[CC8_DATA_PORT_WORDS]
+    const fm_word_t rope_table[CC8_DATA_PORT_WORDS],
+    unsigned int position
 ) {
     #pragma HLS inline off
     #pragma HLS array_partition variable=coefficients.value complete dim=1
 
-    // aux0 is one AXI master.  Read one coefficient per cycle into two
-    // independent local banks; all query rows and both KV heads then reuse
-    // these values without issuing repeated cosine/sine AXI reads.
+    // aux1 is a persistent position-major RoPE table in HBM. Read one
+    // coefficient per cycle into two independent local banks; all query rows
+    // and both KV heads then reuse these values without repeated AXI reads.
+    const unsigned int position_word_offset =
+        position * CC8_ROPE_POSITION_WORDS;
     for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
         #pragma HLS pipeline II=1
         coefficients.value[0][i] = read_cc8_layer_aux_value(
-            aux0,
-            CC8_ROPE_COS_WORD_OFFSET,
+            rope_table,
+            position_word_offset + CC8_ROPE_COS_WORD_OFFSET,
             i
         );
     }
     for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
         #pragma HLS pipeline II=1
         coefficients.value[1][i] = read_cc8_layer_aux_value(
-            aux0,
-            CC8_ROPE_SIN_WORD_OFFSET,
+            rope_table,
+            position_word_offset + CC8_ROPE_SIN_WORD_OFFSET,
             i
         );
     }
@@ -5312,7 +5317,8 @@ static void apply_cc8_rope_from_aux(
     cc8_resident_query_buffer_t& query0,
     cc8_resident_query_buffer_t& query1,
     cc8_resident_k_buffer_t& current_k,
-    const fm_word_t aux0[CC8_DATA_PORT_WORDS]
+    const fm_word_t rope_table[CC8_DATA_PORT_WORDS],
+    unsigned int position = 0
 ) {
     #pragma HLS inline off
     #pragma HLS array_partition variable=query0.value complete dim=1
@@ -5325,7 +5331,7 @@ static void apply_cc8_rope_from_aux(
     cc8_rope_coefficient_buffer_t coefficients;
     #pragma HLS bind_storage variable=coefficients.value type=ram_2p impl=bram
     #pragma HLS array_partition variable=coefficients.value complete dim=1
-    load_cc8_rope_coefficients(coefficients, aux0);
+    load_cc8_rope_coefficients(coefficients, rope_table, position);
 
     for (unsigned int row = 0; row < GQA_GROUP_SIZE; row++) {
         for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
@@ -5892,7 +5898,8 @@ void control_cache_8x64_dual_core(
             aux_port0,
             1,
             1,
-            HIDDEN_SIZE
+            HIDDEN_SIZE,
+            cc8_final_norm_word_offset()
         );
         status.dispatched_vector_tasks = run_cc8_vector_gbuf_task(
             core0_task_stream,
@@ -5994,7 +6001,8 @@ void control_cache_8x64_dual_core(
                 aux_port0,
                 1,
                 1,
-                HIDDEN_SIZE
+                HIDDEN_SIZE,
+                cc8_attention_norm_word_offset(layer_id)
             );
             total_vector_tasks += run_cc8_vector_gbuf_task(
                 core0_task_stream,
@@ -6027,11 +6035,12 @@ void control_cache_8x64_dual_core(
             );
             load_cc8_feature_gbuf(
                 gbuf1,
-                aux_port1,
-                aux_port1,
+                aux_port0,
+                aux_port0,
                 1,
                 1,
-                HIDDEN_SIZE
+                HIDDEN_SIZE,
+                cc8_ffn_norm_word_offset(layer_id)
             );
             total_vector_tasks += run_cc8_vector_gbuf_task(
                 core0_task_stream,
@@ -6095,7 +6104,8 @@ void control_cache_8x64_dual_core(
                     query0,
                     query1,
                     current_k,
-                    aux_port0
+                    aux_port1,
+                    position
                 );
                 clear_cc8_gbuf(gbuf0, HIDDEN_SIZE);
                 unsigned int attention_tasks =
@@ -6244,11 +6254,12 @@ void control_cache_8x64_dual_core(
                 if (op != CC8_OP_ATTENTION_SUBLAYER) {
                     load_cc8_feature_gbuf(
                         gbuf1,
-                        aux_port1,
-                        aux_port1,
+                        aux_port0,
+                        aux_port0,
                         1,
                         1,
-                        HIDDEN_SIZE
+                        HIDDEN_SIZE,
+                        cc8_ffn_norm_word_offset(layer_id)
                     );
                     total_vector_tasks += run_cc8_vector_gbuf_task(
                         core0_task_stream,

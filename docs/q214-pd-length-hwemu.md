@@ -38,7 +38,7 @@ operator calls, CPU RoPE/test-fixture packing, KV fixture migration, and CPU
 golden checks are outside the reported interval. The dense and attention
 arithmetic listed above executes in the FPGA kernels.
 
-| Phase | Context | Active query tokens | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
+| Phase | Context | Query tokens / block | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | P | 64 | 8 | 637,103 | 3.1855 | 194.174 | 94.812% | 2,511.37 |
 | P | 256 | 8 | 685,489 | 3.4274 | 182.304 | 89.016% | 2,334.10 |
@@ -55,7 +55,7 @@ costs approximately 7.7k cycles.  P remains efficient because eight query rows
 fill the 8x64 datapath.  D uses only one query row, so its shape-normalized work
 is valid but its physical utilization remains around 12%.
 
-`Active query tokens = 8` means eight consecutive rows of one sequence, not an
+`Query tokens / block = 8` means eight consecutive rows of one sequence, not an
 eight-sequence batch and not an eight-token prompt. For P1024, the measured
 block contains positions 1016--1023 and reads a causal KV history of up to 1024
 entries. A complete 1024-token prefill contains 128 such context-dependent

@@ -47,16 +47,29 @@ The host still chooses the task sequence and layer index. This keeps request,
 sampling, and model-level policy in software while removing host round trips
 inside each subgraph.
 
+### Full-profile HBM capacity guard
+
+The `qwen2.5-3b` host plan checks aggregate allocation against the actual
+grouped connectivity rather than checking each logical shard against one
+256-MiB pseudo-channel. Each logical weight shard is 346,816,512 bytes and is
+striped over three pseudo-channels (805,306,368 bytes). A shared group contains
+shard `i`, shard `i + 8`, and, for the first two groups, one K or V cache. The
+worst-case payload is 769,130,496 bytes, leaving 36,175,872 bytes of headroom.
+The host rejects initialization if either the per-shard or shared-group guard
+fails.
+
 ## Verification interfaces
 
-The model host exposes three relevant paths:
+The model host exposes four relevant paths:
 
 - `--mode verify-composed-layer`: deterministic random-weight Task 18 followed
   by Task 19, compared with a CPU fixed-point golden layer;
 - `--mode verify-composed-stack`: all layers in the selected profile followed
   by Task 20, with the `2 * layers + 1` task contract checked explicitly;
 - `--coarse-tasks`: use the same HBM-resident task sequence in the normal
-  `run` or `generate` host path.
+  `run` or `generate` host path;
+- `--mode generate --coarse-tasks`: compose prompt and generated-token
+  forwards while reporting the software/hardware boundary explicitly.
 
 The build helper accepts both the standard `qwen-layer` profile and the small
 two-layer contract profile:
@@ -73,6 +86,13 @@ VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
+
+# Exercise prompt/decode composition across positions and controller-owned KV.
+VITIS_8X64_MODEL_PROFILE=small \
+VITIS_8X64_E2E_TOKENS=0,1 \
+VITIS_8X64_E2E_MAX_NEW_TOKENS=3 \
+VITIS_8X64_E2E_LAYERS=2 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-generate
 
 # Run a standard-dimension Attention+FFN layer.
 VITIS_8X64_MODEL_PROFILE=qwen-layer \
@@ -92,7 +112,9 @@ mixing old RTL with a new testbench.
 | Controller route CSim | PASS, 21 cases including Tasks 18/19/20 |
 | Closed-loop three-transaction CSim | PASS, Task 18 -> 19 -> 20 |
 | Closed-loop RTL CoSim | PASS, 7,983 total cycles, deadlock detection enabled |
+| Persistent Norm/RoPE/KV focused test | PASS, three independent norm rows and banked RoPE/KV checked |
 | Small two-layer/five-task HW Emu | PASS, 64/64 values exact, `intermediate_host_copy=0` |
+| Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV, no intermediate host copy |
 | Standard Qwen2.5-3B layer-shape HW Emu | In progress for this release |
 
 The authoritative RTL CoSim report records three passing transactions with
@@ -117,8 +139,9 @@ copy. A separate one-layer Task-18/19 run passed the same checks.
 
 | Scope | Layers | Tasks | XSim active interval | XSim cycles | Projected latency at 200 MHz |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Attention+FFN layer | 1 | 2 | 48.598 us | 14,579 | 72.897 us |
-| Stack plus final norm | 2 | 5 | 96.724 us | 29,017 | 145.086 us |
+| Attention+FFN layer | 1 | 2 | 47.665 us | 14,300 | 71.498 us |
+| Stack plus final norm | 2 | 5 | 95.809 us | 28,743 | 143.714 us |
+| Serial prompt/decode composition | 2 | 20 across 4 forwards | 365.248 us | 109,574 | 547.872 us |
 
 The U50 HW-Emu image generates a 300-MHz XSim kernel clock (3.333 ns), even
 though the physical implementation target is 200 MHz. Cycles are therefore
@@ -126,17 +149,25 @@ derived from the run-local `profile_kernels.csv` at 300 MHz and then projected
 to 200 MHz. OpenCL event times and host wall time under HW Emu are simulator
 wall-time proxies, not physical-device latency.
 
+The composition row uses two prompt tokens and samples three tokens. Four
+decoder forwards are required: two prompt forwards and two generated-token
+forwards; the final sampled token is returned without an unnecessary extra
+forward. Each forward runs two layers plus final norm, so the host observes 20
+coarse tasks. This is a protocol and residency test, not a Qwen2.5-3B
+throughput claim. Prompt processing is still serial-token prefill in this path.
+
 ## Resource gate
 
-The standard-dimension controller synthesis changes as follows relative to the
-earlier resident single-layer controller:
+The standard-dimension controller synthesis changes as follows. The
+coarse-task column is the previous release, and the persistent column is the
+current implementation with model-initialized Norm/RoPE storage:
 
-| Metric | Earlier resident controller | Coarse-task controller | Change |
+| Metric | Previous coarse-task controller | Persistent auxiliary-state controller | Change |
 | --- | ---: | ---: | ---: |
 | BRAM18 | 488 | 488 | 0 |
-| DSP | 90 | 102 | +12 |
-| FF | 421,880 | 446,088 | +24,208 (+5.7%) |
-| LUT | 390,283 | 406,157 | +15,874 (+4.1%) |
+| DSP | 102 | 102 | 0 |
+| FF | 446,088 | 446,153 | +65 (+0.015%) |
+| LUT | 406,157 | 406,003 | -154 (-0.038%) |
 | HLS estimated period | 3.746 ns | 3.746 ns | unchanged |
 
 Including two existing compute CUs gives an HLS system estimate of
@@ -152,9 +183,17 @@ diagnostics because they follow simulator wall time. On a physical device,
 event profiling represents the device timeline and host elapsed time becomes
 the launch- and PCIe-inclusive measurement.
 
-Weight and persistent KV allocation/preload are model-initialization costs.
-The composed sequence measurement includes the initial hidden migration,
-per-layer auxiliary-data migration, all task/status synchronizations, and the
-final hidden migration in its host-observed interval. Kernel-active cycles are
-reported separately so that datapath and software/runtime overhead are not
-conflated.
+Weight, Norm/RoPE tables, and persistent KV allocation/preload are
+model-initialization costs. All `(2 * layers + 1)` norm rows and the complete
+position-indexed RoPE table are initialized once. A task sequence therefore
+reports `auxiliary_migration_ms=0`; Task 18 reads RoPE and appends K/V directly
+through controller HBM ports. The host-observed sequence includes the initial
+hidden migration, task/status synchronizations, and final hidden migration.
+Kernel-active cycles are reported separately so that datapath and
+software/runtime overhead are not conflated.
+
+In `generate --coarse-tasks`, token embedding and LM-head/sampling remain host
+operations. All selected decoder layers, final normalization, hidden-state
+residency, and KV-cache updates execute through the coarse-task accelerator
+path. This explicit boundary is retained until blockwise prefill and an
+accelerator-side vocabulary head are integrated.

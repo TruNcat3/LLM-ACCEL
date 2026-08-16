@@ -24,10 +24,30 @@ constexpr unsigned int CC8_FEATURE_WORDS_PER_TOKEN =
     ceildiv(MAX_LINEAR_IN_DIM, FM_BLOCK_SIZE);
 constexpr unsigned int CC8_FEATURE_WORDS_PER_PORT =
     CC8_TOKENS_PER_DATA_PORT * CC8_FEATURE_WORDS_PER_TOKEN;
+constexpr unsigned int CC8_LAYER_NORM_WORDS =
+    ceildiv(HIDDEN_SIZE, FM_BLOCK_SIZE);
+constexpr unsigned int CC8_LAYER_NORM_ROWS = 2 * NUM_LAYERS + 1;
+constexpr unsigned int CC8_LAYER_NORM_TABLE_WORDS =
+    CC8_LAYER_NORM_ROWS * CC8_LAYER_NORM_WORDS;
+constexpr unsigned int CC8_ROPE_HALF_ELEMS = HEAD_DIM / 2;
+constexpr unsigned int CC8_ROPE_VALUE_BANKS = 2;
+constexpr unsigned int CC8_ROPE_WORDS =
+    ceildiv(CC8_ROPE_HALF_ELEMS, FM_BLOCK_SIZE);
+constexpr unsigned int CC8_ROPE_POSITION_WORDS = 2 * CC8_ROPE_WORDS;
+constexpr unsigned int CC8_ROPE_TABLE_WORDS =
+    MAX_SEQ_LEN * CC8_ROPE_POSITION_WORDS;
+constexpr unsigned int CC8_PERSISTENT_AUX_WORDS =
+    CC8_LAYER_NORM_TABLE_WORDS > CC8_ROPE_TABLE_WORDS ?
+    CC8_LAYER_NORM_TABLE_WORDS :
+    CC8_ROPE_TABLE_WORDS;
 constexpr unsigned int CC8_DATA_PORT_WORDS =
     CC8_FEATURE_WORDS_PER_PORT > CU_MV_CACHE_FM_WORDS ?
-    CC8_FEATURE_WORDS_PER_PORT :
-    CU_MV_CACHE_FM_WORDS;
+        (CC8_FEATURE_WORDS_PER_PORT > CC8_PERSISTENT_AUX_WORDS ?
+            CC8_FEATURE_WORDS_PER_PORT :
+            CC8_PERSISTENT_AUX_WORDS) :
+        (CU_MV_CACHE_FM_WORDS > CC8_PERSISTENT_AUX_WORDS ?
+            CU_MV_CACHE_FM_WORDS :
+            CC8_PERSISTENT_AUX_WORDS);
 constexpr unsigned int CC8_GBUF_BLOCKS = MAX_LINEAR_IN_BLOCKS;
 constexpr unsigned int CC8_HIDDEN_GBUF_BLOCKS =
     ceildiv(HIDDEN_SIZE, MM_PE_IN);
@@ -70,15 +90,25 @@ constexpr unsigned int CC8_ATTN_WEIGHT_PACKET_BITS =
     CU_VEC_LANES * wt_linear_t::width;
 using cc8_attention_weight_packet_word_t =
     ap_uint<CC8_ATTN_WEIGHT_PACKET_BITS>;
-constexpr unsigned int CC8_LAYER_NORM_WORDS =
-    ceildiv(HIDDEN_SIZE, FM_BLOCK_SIZE);
-constexpr unsigned int CC8_ROPE_HALF_ELEMS = HEAD_DIM / 2;
-constexpr unsigned int CC8_ROPE_VALUE_BANKS = 2;
-constexpr unsigned int CC8_ROPE_WORDS =
-    ceildiv(CC8_ROPE_HALF_ELEMS, FM_BLOCK_SIZE);
-constexpr unsigned int CC8_ROPE_COS_WORD_OFFSET = CC8_LAYER_NORM_WORDS;
+// These offsets are relative to one position row in the persistent RoPE
+// table.  The controller adds position * CC8_ROPE_POSITION_WORDS.
+constexpr unsigned int CC8_ROPE_COS_WORD_OFFSET = 0;
 constexpr unsigned int CC8_ROPE_SIN_WORD_OFFSET =
     CC8_ROPE_COS_WORD_OFFSET + CC8_ROPE_WORDS;
+
+constexpr unsigned int cc8_attention_norm_word_offset(
+    unsigned int layer
+) {
+    return 2 * layer * CC8_LAYER_NORM_WORDS;
+}
+
+constexpr unsigned int cc8_ffn_norm_word_offset(unsigned int layer) {
+    return (2 * layer + 1) * CC8_LAYER_NORM_WORDS;
+}
+
+constexpr unsigned int cc8_final_norm_word_offset() {
+    return 2 * NUM_LAYERS * CC8_LAYER_NORM_WORDS;
+}
 constexpr unsigned int CC8_RESIDENT_LAYER_MM_WAVE_SLOTS_MAX =
     4 * ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
     2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
@@ -104,8 +134,14 @@ static_assert(
     CC8_K_CACHE_TRANSPOSED_WORDS <= CC8_KV_CACHE_ROW_MAJOR_WORDS,
     "transposed K cache must fit within one additional row-major-sized region"
 );
-static_assert(CC8_ROPE_SIN_WORD_OFFSET + CC8_ROPE_WORDS <= CC8_DATA_PORT_WORDS,
-              "resident layer aux0 must hold norm and RoPE coefficients");
+static_assert(
+    CC8_LAYER_NORM_TABLE_WORDS <= CC8_DATA_PORT_WORDS,
+    "resident aux0 must hold every layer norm row"
+);
+static_assert(
+    CC8_ROPE_TABLE_WORDS <= CC8_DATA_PORT_WORDS,
+    "resident aux1 must hold the full position-indexed RoPE table"
+);
 #if CC8_RESIDENT_LAYER_ONLY
 static_assert(
     CC8_RESIDENT_LAYER_CORE0_TASKS_MAX <= CU8_MAX_TASKS_PER_LAUNCH,

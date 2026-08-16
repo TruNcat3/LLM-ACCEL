@@ -1,0 +1,2 @@
+RANDOM task_composed_decoder_stack PASS values=64 max_raw_error=0 tolerance=32
+TASK_COMPOSED_STACK_VERIFY seed=20260718 position=0 attention_op=18 ffn_op=19 final_norm_op=20 layers=2 tasks=5 expected_tasks=5 intermediate_host_copy=0 event_timing_domain=hw_emu_host_wall_proxy attention_controller_ms=45005.6 ffn_controller_ms=33003.9 final_norm_controller_ms=7001.01 kernel_active_ms=85010.5 input_migration_ms=63.0245 auxiliary_migration_ms=0 status_kernel_ms=10001.2 status_migration_ms=109.003 output_migration_ms=45.3206 profiled_sequence_ms=95229 host_elapsed_ms=101275 PASS

@@ -114,13 +114,23 @@ VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
+
+# Two prompt tokens, three sampled tokens, two decoder layers.
+VITIS_8X64_MODEL_PROFILE=small \
+VITIS_8X64_E2E_TOKENS=0,1 \
+VITIS_8X64_E2E_MAX_NEW_TOKENS=3 \
+VITIS_8X64_E2E_LAYERS=2 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-generate
 ```
 
 The corresponding host modes are `verify-composed-layer` and
 `verify-composed-stack`. A passing stack reports `2 * layers + 1` tasks,
 `intermediate_host_copy=0`, and a passing CPU fixed-point final-hidden check.
 The normal `run` and `generate` paths select the same runtime with
-`--coarse-tasks`.
+`--coarse-tasks`. In the generate path, embedding and LM-head/sampling remain
+on the host; decoder layers, final RMSNorm, intermediate hidden state, and KV
+updates use the accelerator task sequence. Prompt traversal is serial-token in
+the current release.
 
 The closed-loop finite-FIFO checks are:
 
@@ -226,8 +236,9 @@ For the Q2.14 diagnostic table, active cycles exclude host scheduling gaps,
 buffer migration, CPU-side RoPE/test-fixture packing, KV fixture preload, and
 golden checks. For the coarse-task runtime, use both the run-local CU interval
 and the host-observed sequence fields. The latter include the initial input,
-per-layer auxiliary migrations, status synchronizations, and final output, but
-remain simulator wall-time proxies under HW Emu.
+status synchronizations, and final output, but remain simulator wall-time
+proxies under HW Emu. Norm/RoPE state is initialized once with model storage;
+a valid task sequence reports `auxiliary_migration_ms=0`.
 
 ### HLS reports
 

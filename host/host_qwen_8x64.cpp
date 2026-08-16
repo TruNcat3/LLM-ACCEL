@@ -148,7 +148,18 @@ struct model_shape_t {
     std::size_t data_port_words() const {
         const std::size_t mv_cache_words =
             ceildiv(std::size_t(max_seq_len) * head_dim(), kValuesPerWord);
-        return std::max(feature_words_per_port(), mv_cache_words);
+        const std::size_t norm_table_words =
+            ceildiv(
+                std::size_t(2 * num_layers + 1) * hidden_size,
+                kValuesPerWord
+            );
+        const std::size_t rope_table_words =
+            std::size_t(max_seq_len) * 2 *
+            ceildiv(head_dim() / 2, kValuesPerWord);
+        return std::max(
+            std::max(feature_words_per_port(), mv_cache_words),
+            std::max(norm_table_words, rope_table_words)
+        );
     }
 
     std::size_t packed_linear_tiles(
@@ -173,6 +184,26 @@ struct model_shape_t {
         const std::size_t total_tiles =
             std::size_t(num_layers) * layer_weight_tiles();
         return ceildiv(total_tiles, 2);
+    }
+
+    std::size_t weight_shard_bytes() const {
+        return weight_shard_words() * sizeof(word512_t);
+    }
+
+    bool uses_paired_weight_hbm_groups() const {
+        return name == "qwen2.5-3b";
+    }
+
+    unsigned int weight_shard_hbm_channels() const {
+        // The full resident connectivity stripes each logical shard over a
+        // three-pseudo-channel HBM group. Other profiles use one channel.
+        return name == "qwen2.5-3b" ? 3u : 1u;
+    }
+
+    std::size_t weight_shard_hbm_capacity_bytes() const {
+        return
+            std::size_t(weight_shard_hbm_channels()) *
+            kHbmPseudoChannelBytes;
     }
 
     std::size_t embedding_values() const {
@@ -204,6 +235,19 @@ struct model_shape_t {
         // size for a uniform host/kernel buffer contract and leaves that
         // suffix unused.
         return kv_cache_row_major_words() + k_cache_transposed_words();
+    }
+
+    std::size_t shared_weight_kv_group_payload_bytes() const {
+        // The full-resident connectivity maps shard i and shard i + 8 to
+        // one three-pseudo-channel HBM group.  The first two groups also
+        // contain the K or V cache, respectively, so this is the worst-case
+        // aggregate allocation that must fit in one group.
+        if (!uses_paired_weight_hbm_groups()) {
+            return weight_shard_bytes();
+        }
+        return
+            2 * weight_shard_bytes() +
+            kv_cache_words() * sizeof(word512_t);
     }
 
     void validate() const {
@@ -435,10 +479,6 @@ void check_cl(cl_int err, const char* operation) {
             << err;
         throw std::runtime_error(message.str());
     }
-}
-
-int hbm_bank(unsigned int bank) {
-    return int(bank) | XCL_MEM_TOPOLOGY;
 }
 
 void clear_words(aligned_word_vector& words) {
@@ -925,6 +965,10 @@ public:
         return weight_shards_;
     }
 
+    const aligned_fix16_vector& norm_weights() const {
+        return norm_weights_;
+    }
+
 private:
     tensor_t copy_norm_row(std::size_t row) const {
         tensor_t result(1, shape_.hidden_size);
@@ -993,17 +1037,35 @@ public:
           kv_cache_k_words_(shape.kv_cache_words()),
           kv_cache_v_words_(shape.kv_cache_words()),
           status_words_(1) {
-        const std::size_t shard_bytes =
-            shape.weight_shard_words() * sizeof(word512_t);
-        if (shard_bytes > kHbmPseudoChannelBytes) {
+        const std::size_t shard_bytes = shape.weight_shard_bytes();
+        if (shard_bytes > shape.weight_shard_hbm_capacity_bytes()) {
             std::ostringstream message;
             message
                 << "one weight shard needs "
                 << shard_bytes
-                << " bytes, but conn_u50_8x64_dual.cfg assigns one "
-                << "256 MiB HBM pseudo-channel per shard";
+                << " bytes, but the selected profile assigns only "
+                << shape.weight_shard_hbm_channels()
+                << " 256 MiB HBM pseudo-channel(s) per shard";
             throw std::runtime_error(message.str());
         }
+        if (
+            shape.uses_paired_weight_hbm_groups() &&
+            shape.shared_weight_kv_group_payload_bytes() >
+                shape.weight_shard_hbm_capacity_bytes()
+        ) {
+            std::ostringstream message;
+            message
+                << "two paired weight shards plus one KV cache need "
+                << shape.shared_weight_kv_group_payload_bytes()
+                << " bytes, but their three-pseudo-channel HBM group has "
+                << shape.weight_shard_hbm_capacity_bytes()
+                << " bytes";
+            throw std::runtime_error(message.str());
+        }
+        clear_words(kv_cache_k_words_);
+        clear_words(kv_cache_v_words_);
+        clear_words(status_words_);
+        initialize_persistent_auxiliary_data();
         initialize_opencl(xclbin);
         create_buffers();
         initialize_kernel_args();
@@ -1011,9 +1073,8 @@ public:
             std::cout
                 << "[qwen-host] skip weight preload; use this only for "
                 << "load-only or diagnostic zero-model runs\n";
-        } else {
-            migrate_weights();
         }
+        migrate_initial_model_state(!skip_weight_preload_);
     }
 
     tensor_t run_feature(
@@ -1085,30 +1146,9 @@ public:
             throw std::runtime_error("resident decoder layer input shape mismatch");
         }
 
-        clear_data();
+        ensure_persistent_auxiliary_state();
+        clear_feature_data();
         pack_feature(hidden, data_words_[2], data_words_[3]);
-        pack_tight(attention_norm, data_words_[4]);
-        pack_tight(ffn_norm, data_words_[5]);
-
-        const std::size_t norm_words =
-            ceildiv(shape_.hidden_size, kValuesPerWord);
-        const std::size_t rope_words =
-            ceildiv(shape_.head_dim() / 2, kValuesPerWord);
-        if (norm_words + 2 * rope_words > data_words_[4].size()) {
-            throw std::runtime_error("resident layer aux0 is too small for RoPE");
-        }
-        for (unsigned int i = 0; i < shape_.head_dim() / 2; i++) {
-            const double exponent = double(2 * i) / shape_.head_dim();
-            const double inverse_frequency =
-                1.0 / std::pow(kRopeTheta, exponent);
-            const double angle = position * inverse_frequency;
-            const std::size_t word = i / kValuesPerWord;
-            const unsigned int lane = i % kValuesPerWord;
-            data_words_[4][norm_words + word].value[lane] =
-                quantize_fix16(std::cos(angle));
-            data_words_[4][norm_words + rope_words + word].value[lane] =
-                quantize_fix16(std::sin(angle));
-        }
 
         const decoded_status_t status = launch(
             kOpDecoderLayer,
@@ -1146,18 +1186,9 @@ public:
             );
         }
 
-        clear_data();
+        ensure_persistent_auxiliary_state();
+        clear_feature_data();
         pack_feature(hidden, data_words_[2], data_words_[3]);
-
-        const std::size_t norm_words =
-            ceildiv(shape_.hidden_size, kValuesPerWord);
-        const std::size_t rope_words =
-            ceildiv(shape_.head_dim() / 2, kValuesPerWord);
-        if (norm_words + 2 * rope_words > data_words_[4].size()) {
-            throw std::runtime_error(
-                "composed layer aux0 is too small for RoPE"
-            );
-        }
         composed_layer_result_t result;
         result.attention_controller_ms = 0.0;
         result.ffn_controller_ms = 0.0;
@@ -1192,49 +1223,6 @@ public:
                  layer_offset < layer_count;
                  layer_offset++) {
                 const unsigned int layer = layer_begin + layer_offset;
-                clear_words(data_words_[4]);
-                clear_words(data_words_[5]);
-                pack_tight(model_.norm_row(layer, false), data_words_[4]);
-                pack_tight(model_.norm_row(layer, true), data_words_[5]);
-                for (unsigned int i = 0;
-                     i < shape_.head_dim() / 2;
-                     i++) {
-                    const double exponent =
-                        double(2 * i) / shape_.head_dim();
-                    const double inverse_frequency =
-                        1.0 / std::pow(kRopeTheta, exponent);
-                    const double angle = position * inverse_frequency;
-                    const std::size_t word = i / kValuesPerWord;
-                    const unsigned int lane = i % kValuesPerWord;
-                    data_words_[4][norm_words + word].value[lane] =
-                        quantize_fix16(std::cos(angle));
-                    data_words_[4][norm_words + rope_words + word]
-                        .value[lane] =
-                        quantize_fix16(std::sin(angle));
-                }
-                std::vector<cl::Memory> layer_aux = {
-                    data_buffers_[4],
-                    data_buffers_[5]
-                };
-                cl::Event layer_aux_event;
-                check_cl(
-                    transfer_queue_.enqueueMigrateMemObjects(
-                        layer_aux,
-                        0,
-                        nullptr,
-                        &layer_aux_event
-                    ),
-                    "migrate composed layer auxiliary inputs"
-                );
-                check_cl(
-                    transfer_queue_.finish(),
-                    "finish composed layer auxiliary migration"
-                );
-                result.auxiliary_migration_ms =
-                    add_profiled_milliseconds(
-                        result.auxiliary_migration_ms,
-                        event_milliseconds(layer_aux_event)
-                    );
 
                 // Task A: input pair 2/3 -> attention residual pair 0/1.
                 bind_controller_data_ports(0, 1, 2, 3);
@@ -1281,29 +1269,6 @@ public:
             unsigned int final_output0 = 2;
             unsigned int final_output1 = 3;
             if (include_final_norm) {
-                clear_words(data_words_[4]);
-                clear_words(data_words_[5]);
-                pack_tight(model_.final_norm_row(), data_words_[4]);
-                std::vector<cl::Memory> final_aux = {data_buffers_[4]};
-                cl::Event final_aux_event;
-                check_cl(
-                    transfer_queue_.enqueueMigrateMemObjects(
-                        final_aux,
-                        0,
-                        nullptr,
-                        &final_aux_event
-                    ),
-                    "migrate final norm weights"
-                );
-                check_cl(
-                    transfer_queue_.finish(),
-                    "finish final norm weight migration"
-                );
-                result.auxiliary_migration_ms =
-                    add_profiled_milliseconds(
-                        result.auxiliary_migration_ms,
-                        event_milliseconds(final_aux_event)
-                    );
                 bind_controller_data_ports(0, 1, 2, 3);
                 result.final_norm_status = execute_bound_resident_task(
                     kOpFinalNorm,
@@ -2039,6 +2004,61 @@ private:
         return tensor;
     }
 
+    void initialize_persistent_auxiliary_data() {
+        clear_words(data_words_[4]);
+        clear_words(data_words_[5]);
+
+        const aligned_fix16_vector& norms = model_.norm_weights();
+        if (norms.size() > data_words_[4].size() * kValuesPerWord) {
+            throw std::runtime_error(
+                "persistent norm table exceeds auxiliary HBM buffer"
+            );
+        }
+        for (std::size_t elem = 0; elem < norms.size(); elem++) {
+            data_words_[4][elem / kValuesPerWord]
+                .value[elem % kValuesPerWord] = norms[elem];
+        }
+
+        const std::size_t rope_words =
+            ceildiv(shape_.head_dim() / 2, kValuesPerWord);
+        const std::size_t rope_position_words = 2 * rope_words;
+        const std::size_t rope_table_words =
+            std::size_t(shape_.max_seq_len) * rope_position_words;
+        if (rope_table_words > data_words_[5].size()) {
+            throw std::runtime_error(
+                "persistent RoPE table exceeds auxiliary HBM buffer"
+            );
+        }
+
+        std::vector<double> inverse_frequency(shape_.head_dim() / 2);
+        for (unsigned int i = 0; i < shape_.head_dim() / 2; i++) {
+            const double exponent = double(2 * i) / shape_.head_dim();
+            inverse_frequency[i] = 1.0 / std::pow(kRopeTheta, exponent);
+        }
+        for (unsigned int position = 0;
+             position < shape_.max_seq_len;
+             position++) {
+            const std::size_t row =
+                std::size_t(position) * rope_position_words;
+            for (unsigned int i = 0; i < shape_.head_dim() / 2; i++) {
+                const double angle = position * inverse_frequency[i];
+                const std::size_t word = i / kValuesPerWord;
+                const unsigned int lane = i % kValuesPerWord;
+                data_words_[5][row + word].value[lane] =
+                    quantize_fix16(std::cos(angle));
+                data_words_[5][row + rope_words + word].value[lane] =
+                    quantize_fix16(std::sin(angle));
+            }
+        }
+    }
+
+    void clear_feature_data() {
+        for (unsigned int i = 0; i < 4; i++) {
+            clear_words(data_words_[i]);
+        }
+        clear_words(status_words_);
+    }
+
     void clear_data() {
         for (auto& words : data_words_) {
             clear_words(words);
@@ -2137,15 +2157,20 @@ private:
     }
 
     void create_buffers() {
-        static constexpr std::array<unsigned int, 6> data_banks = {
-            0, 1, 0, 1, 2, 3
+        static constexpr std::array<unsigned int, 6> data_args = {
+            kControllerOutput0Arg,
+            kControllerOutput1Arg,
+            kControllerInput0Arg,
+            kControllerInput1Arg,
+            kControllerAux0Arg,
+            kControllerAux1Arg
         };
         cl_int err = CL_SUCCESS;
 
         for (unsigned int i = 0; i < data_words_.size(); i++) {
-            data_ext_[i].obj = data_words_[i].data();
-            data_ext_[i].param = 0;
-            data_ext_[i].flags = hbm_bank(data_banks[i]);
+            data_ext_[i].argidx = data_args[i];
+            data_ext_[i].host_ptr_ = data_words_[i].data();
+            data_ext_[i].kernel = controller_kernel_.get();
             data_buffers_[i] = cl::Buffer(
                 context_,
                 CL_MEM_EXT_PTR_XILINX |
@@ -2159,12 +2184,13 @@ private:
         }
 
         for (unsigned int shard = 0; shard < kWeightShardCount; shard++) {
-            weight_ext_[shard].obj =
+            weight_ext_[shard].argidx =
+                kControllerWeight0Arg + shard;
+            weight_ext_[shard].host_ptr_ =
                 const_cast<word512_t*>(
                     model_.weight_shards()[shard].data()
                 );
-            weight_ext_[shard].param = 0;
-            weight_ext_[shard].flags = hbm_bank(4 + shard);
+            weight_ext_[shard].kernel = controller_kernel_.get();
             weight_buffers_[shard] = cl::Buffer(
                 context_,
                 CL_MEM_EXT_PTR_XILINX |
@@ -2177,9 +2203,9 @@ private:
             check_cl(err, "create weight HBM buffer");
         }
 
-        kv_cache_k_ext_.obj = kv_cache_k_words_.data();
-        kv_cache_k_ext_.param = 0;
-        kv_cache_k_ext_.flags = hbm_bank(20);
+        kv_cache_k_ext_.argidx = kControllerKvCacheKArg;
+        kv_cache_k_ext_.host_ptr_ = kv_cache_k_words_.data();
+        kv_cache_k_ext_.kernel = controller_kernel_.get();
         kv_cache_k_buffer_ = cl::Buffer(
             context_,
             CL_MEM_EXT_PTR_XILINX |
@@ -2191,9 +2217,9 @@ private:
         );
         check_cl(err, "create K cache HBM buffer");
 
-        kv_cache_v_ext_.obj = kv_cache_v_words_.data();
-        kv_cache_v_ext_.param = 0;
-        kv_cache_v_ext_.flags = hbm_bank(21);
+        kv_cache_v_ext_.argidx = kControllerKvCacheVArg;
+        kv_cache_v_ext_.host_ptr_ = kv_cache_v_words_.data();
+        kv_cache_v_ext_.kernel = controller_kernel_.get();
         kv_cache_v_buffer_ = cl::Buffer(
             context_,
             CL_MEM_EXT_PTR_XILINX |
@@ -2205,9 +2231,9 @@ private:
         );
         check_cl(err, "create V cache HBM buffer");
 
-        status_ext_.obj = status_words_.data();
-        status_ext_.param = 0;
-        status_ext_.flags = hbm_bank(3);
+        status_ext_.argidx = kStatusOutputArg;
+        status_ext_.host_ptr_ = status_words_.data();
+        status_ext_.kernel = status_kernel_.get();
         status_buffer_ = cl::Buffer(
             context_,
             CL_MEM_EXT_PTR_XILINX |
@@ -2292,21 +2318,46 @@ private:
         );
     }
 
-    void migrate_weights() {
+    void migrate_initial_model_state(bool include_weights) {
         std::vector<cl::Memory> buffers;
-        for (const auto& buffer : weight_buffers_) {
-            buffers.push_back(buffer);
+        if (include_weights) {
+            for (const auto& buffer : weight_buffers_) {
+                buffers.push_back(buffer);
+            }
         }
+        buffers.push_back(data_buffers_[4]);
+        buffers.push_back(data_buffers_[5]);
         buffers.push_back(kv_cache_k_buffer_);
         buffers.push_back(kv_cache_v_buffer_);
         check_cl(
             transfer_queue_.enqueueMigrateMemObjects(buffers, 0),
-            "migrate weight and KV cache buffers"
+            "migrate persistent model-state buffers"
         );
         check_cl(
             transfer_queue_.finish(),
-            "finish weight and KV cache migration"
+            "finish persistent model-state migration"
         );
+        persistent_auxiliary_device_valid_ = true;
+    }
+
+    void ensure_persistent_auxiliary_state() {
+        if (persistent_auxiliary_device_valid_) {
+            return;
+        }
+        initialize_persistent_auxiliary_data();
+        std::vector<cl::Memory> buffers = {
+            data_buffers_[4],
+            data_buffers_[5]
+        };
+        check_cl(
+            transfer_queue_.enqueueMigrateMemObjects(buffers, 0),
+            "restore persistent auxiliary buffers"
+        );
+        check_cl(
+            transfer_queue_.finish(),
+            "finish persistent auxiliary restore"
+        );
+        persistent_auxiliary_device_valid_ = true;
     }
 
     decoded_status_t launch(
@@ -2359,6 +2410,7 @@ private:
             std::cout << "operator input migrate enqueued\n" << std::flush;
         }
         check_cl(transfer_queue_.finish(), "finish operator input migration");
+        persistent_auxiliary_device_valid_ = false;
         if (verbose_ops_) {
             std::cout << "operator input migration finished\n" << std::flush;
         }
@@ -2863,6 +2915,7 @@ private:
     const model_data_t& model_;
     bool verbose_ops_;
     bool skip_weight_preload_;
+    bool persistent_auxiliary_device_valid_ = false;
     double last_controller_ms_ = -1.0;
     double last_status_kernel_ms_ = -1.0;
     double last_status_migration_ms_ = -1.0;
@@ -7283,8 +7336,7 @@ void print_usage(const char* executable) {
 }
 
 void print_profile(const model_shape_t& shape) {
-    const std::size_t shard_bytes =
-        shape.weight_shard_words() * sizeof(word512_t);
+    const std::size_t shard_bytes = shape.weight_shard_bytes();
     std::cout
         << "profile=" << shape.name << "\n"
         << "  vocab=" << shape.vocab_size
@@ -7298,32 +7350,60 @@ void print_profile(const model_shape_t& shape) {
         << "  feature_stride_words=" << shape.feature_words_per_token()
         << " data_port_words=" << shape.data_port_words() << "\n"
         << "  weight_shard_words=" << shape.weight_shard_words()
-        << " weight_shard_bytes=" << shard_bytes << "\n"
+        << " weight_shard_bytes=" << shard_bytes
+        << " hbm_channels_per_shard="
+        << shape.weight_shard_hbm_channels()
+        << " hbm_capacity_per_shard="
+        << shape.weight_shard_hbm_capacity_bytes()
+        << "\n"
         << "  embedding_bytes="
         << shape.embedding_values() * sizeof(int16_t)
         << " norm_bytes="
         << shape.norm_values() * sizeof(int16_t)
         << "\n";
-    if (shard_bytes > kHbmPseudoChannelBytes) {
+    if (shape.uses_paired_weight_hbm_groups()) {
+        const std::size_t group_payload =
+            shape.shared_weight_kv_group_payload_bytes();
+        const std::size_t group_capacity =
+            shape.weight_shard_hbm_capacity_bytes();
         std::cout
-            << "  BLOCKED: each shard exceeds one 256 MiB HBM "
-            << "pseudo-channel in the current link map\n";
+            << "  paired_weight_kv_group_payload=" << group_payload
+            << " paired_weight_kv_group_capacity=" << group_capacity
+            << " paired_weight_kv_group_headroom="
+            << (group_payload <= group_capacity ?
+                group_capacity - group_payload : 0)
+            << "\n";
+        if (group_payload > group_capacity) {
+            std::cout
+                << "  BLOCKED: paired shards plus KV cache exceed their "
+                << "shared HBM group\n";
+        }
+    }
+    if (shard_bytes > shape.weight_shard_hbm_capacity_bytes()) {
+        std::cout
+            << "  BLOCKED: each shard exceeds its selected HBM group\n";
     }
 }
 
 void print_execution_plan(const model_shape_t& shape) {
     print_profile(shape);
     std::cout
-        << "decoder token plan:\n"
-        << "  embedding(host)\n"
-        << "  repeat layer: RMS -> Q/K/V -> RoPE(host)\n"
-        << "  attention: DECODE_SMOKE(controller writes HBM KV,"
-        << " online-softmax + PV) -> O\n"
-        << "  residual -> RMS -> Gate/Up -> SiLU-Mul -> Down -> residual\n"
-        << "  final RMS -> dedicated or explicitly tied LM head(host)\n"
+        << "coarse-task decoder token plan:\n"
+        << "  embedding(host) -> one initial hidden H2D\n"
+        << "  repeat layer Task 18: RMS -> Q/K/V -> RoPE(controller)\n"
+        << "    -> controller-owned HBM KV append/read"
+        << " -> online-softmax + PV -> O -> residual\n"
+        << "  repeat layer Task 19: RMS -> Gate/Up"
+        << " -> SiLU-Mul -> Down -> residual\n"
+        << "  Task 20: final RMS -> one final hidden D2H\n"
+        << "  dedicated or explicitly tied LM head(host)\n"
         << "hardware contract:\n"
         << "  one controller invocation launches cc8_ctrl + cc8_cu0"
         << " + cc8_cu1 + cc8_status\n"
+        << "  all norm rows and the position-indexed RoPE table are"
+        << " preloaded once in auxiliary HBM\n"
+        << "  hidden tensors ping-pong between two HBM pairs without"
+        << " intermediate host copies\n"
         << "  feature tensors use fixed max-dimension token stride\n"
         << "  attention rows and K/V panels use tight 512-bit row packing\n"
         << "  the selected --profile must match the xclbin build profile\n";
@@ -7461,12 +7541,21 @@ int main(int argc, const char* argv[]) {
             }
         }
         if (
-            shape.weight_shard_words() * sizeof(word512_t) >
-            kHbmPseudoChannelBytes
+            shape.weight_shard_bytes() >
+            shape.weight_shard_hbm_capacity_bytes()
         ) {
             throw std::runtime_error(
-                "selected profile exceeds the current one-bank-per-shard "
-                "HBM link map"
+                "selected profile exceeds its per-shard HBM group"
+            );
+        }
+        if (
+            shape.uses_paired_weight_hbm_groups() &&
+            shape.shared_weight_kv_group_payload_bytes() >
+                shape.weight_shard_hbm_capacity_bytes()
+        ) {
+            throw std::runtime_error(
+                "paired weight shards plus KV cache exceed their shared "
+                "HBM group"
             );
         }
 
@@ -7714,10 +7803,21 @@ int main(int argc, const char* argv[]) {
         const auto begin = std::chrono::steady_clock::now();
         tensor_t hidden;
         std::vector<unsigned int> sequence = command.tokens;
+        double prompt_forward_ms = 0.0;
+        double generated_forward_ms = 0.0;
+        double lm_head_host_ms = 0.0;
+        double time_to_first_token_ms = -1.0;
+        unsigned int generated_forward_passes = 0;
         for (unsigned int position = 0;
              position < command.tokens.size();
              position++) {
+            const auto token_begin = std::chrono::steady_clock::now();
             hidden = executor.run_token(sequence[position], position);
+            const auto token_end = std::chrono::steady_clock::now();
+            prompt_forward_ms +=
+                std::chrono::duration<double, std::milli>(
+                    token_end - token_begin
+                ).count();
             std::cout
                 << "position=" << position
                 << " token=" << sequence[position]
@@ -7732,20 +7832,87 @@ int main(int argc, const char* argv[]) {
             for (unsigned int step = 0;
                  step < command.max_new_tokens;
                  step++) {
+                const auto lm_head_begin =
+                    std::chrono::steady_clock::now();
                 const unsigned int next = model.lm_head_argmax(hidden);
+                const auto lm_head_end =
+                    std::chrono::steady_clock::now();
+                lm_head_host_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        lm_head_end - lm_head_begin
+                    ).count();
                 sequence.push_back(next);
                 const unsigned int position =
                     unsigned(sequence.size() - 1);
                 std::cout
                     << "generated[" << step << "]=" << next << "\n";
-                hidden = executor.run_token(next, position);
+                if (step == 0) {
+                    time_to_first_token_ms =
+                        std::chrono::duration<double, std::milli>(
+                            lm_head_end - begin
+                        ).count();
+                }
+
+                // The final sampled token is already a completed output.
+                // Run a forward pass only when another token must be
+                // produced from it; this avoids charging one unnecessary
+                // decoder invocation to an N-token generation request.
+                if (step + 1 < command.max_new_tokens) {
+                    const auto token_begin =
+                        std::chrono::steady_clock::now();
+                    hidden = executor.run_token(next, position);
+                    const auto token_end =
+                        std::chrono::steady_clock::now();
+                    generated_forward_ms +=
+                        std::chrono::duration<double, std::milli>(
+                            token_end - token_begin
+                        ).count();
+                    generated_forward_passes++;
+                }
             }
         }
 
         const auto end = std::chrono::steady_clock::now();
+        const double total_elapsed_ms =
+            std::chrono::duration<double, std::milli>(end - begin).count();
+        if (command.mode == "generate") {
+            const double mean_inter_token_ms =
+                generated_forward_passes == 0 ?
+                0.0 :
+                generated_forward_ms / generated_forward_passes;
+            const double decode_token_s =
+                generated_forward_ms <= 0.0 ?
+                0.0 :
+                1000.0 * generated_forward_passes /
+                    generated_forward_ms;
+            const double serial_prefill_token_s =
+                prompt_forward_ms <= 0.0 ?
+                0.0 :
+                1000.0 * command.tokens.size() / prompt_forward_ms;
+            std::cout
+                << "QWEN_8X64_E2E_PROFILE"
+                << " prompt_tokens=" << command.tokens.size()
+                << " generated_tokens=" << command.max_new_tokens
+                << " prompt_forward_passes=" << command.tokens.size()
+                << " generated_forward_passes="
+                << generated_forward_passes
+                << " prefill_mode=serial_token"
+                << " prompt_forward_ms=" << prompt_forward_ms
+                << " serial_prefill_token_s=" << serial_prefill_token_s
+                << " time_to_first_token_ms="
+                << time_to_first_token_ms
+                << " generated_forward_ms=" << generated_forward_ms
+                << " mean_inter_token_ms=" << mean_inter_token_ms
+                << " decode_token_s=" << decode_token_s
+                << " lm_head_host_ms=" << lm_head_host_ms
+                << " total_host_elapsed_ms=" << total_elapsed_ms
+                << " intermediate_host_copy=0"
+                << " kv_cache_owner=controller"
+                << " PASS\n";
+        }
         std::cout
             << "QWEN_8X64_HOST PASS elapsed_seconds="
-            << std::chrono::duration<double>(end - begin).count()
+            << total_elapsed_ms / 1000.0
             << " sequence=";
         for (std::size_t i = 0; i < sequence.size(); i++) {
             if (i != 0) {
