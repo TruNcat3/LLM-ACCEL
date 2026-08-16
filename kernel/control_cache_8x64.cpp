@@ -106,6 +106,7 @@ bool cc8_get_operator_spec(
         return true;
     case CC8_OP_ATTN_FLASH:
     case CC8_OP_DECODE_SMOKE:
+    case CC8_OP_ATTN_PREFILL_BLOCK:
         spec.compute_mode = CU8_MODE_MM_SCALE;
         spec.in_dim = HEAD_DIM;
         spec.out_dim = HEAD_DIM;
@@ -3404,6 +3405,123 @@ static void emit_cc8_attention_qk_inputs(
     }
 }
 
+static void load_cc8_prefill_query_block(
+    cc8_prefill_query_block_t& query,
+    const fm_word_t words[CC8_DATA_PORT_WORDS],
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=query.block complete dim=2
+    constexpr unsigned int kHeadBlocks = ceildiv(HEAD_DIM, MM_PE_IN);
+    constexpr unsigned int kWordsPerHead = ceildiv(HEAD_DIM, FM_BLOCK_SIZE);
+
+    for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+        for (unsigned int token = 0;
+             token < MM_STREAM_8X64_TOKENS;
+             token++) {
+            for (unsigned int word_idx = 0;
+                 word_idx < kWordsPerHead;
+                 word_idx++) {
+                #pragma HLS pipeline II=1
+                const unsigned int source_word =
+                    (token * GQA_GROUP_SIZE + head) * kWordsPerHead +
+                    word_idx;
+                const fm_word_t word = token < token_count ?
+                    words[source_word] : fm_word_t(0);
+                query.block[head][token][2 * word_idx] =
+                    word.range(255, 0);
+                if (2 * word_idx + 1 < kHeadBlocks) {
+                    query.block[head][token][2 * word_idx + 1] =
+                        word.range(511, 256);
+                }
+            }
+        }
+    }
+}
+
+static fm_t read_cc8_prefill_query_value(
+    const cc8_prefill_query_block_t& query,
+    unsigned int head,
+    unsigned int token,
+    unsigned int elem
+) {
+    #pragma HLS inline
+    return unpack_mm_input_block_lane(
+        query.block[head][token][elem / MM_PE_IN],
+        elem % MM_PE_IN
+    );
+}
+
+static void emit_cc8_prefill_qk_inputs(
+    hls::stream<mm_stream_8x64_activation_packet_t>& core0_activation_stream,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream0,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream1,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream2,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream3,
+    hls::stream<mm_stream_8x64_activation_packet_t>& core1_activation_stream,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream0,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream1,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream2,
+    hls::stream<mm_stream_8x64_weight_packet_t>& core1_weight_stream3,
+    const cc8_prefill_query_block_t& query0,
+    const cc8_prefill_query_block_t& query1,
+    const cc8_attention_qk_packet_panel_t& k0,
+    const cc8_attention_qk_packet_panel_t& k1,
+    unsigned int query_head,
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=query0.block complete dim=2
+    #pragma HLS array_partition variable=query1.block complete dim=2
+    #pragma HLS array_partition variable=k0.packet complete dim=1
+    #pragma HLS array_partition variable=k1.packet complete dim=1
+
+    for (unsigned int k = 0; k < HEAD_DIM; k++) {
+        #pragma HLS pipeline II=1
+        mm_stream_8x64_activation_packet_t activation0;
+        mm_stream_8x64_activation_packet_t activation1;
+        mm_stream_8x64_weight_packet_t weights0[CC8_ATTN_PACKET_GROUPS];
+        mm_stream_8x64_weight_packet_t weights1[CC8_ATTN_PACKET_GROUPS];
+        #pragma HLS array_partition variable=activation0.data complete dim=1
+        #pragma HLS array_partition variable=activation1.data complete dim=1
+        #pragma HLS array_partition variable=weights0 complete dim=0
+        #pragma HLS array_partition variable=weights1 complete dim=0
+
+        for (unsigned int token = 0;
+             token < MM_STREAM_8X64_TOKENS;
+             token++) {
+            #pragma HLS unroll
+            activation0.data[token] = token < token_count ?
+                read_cc8_prefill_query_value(query0, query_head, token, k) :
+                fm_t(0);
+            activation1.data[token] = token < token_count ?
+                read_cc8_prefill_query_value(query1, query_head, token, k) :
+                fm_t(0);
+        }
+        for (unsigned int group = 0;
+             group < CC8_ATTN_PACKET_GROUPS;
+             group++) {
+            #pragma HLS unroll
+            weights0[group] = unpack_cc8_attention_weight_packet(
+                k0.packet[group][k]
+            );
+            weights1[group] = unpack_cc8_attention_weight_packet(
+                k1.packet[group][k]
+            );
+        }
+        core0_activation_stream.write(activation0);
+        core1_activation_stream.write(activation1);
+        core0_weight_stream0.write(weights0[0]);
+        core0_weight_stream1.write(weights0[1]);
+        core0_weight_stream2.write(weights0[2]);
+        core0_weight_stream3.write(weights0[3]);
+        core1_weight_stream0.write(weights1[0]);
+        core1_weight_stream1.write(weights1[1]);
+        core1_weight_stream2.write(weights1[2]);
+        core1_weight_stream3.write(weights1[3]);
+    }
+}
+
 static void emit_cc8_attention_qk_packet_inputs(
     hls::stream<mm_stream_8x64_activation_packet_t>& core0_activation_stream,
     hls::stream<mm_stream_8x64_weight_packet_t>& core0_weight_stream0,
@@ -3939,6 +4057,20 @@ static fm_t cc8_exp_xilinx(fm_t x) {
     fm_t xc = cc8_clamp_fm(x, fm_t(-8), fm_t(8));
     ap_fixed<16, 8> exp_in = ap_fixed<16, 8>(xc);
     return fm_t(hls::exp(exp_in));
+}
+
+static attention_prob_t cc8_exp_attention_probability(fm_t x) {
+    #pragma HLS inline
+    // exp() only sees non-positive differences in online softmax.  A wider
+    // temporary supplies enough fractional bits for Q2.14 without changing
+    // any external stream width.
+    const fm_t xc = cc8_clamp_fm(x, fm_t(-8), fm_t(0));
+    // The score difference originates in Q8.8, while Q2.14 is the desired
+    // probability format.  Eighteen total bits retain all 14 output
+    // fractional bits; a wider exp input adds no source information and
+    // substantially increases HLS elaboration/resource cost.
+    const ap_fixed<18, 4> exp_in = ap_fixed<18, 4>(xc);
+    return attention_prob_t(hls::exp(exp_in));
 }
 
 static fm_t cc8_recip_safe(fm_accum_t x) {
@@ -4538,6 +4670,23 @@ static void write_cc8_attention_buffer_value(
     gbuf.block[row][block] = packed;
 }
 
+static void write_cc8_attention_probability(
+    cc8_attention_buffer_t& gbuf,
+    unsigned int row,
+    unsigned int elem,
+    attention_prob_t value
+) {
+    #pragma HLS inline
+    const unsigned int block = elem / MM_PE_IN;
+    const unsigned int lane = elem % MM_PE_IN;
+    mm_input_block_t packed = gbuf.block[row][block];
+    packed.range(
+        (lane + 1) * attention_prob_t::width - 1,
+        lane * attention_prob_t::width
+    ) = value.range(attention_prob_t::width - 1, 0);
+    gbuf.block[row][block] = packed;
+}
+
 static void init_cc8_flash_state(
     fm_t max0[MM_STREAM_8X64_TOKENS],
     fm_t max1[MM_STREAM_8X64_TOKENS],
@@ -4626,6 +4775,149 @@ static void compute_cc8_flash_probabilities_one_core(
             online_max[row] = row_max;
         } else {
             old_scale[row] = fm_t(0);
+        }
+    }
+}
+
+static void init_cc8_prefill_flash_state(
+    fm_t online_max[GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS],
+    fm_accum_t online_sum[GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS],
+    cc8_flash_accumulator_t accumulator[GQA_GROUP_SIZE]
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=accumulator complete dim=1
+
+    for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+        for (unsigned int token = 0;
+             token < MM_STREAM_8X64_TOKENS;
+             token++) {
+            online_max[head][token] = fm_t(-128);
+            online_sum[head][token] = fm_accum_t(0);
+            for (unsigned int block = 0;
+                 block < CC8_FLASH_ACCUM_BLOCKS;
+                 block++) {
+                #pragma HLS pipeline II=1
+                for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
+                    #pragma HLS unroll
+                    accumulator[head].value[token][block][lane] =
+                        fm_accum_t(0);
+                }
+            }
+        }
+    }
+}
+
+static void compute_cc8_prefill_flash_probabilities_one_core(
+    cc8_attention_buffer_t& probabilities,
+    const cc8_attention_buffer_t& scores,
+    fm_t online_max[MM_STREAM_8X64_TOKENS],
+    fm_accum_t online_sum[MM_STREAM_8X64_TOKENS],
+    attention_prob_t old_scale[MM_STREAM_8X64_TOKENS],
+    unsigned int query_begin,
+    unsigned int token_count,
+    unsigned int tile_begin,
+    unsigned int tile_len
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=probabilities.block complete dim=1
+    #pragma HLS array_partition variable=scores.block complete dim=1
+
+    clear_cc8_attention_buffer(probabilities);
+    for (unsigned int token = 0;
+         token < MM_STREAM_8X64_TOKENS;
+         token++) {
+        if (token < token_count) {
+            const unsigned int query_position = query_begin + token;
+            fm_t row_max = online_max[token];
+            for (unsigned int elem = 0; elem < CC8_ATTN_TILE; elem++) {
+                #pragma HLS pipeline II=1
+                const bool valid = elem < tile_len &&
+                    tile_begin + elem <= query_position;
+                if (valid) {
+                    const fm_t score =
+                        read_cc8_gbuf_value(scores, token, elem);
+                    if (score > row_max) {
+                        row_max = score;
+                    }
+                }
+            }
+
+            const attention_prob_t row_old_scale =
+                cc8_exp_attention_probability(
+                    online_max[token] - row_max
+                );
+            fm_accum_t tile_sum = fm_accum_t(0);
+            for (unsigned int elem = 0; elem < CC8_ATTN_TILE; elem++) {
+                #pragma HLS pipeline II=1
+                const bool valid = elem < tile_len &&
+                    tile_begin + elem <= query_position;
+                attention_prob_t probability = attention_prob_t(0);
+                if (valid) {
+                    const fm_t score =
+                        read_cc8_gbuf_value(scores, token, elem);
+                    probability =
+                        cc8_exp_attention_probability(score - row_max);
+                    tile_sum += fm_accum_t(probability);
+                }
+                write_cc8_attention_probability(
+                    probabilities,
+                    token,
+                    elem,
+                    probability
+                );
+            }
+            old_scale[token] = row_old_scale;
+            online_sum[token] =
+                online_sum[token] * fm_accum_t(row_old_scale) + tile_sum;
+            online_max[token] = row_max;
+        } else {
+            old_scale[token] = fm_t(0);
+        }
+    }
+}
+
+static void store_cc8_prefill_flash_output_one_core(
+    fm_word_t output[CC8_FEATURE_WORDS_PER_PORT],
+    fm_accum_t online_sum[GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS],
+    cc8_flash_accumulator_t accumulator[GQA_GROUP_SIZE],
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=accumulator complete dim=1
+    constexpr unsigned int kWordsPerToken =
+        GQA_GROUP_SIZE * CC8_HEAD_WORDS;
+
+    for (unsigned int token = 0;
+         token < MM_STREAM_8X64_TOKENS;
+         token++) {
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            const fm_t inv_sum = token < token_count ?
+                cc8_recip_safe(online_sum[head][token]) : fm_t(0);
+            for (unsigned int word_idx = 0;
+                 word_idx < CC8_HEAD_WORDS;
+                 word_idx++) {
+                #pragma HLS pipeline II=1
+                fm_word_t packed = 0;
+                for (unsigned int lane = 0; lane < FM_BLOCK_SIZE; lane++) {
+                    #pragma HLS unroll
+                    const unsigned int elem = word_idx * FM_BLOCK_SIZE + lane;
+                    fm_t value = fm_t(0);
+                    if (token < token_count && elem < HEAD_DIM) {
+                        value = fm_t(
+                            accumulator[head]
+                                .value[token]
+                                      [elem / CU_VEC_LANES]
+                                      [elem % CU_VEC_LANES] *
+                            fm_accum_t(inv_sum)
+                        );
+                    }
+                    set_fm_word_lane(packed, lane, value);
+                }
+                const unsigned int destination_word =
+                    token * kWordsPerToken +
+                    head * CC8_HEAD_WORDS + word_idx;
+                output[destination_word] = packed;
+            }
         }
     }
 }
@@ -4727,6 +5019,62 @@ static void accumulate_cc8_flash_pv_one_core(
             for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
                 #pragma HLS unroll
                 unsigned int elem = packet.elem_base + lane;
+                if (block < CC8_FLASH_ACCUM_BLOCKS &&
+                    elem < HEAD_DIM &&
+                    packet.valid_mask[lane]) {
+                    acc.value[packet.token_lane][block][lane] +=
+                        fm_accum_t(packet.data[lane]);
+                }
+            }
+        }
+    }
+}
+
+static void scale_cc8_prefill_flash_accumulator_one_core(
+    cc8_flash_accumulator_t& acc,
+    const attention_prob_t old_scale[MM_STREAM_8X64_TOKENS],
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=acc.value complete dim=3
+
+    for (unsigned int token = 0;
+         token < MM_STREAM_8X64_TOKENS;
+         token++) {
+        for (unsigned int block = 0;
+             block < CC8_FLASH_ACCUM_BLOCKS;
+             block++) {
+            #pragma HLS pipeline II=1
+            for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
+                #pragma HLS unroll
+                const unsigned int elem = block * CU_VEC_LANES + lane;
+                if (token < token_count && elem < HEAD_DIM) {
+                    acc.value[token][block][lane] *=
+                        fm_accum_t(old_scale[token]);
+                }
+            }
+        }
+    }
+}
+
+static void accumulate_cc8_prefill_flash_pv_one_core(
+    cc8_flash_accumulator_t& acc,
+    hls::stream<cu_vec16_packet_t>& result_stream,
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=acc.value complete dim=3
+
+    for (unsigned int packet_idx = 0;
+         packet_idx < MM_STREAM_8X64_PACKETS_PER_BLOCK;
+         packet_idx++) {
+        #pragma HLS pipeline II=1
+        const cu_vec16_packet_t packet = result_stream.read();
+        if (packet.token_lane < token_count) {
+            const unsigned int block = packet.elem_base / CU_VEC_LANES;
+            for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
+                #pragma HLS unroll
+                const unsigned int elem = packet.elem_base + lane;
                 if (block < CC8_FLASH_ACCUM_BLOCKS &&
                     elem < HEAD_DIM &&
                     packet.valid_mask[lane]) {
@@ -5445,7 +5793,14 @@ void control_cache_8x64_dual_core(
         return;
     }
 
+#ifdef CC8_PREFILL_BLOCK_SYNTH_ONLY
+    // Resource probe for the block-prefill scheduler.  Making the operator a
+    // compile-time constant lets HLS remove the legacy diagnostic schedulers,
+    // so this report measures the new path instead of their union.
+    cc8_operator_t op = CC8_OP_ATTN_PREFILL_BLOCK;
+#else
     cc8_operator_t op = cc8_operator_t(operator_kind);
+#endif
     status.op = op;
     cc8_operator_spec_t spec;
     if (!cc8_get_operator_spec(op, spec)) {
@@ -5455,6 +5810,32 @@ void control_cache_8x64_dual_core(
         status_stream.write(status);
         return;
     }
+#ifdef CC8_PREFILL_LAYER_ONLY
+    // Keep the runtime operator ABI required by the staged prefill host, but
+    // reject operators whose schedulers are deliberately absent from this
+    // image.  The corresponding preprocessor guards below let HLS eliminate
+    // decode, resident-layer, and diagnostic-attention control networks.
+    const bool prefill_layer_operator =
+        op == CC8_OP_NOP ||
+        op == CC8_OP_Q_PROJECTION ||
+        op == CC8_OP_K_PROJECTION ||
+        op == CC8_OP_V_PROJECTION ||
+        op == CC8_OP_O_PROJECTION ||
+        op == CC8_OP_FFN_GATE ||
+        op == CC8_OP_FFN_UP ||
+        op == CC8_OP_FFN_DOWN ||
+        op == CC8_OP_RMSNORM ||
+        op == CC8_OP_SILU_MUL ||
+        op == CC8_OP_RESIDUAL_ADD ||
+        op == CC8_OP_ATTN_PREFILL_BLOCK;
+    if (!prefill_layer_operator) {
+        status.status = CC8_STATUS_BAD_OPERATOR;
+        core0_task_stream.write(build_cc8_stop_task());
+        core1_task_stream.write(build_cc8_stop_task());
+        status_stream.write(status);
+        return;
+    }
+#endif
 
     if (op == CC8_OP_NOP) {
         core0_task_stream.write(build_cc8_stop_task());
@@ -5478,6 +5859,7 @@ void control_cache_8x64_dual_core(
     #pragma HLS array_partition variable=gbuf0.block complete dim=1
     #pragma HLS array_partition variable=gbuf1.block complete dim=1
 
+#if !defined(CC8_PREFILL_LAYER_ONLY)
     if (op == CC8_OP_DECODER_LAYER) {
         // V1 resident scheduling is the single-token decode layer.  Prefill
         // reuses the same datapath in token tiles once this closed loop is
@@ -5834,6 +6216,7 @@ void control_cache_8x64_dual_core(
         status_stream.write(status);
         return;
     }
+#endif
 
 #if CC8_RESIDENT_LAYER_ONLY
     // The production resident-layer image deliberately excludes the legacy
@@ -5847,6 +6230,239 @@ void control_cache_8x64_dual_core(
     return;
 #endif
 
+    if (op == CC8_OP_ATTN_PREFILL_BLOCK) {
+        if (token_count == 0 || token_count > MM_STREAM_8X64_TOKENS) {
+            status.status = CC8_STATUS_BAD_TOKEN_COUNT;
+            core0_task_stream.write(build_cc8_stop_task());
+            core1_task_stream.write(build_cc8_stop_task());
+            status_stream.write(status);
+            return;
+        }
+        if (position >= MAX_SEQ_LEN || position + token_count > MAX_SEQ_LEN) {
+            status.status = CC8_STATUS_BAD_POSITION;
+            core0_task_stream.write(build_cc8_stop_task());
+            core1_task_stream.write(build_cc8_stop_task());
+            status_stream.write(status);
+            return;
+        }
+
+        const unsigned int context_len = position + token_count;
+        const unsigned int tile_count = ceildiv(context_len, CC8_ATTN_TILE);
+        const unsigned int tasks_per_core =
+            tile_count * GQA_GROUP_SIZE * (1 + CC8_ATTN_PV_WAVES);
+        if (tasks_per_core > CU8_MAX_TASKS_PER_LAUNCH) {
+            status.status = CC8_STATUS_BAD_POSITION;
+            core0_task_stream.write(build_cc8_stop_task());
+            core1_task_stream.write(build_cc8_stop_task());
+            status_stream.write(status);
+            return;
+        }
+
+        cc8_prefill_query_block_t query0;
+        cc8_prefill_query_block_t query1;
+        fm_t state0_online_max
+            [GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+        fm_t state1_online_max
+            [GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+        fm_accum_t state0_online_sum
+            [GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+        fm_accum_t state1_online_sum
+            [GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+        cc8_flash_accumulator_t state0_accumulator[GQA_GROUP_SIZE];
+        cc8_flash_accumulator_t state1_accumulator[GQA_GROUP_SIZE];
+        cc8_attention_buffer_t qk0;
+        cc8_attention_buffer_t qk1;
+        cc8_attention_buffer_t prob0;
+        cc8_attention_buffer_t prob1;
+        cc8_attention_qk_packet_panel_t k_panel0;
+        cc8_attention_qk_packet_panel_t k_panel1;
+        cc8_attention_panel_t v_panel0;
+        cc8_attention_panel_t v_panel1;
+        cc8_current_kv_words_t dummy_current_v;
+        #pragma HLS bind_storage variable=query0.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=query1.block type=ram_2p impl=bram
+        #pragma HLS array_partition variable=query0.block complete dim=2
+        #pragma HLS array_partition variable=query1.block complete dim=2
+        #pragma HLS bind_storage variable=state0_accumulator type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=state1_accumulator type=ram_2p impl=bram
+        #pragma HLS array_partition variable=state0_accumulator complete dim=1
+        #pragma HLS array_partition variable=state1_accumulator complete dim=1
+        #pragma HLS bind_storage variable=qk0.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=qk1.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=prob0.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=prob1.block type=ram_2p impl=bram
+        #pragma HLS array_partition variable=qk0.block complete dim=1
+        #pragma HLS array_partition variable=qk1.block complete dim=1
+        #pragma HLS array_partition variable=prob0.block complete dim=1
+        #pragma HLS array_partition variable=prob1.block complete dim=1
+        #pragma HLS array_partition variable=k_panel0.packet complete dim=1
+        #pragma HLS array_partition variable=k_panel1.packet complete dim=1
+        #pragma HLS array_partition variable=v_panel0.word complete dim=0
+        #pragma HLS array_partition variable=v_panel1.word complete dim=0
+        #pragma HLS array_partition variable=dummy_current_v.word complete dim=0
+
+        load_cc8_prefill_query_block(query0, input_port0, token_count);
+        load_cc8_prefill_query_block(query1, input_port1, token_count);
+        init_cc8_prefill_flash_state(
+            state0_online_max, state0_online_sum, state0_accumulator
+        );
+        init_cc8_prefill_flash_state(
+            state1_online_max, state1_online_sum, state1_accumulator
+        );
+        clear_cc8_current_kv_words(dummy_current_v);
+
+        attention_prob_t old_scale0[MM_STREAM_8X64_TOKENS];
+        attention_prob_t old_scale1[MM_STREAM_8X64_TOKENS];
+
+        for (unsigned int tile_begin = 0;
+             tile_begin < MAX_SEQ_LEN;
+             tile_begin += CC8_ATTN_TILE) {
+            #pragma HLS loop_tripcount min=1 max=ATTENTION_NUM_TILES
+            if (tile_begin < context_len) {
+                unsigned int current_tile_len = CC8_ATTN_TILE;
+                if (tile_begin + current_tile_len > context_len) {
+                    current_tile_len = context_len - tile_begin;
+                }
+
+                // Critical reuse boundary: one HBM K/V tile load feeds all
+                // eight GQA query heads for this query block.
+                load_cc8_k_attention_packet_panel(
+                    k_panel0, k_panel1, kv_cache_k,
+                    layer_id, tile_begin, current_tile_len
+                );
+                load_cc8_kv_attention_panel(
+                    v_panel0, v_panel1, kv_cache_v,
+                    layer_id, tile_begin, current_tile_len
+                );
+
+                for (unsigned int head = 0;
+                     head < GQA_GROUP_SIZE;
+                     head++) {
+                    cu8_task_t qk_task = build_cc8_compute_task(
+                        CU8_MODE_MM_SCALE,
+                        HEAD_DIM,
+                        token_count,
+                        CC8_ATTN_TILE,
+                        MM_STREAM_8X64_PACKETS_PER_BLOCK,
+                        0,
+                        head,
+                        false
+                    );
+                    qk_task.output_scale = fm_t(ATTENTION_SCALE);
+                    core0_task_stream.write(qk_task);
+                    core1_task_stream.write(qk_task);
+                    emit_cc8_prefill_qk_inputs(
+                        core0_activation_stream,
+                        core0_weight_stream0,
+                        core0_weight_stream1,
+                        core0_weight_stream2,
+                        core0_weight_stream3,
+                        core1_activation_stream,
+                        core1_weight_stream0,
+                        core1_weight_stream1,
+                        core1_weight_stream2,
+                        core1_weight_stream3,
+                        query0, query1, k_panel0, k_panel1,
+                        head, token_count
+                    );
+                    collect_cc8_separate_mm_results(
+                        qk0, qk1,
+                        core0_result_stream, core1_result_stream,
+                        token_count, CC8_ATTN_TILE
+                    );
+
+                    compute_cc8_prefill_flash_probabilities_one_core(
+                        prob0, qk0,
+                        state0_online_max[head],
+                        state0_online_sum[head],
+                        old_scale0,
+                        position, token_count,
+                        tile_begin, current_tile_len
+                    );
+                    compute_cc8_prefill_flash_probabilities_one_core(
+                        prob1, qk1,
+                        state1_online_max[head],
+                        state1_online_sum[head],
+                        old_scale1,
+                        position, token_count,
+                        tile_begin, current_tile_len
+                    );
+                    scale_cc8_prefill_flash_accumulator_one_core(
+                        state0_accumulator[head], old_scale0, token_count
+                    );
+                    scale_cc8_prefill_flash_accumulator_one_core(
+                        state1_accumulator[head], old_scale1, token_count
+                    );
+
+                    for (unsigned int output_wave = 0;
+                         output_wave < CC8_ATTN_PV_WAVES;
+                         output_wave++) {
+                        const bool last_task =
+                            tile_begin + CC8_ATTN_TILE >= context_len &&
+                            head + 1 == GQA_GROUP_SIZE &&
+                            output_wave + 1 == CC8_ATTN_PV_WAVES;
+                        cu8_task_t pv_task = build_cc8_compute_task(
+                            CU8_MODE_MM_SCALE,
+                            current_tile_len,
+                            token_count,
+                            MM_STREAM_8X64_OUTPUTS,
+                            MM_STREAM_8X64_PACKETS_PER_BLOCK,
+                            output_wave * MM_STREAM_8X64_OUTPUTS,
+                            output_wave,
+                            last_task
+                        );
+                        // The 16-bit activation payload carries Q2.14
+                        // probabilities.  The existing DSP path sees the raw
+                        // bits as Q8.8 (64x larger), so compensate at its
+                        // result conversion without widening the stream.
+                        pv_task.output_scale = fm_t(1.0 / 64.0);
+                        core0_task_stream.write(pv_task);
+                        core1_task_stream.write(pv_task);
+                        emit_cc8_attention_pv_inputs(
+                            core0_activation_stream,
+                            core0_weight_stream0,
+                            core0_weight_stream1,
+                            core0_weight_stream2,
+                            core0_weight_stream3,
+                            core1_activation_stream,
+                            core1_weight_stream0,
+                            core1_weight_stream1,
+                            core1_weight_stream2,
+                            core1_weight_stream3,
+                            prob0, prob1, v_panel0, v_panel1,
+                            dummy_current_v, false, 0,
+                            output_wave, current_tile_len
+                        );
+                        accumulate_cc8_prefill_flash_pv_one_core(
+                            state0_accumulator[head],
+                            core0_result_stream,
+                            token_count
+                        );
+                        accumulate_cc8_prefill_flash_pv_one_core(
+                            state1_accumulator[head],
+                            core1_result_stream,
+                            token_count
+                        );
+                    }
+                }
+            }
+        }
+
+        store_cc8_prefill_flash_output_one_core(
+            output_port0, state0_online_sum, state0_accumulator, token_count
+        );
+        store_cc8_prefill_flash_output_one_core(
+            output_port1, state1_online_sum, state1_accumulator, token_count
+        );
+        status.output_waves = CC8_ATTN_PV_WAVES;
+        status.dispatched_mm_tasks = CC8_MM_CORE_COUNT * tasks_per_core;
+        status.completed_output_packets =
+            status.dispatched_mm_tasks * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+        status_stream.write(status);
+        return;
+    }
+
+#if !defined(CC8_PREFILL_LAYER_ONLY)
     if (op == CC8_OP_ATTN_FLASH || op == CC8_OP_DECODE_SMOKE) {
         if (token_count != GQA_GROUP_SIZE) {
             status.status = CC8_STATUS_BAD_TOKEN_COUNT;
@@ -6133,7 +6749,9 @@ void control_cache_8x64_dual_core(
         status_stream.write(status);
         return;
     }
+#endif
 
+#if !defined(CC8_PREFILL_LAYER_ONLY)
     if (op == CC8_OP_ATTN_QK ||
         op == CC8_OP_ATTN_PV ||
         op == CC8_OP_SOFTMAX) {
@@ -6379,6 +6997,7 @@ void control_cache_8x64_dual_core(
         status_stream.write(status);
         return;
     }
+#endif
 
     unsigned int profile_debug_stage =
         tile_len != 0 ? ((profile_flags >> 1) & 0xfu) : 0u;

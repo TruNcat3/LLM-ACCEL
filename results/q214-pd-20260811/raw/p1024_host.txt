@@ -1,0 +1,173 @@
+started_at=2026-08-11T14:04:57+08:00 build_dir=/home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer_long.prefill_layer.d2.ii2.wr33.cw1.scratch.q214exp18.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 profile=qwen-layer-long lengths=1024 phase=p seed=20260722
+results_tsv=logs/vitis_8x64_pd_length_sweep_20260811_140457_810513655_165697/results.tsv artifact_dir=logs/vitis_8x64_pd_length_sweep_20260811_140457_810513655_165697
+case=p context_len=1024 prefill_start=1016 prefill_len=1024 tokens=8
+started_at=2026-08-11T14:04:57+08:00
+build_dir=/home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer_long.prefill_layer.d2.ii2.wr33.cw1.scratch.q214exp18.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1
+profile=qwen-layer-long mode=profile-prefill-block layers=1 tokens=0
+prefill_stage mode=profile-prefill-block prefill_start=1016 prefill_len=1024
+model=random timeout=604800
+using reproducible random Fix16 model seed=20260722
+Found Platform
+Platform Name: Xilinx
+INFO: Reading ./qwen_8x64_dual.xclbin
+Loading: './qwen_8x64_dual.xclbin'
+INFO: [HW-EMU 05] Path of the simulation directory : /home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer_long.prefill_layer.d2.ii2.wr33.cw1.scratch.q214exp18.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/165878/hw_em/device0/binary_0/behav_waveform/xsim
+
+ server socket name is	/tmp/wt/device0_0_165878
+INFO: [HW-EMU 01] Hardware emulation runs simulation underneath. Using a large data set will result in long simulation times. It is recommended that a small dataset is used for faster execution. The flow uses approximate models for Global memories and interconnect and hence the performance data generated is approximate.
+configuring embedded scheduler mode
+scheduler config ert(1), dataflow(0), slots(16), cudma(0), cuisr(0), cdma(0), cus(4)
+programmed xilinx_u50_gen3x16_xdma_5_202210_1 for profile qwen-layer-long
+RANDOM prefill_block0_attention_rmsnorm PASS values=16384 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_q_projection PASS values=16384 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_k_projection PASS values=2048 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_v_projection PASS values=2048 max_raw_error=0 tolerance=1
+PREFILL_BLOCK_ATTENTION_STATUS position_begin=1016 token_count=8 context_len=1024 tile_count=16 attention_calls=1 mm_tasks=768 expected_mm_tasks=768 packets=24576 expected_packets=24576 controller_ms=4.26642e+06 PASS
+RANDOM prefill_block0_attention_pos1016_port0_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1016_port0_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1016_port0_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1016_port1_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1016_port1_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1016_port1_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+  mismatch row=1 col=0 actual_raw=80 expected_raw=103 error=23
+  mismatch row=1 col=2 actual_raw=102 expected_raw=132 error=30
+  mismatch row=1 col=3 actual_raw=44 expected_raw=56 error=12
+  mismatch row=1 col=4 actual_raw=-21 expected_raw=-26 error=5
+RANDOM prefill_block0_attention_pos1016_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=62 tolerance=4 mismatches=126
+RANDOM prefill_block0_attention_pos1016_port1_legacy_global_diagnostic PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1017_port0_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1017_port0_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1017_port0_q2_14_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1017_port1_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1017_port1_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1017_port1_q2_14_reference PASS values=1024 max_raw_error=3 tolerance=5
+  mismatch row=4 col=0 actual_raw=48 expected_raw=63 error=15
+  mismatch row=4 col=3 actual_raw=34 expected_raw=46 error=12
+  mismatch row=4 col=4 actual_raw=-15 expected_raw=-20 error=5
+  mismatch row=4 col=5 actual_raw=-55 expected_raw=-73 error=18
+RANDOM prefill_block0_attention_pos1017_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=42 tolerance=4 mismatches=122
+RANDOM prefill_block0_attention_pos1017_port1_legacy_global_diagnostic PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1018_port0_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1018_port0_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1018_port0_q2_14_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1018_port1_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1018_port1_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1018_port1_q2_14_reference PASS values=1024 max_raw_error=3 tolerance=5
+  mismatch row=2 col=0 actual_raw=28 expected_raw=33 error=5
+  mismatch row=2 col=2 actual_raw=36 expected_raw=42 error=6
+  mismatch row=2 col=8 actual_raw=-40 expected_raw=-47 error=7
+  mismatch row=2 col=9 actual_raw=-28 expected_raw=-33 error=5
+RANDOM prefill_block0_attention_pos1018_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=13 tolerance=4 mismatches=43
+  mismatch row=1 col=0 actual_raw=-64 expected_raw=-94 error=30
+  mismatch row=1 col=1 actual_raw=-89 expected_raw=-130 error=41
+  mismatch row=1 col=2 actual_raw=75 expected_raw=111 error=36
+  mismatch row=1 col=3 actual_raw=96 expected_raw=141 error=45
+RANDOM prefill_block0_attention_pos1018_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=88 tolerance=4 mismatches=201
+RANDOM prefill_block0_attention_pos1019_port0_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1019_port0_reference PASS values=1024 max_raw_error=5 tolerance=5
+RANDOM prefill_block0_attention_pos1019_port0_q2_14_reference PASS values=1024 max_raw_error=5 tolerance=5
+RANDOM prefill_block0_attention_pos1019_port1_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1019_port1_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1019_port1_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+  mismatch row=2 col=0 actual_raw=51 expected_raw=59 error=8
+  mismatch row=2 col=4 actual_raw=-36 expected_raw=-42 error=6
+  mismatch row=2 col=7 actual_raw=-35 expected_raw=-41 error=6
+  mismatch row=2 col=32 actual_raw=38 expected_raw=44 error=6
+RANDOM prefill_block0_attention_pos1019_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=674 tolerance=4 mismatches=230
+  mismatch row=2 col=0 actual_raw=70 expected_raw=84 error=14
+  mismatch row=2 col=1 actual_raw=61 expected_raw=74 error=13
+  mismatch row=2 col=2 actual_raw=-34 expected_raw=-41 error=7
+  mismatch row=2 col=4 actual_raw=-100 expected_raw=-119 error=19
+RANDOM prefill_block0_attention_pos1019_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=45 tolerance=4 mismatches=181
+RANDOM prefill_block0_attention_pos1020_port0_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1020_port0_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1020_port0_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1020_port1_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1020_port1_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1020_port1_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+  mismatch row=2 col=63 actual_raw=-23 expected_raw=-28 error=5
+  mismatch row=4 col=0 actual_raw=52 expected_raw=57 error=5
+  mismatch row=4 col=57 actual_raw=56 expected_raw=61 error=5
+  mismatch row=4 col=84 actual_raw=-45 expected_raw=-50 error=5
+RANDOM prefill_block0_attention_pos1020_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=29 tolerance=4 mismatches=175
+  mismatch row=0 col=0 actual_raw=-53 expected_raw=-68 error=15
+  mismatch row=0 col=1 actual_raw=-73 expected_raw=-94 error=21
+  mismatch row=0 col=2 actual_raw=62 expected_raw=80 error=18
+  mismatch row=0 col=3 actual_raw=79 expected_raw=101 error=22
+RANDOM prefill_block0_attention_pos1020_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=44 tolerance=4 mismatches=90
+RANDOM prefill_block0_attention_pos1021_port0_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1021_port0_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1021_port0_q2_14_reference PASS values=1024 max_raw_error=3 tolerance=5
+RANDOM prefill_block0_attention_pos1021_port1_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1021_port1_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1021_port1_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+  mismatch row=0 col=0 actual_raw=-102 expected_raw=-347 error=245
+  mismatch row=0 col=1 actual_raw=-21 expected_raw=-73 error=52
+  mismatch row=0 col=2 actual_raw=-171 expected_raw=-584 error=413
+  mismatch row=0 col=3 actual_raw=-7 expected_raw=-23 error=16
+RANDOM prefill_block0_attention_pos1021_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=1071 tolerance=4 mismatches=253
+  mismatch row=2 col=0 actual_raw=-31 expected_raw=-39 error=8
+  mismatch row=2 col=1 actual_raw=-42 expected_raw=-51 error=9
+  mismatch row=2 col=4 actual_raw=-41 expected_raw=-51 error=10
+  mismatch row=2 col=5 actual_raw=32 expected_raw=40 error=8
+RANDOM prefill_block0_attention_pos1021_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=22 tolerance=4 mismatches=147
+RANDOM prefill_block0_attention_pos1022_port0_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1022_port0_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1022_port0_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1022_port1_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1022_port1_reference PASS values=1024 max_raw_error=5 tolerance=5
+RANDOM prefill_block0_attention_pos1022_port1_q2_14_reference PASS values=1024 max_raw_error=5 tolerance=5
+  mismatch row=3 col=94 actual_raw=-29 expected_raw=-34 error=5
+  mismatch row=5 col=1 actual_raw=-43 expected_raw=-51 error=8
+  mismatch row=5 col=2 actual_raw=49 expected_raw=58 error=9
+  mismatch row=5 col=11 actual_raw=33 expected_raw=39 error=6
+RANDOM prefill_block0_attention_pos1022_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=17 tolerance=4 mismatches=38
+  mismatch row=0 col=0 actual_raw=142 expected_raw=317 error=175
+  mismatch row=0 col=1 actual_raw=131 expected_raw=297 error=166
+  mismatch row=0 col=3 actual_raw=48 expected_raw=107 error=59
+  mismatch row=0 col=4 actual_raw=-210 expected_raw=-464 error=254
+RANDOM prefill_block0_attention_pos1022_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=646 tolerance=4 mismatches=142
+RANDOM prefill_block0_attention_pos1023_port0_q2_14_hw PASS values=1024 max_raw_error=1 tolerance=4
+RANDOM prefill_block0_attention_pos1023_port0_reference PASS values=1024 max_raw_error=4 tolerance=5
+RANDOM prefill_block0_attention_pos1023_port0_q2_14_reference PASS values=1024 max_raw_error=4 tolerance=5
+RANDOM prefill_block0_attention_pos1023_port1_q2_14_hw PASS values=1024 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_attention_pos1023_port1_reference PASS values=1024 max_raw_error=2 tolerance=5
+RANDOM prefill_block0_attention_pos1023_port1_q2_14_reference PASS values=1024 max_raw_error=2 tolerance=5
+  mismatch row=1 col=94 actual_raw=-39 expected_raw=-44 error=5
+  mismatch row=3 col=0 actual_raw=159 expected_raw=397 error=238
+  mismatch row=3 col=1 actual_raw=35 expected_raw=87 error=52
+  mismatch row=3 col=2 actual_raw=-38 expected_raw=-95 error=57
+RANDOM prefill_block0_attention_pos1023_port0_legacy_global_diagnostic FAIL values=1024 max_raw_error=551 tolerance=4 mismatches=174
+  mismatch row=1 col=33 actual_raw=-37 expected_raw=-42 error=5
+  mismatch row=1 col=59 actual_raw=48 expected_raw=54 error=6
+  mismatch row=2 col=31 actual_raw=38 expected_raw=43 error=5
+  mismatch row=2 col=54 actual_raw=-38 expected_raw=-43 error=5
+RANDOM prefill_block0_attention_pos1023_port1_legacy_global_diagnostic FAIL values=1024 max_raw_error=7 tolerance=4 mismatches=20
+RANDOM prefill_block0_o_projection PASS values=16384 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_attention_residual PASS values=16384 max_raw_error=0 tolerance=0
+RANDOM prefill_block0_ffn_rmsnorm PASS values=16384 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_ffn_gate PASS values=88064 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_ffn_up PASS values=88064 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_ffn_silu_mul PASS values=88064 max_raw_error=0 tolerance=1
+RANDOM prefill_block0_ffn_down PASS values=16384 max_raw_error=0 tolerance=4
+RANDOM prefill_block0_ffn_residual PASS values=16384 max_raw_error=0 tolerance=0
+PREFILL_BLOCK_PROFILE block=0 position_begin=1016 token_count=8 hidden_checksum=0x2b17b28553a61e40 PASS
+PREFILL_PROFILE prefill_len=1024 prefill_start=1016 processed_tokens=8 block_size=8 blocks=1 attention_calls=1 attention_mm_tasks=768 attention_packets=24576 final_hidden_checksum=0x2b17b28553a61e40 seed=20260722 PASS
+
+ socket connect is not established/broken
+INFO: [HW-EMU 06-0] Waiting for the simulator process to exit
+INFO: [HW-EMU 06-1] All the simulator processes exited successfully
+INFO: [HW-EMU 07-0] Please refer the path "/home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer_long.prefill_layer.d2.ii2.wr33.cw1.scratch.q214exp18.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/165878/hw_em/device0/binary_0/behav_waveform/xsim/simulate.log" for more detailed simulation infos, errors and warnings.
+finished_at=2026-08-11T19:11:24+08:00
+exit_status=0
+log_file=/home/wt/git/LLM-FPGA/logs/vitis_8x64_hwemu_qwen_layer_long_profile-prefill-block_20260811_140457_855257976_165802.log
+status_file=/home/wt/git/LLM-FPGA/logs/vitis_8x64_hwemu_qwen_layer_long_profile-prefill-block_20260811_140457_855257976_165802.status
+case=p context_len=1024 exit_status=0 finished_at=2026-08-11T19:11:24+08:00
+case=p context_len=1024 host_log=logs/vitis_8x64_hwemu_qwen_layer_long_profile-prefill-block_20260811_140457_855257976_165802.log
+case=p context_len=1024 profile=/home/wt/git/LLM-FPGA/logs/vitis_8x64_pd_length_sweep_20260811_140457_810513655_165697/p_1024_profile_kernels.csv
+case=p context_len=1024 frequency_mhz=200
+case=p context_len=1024 compute_unit=cc8_cu0 active_us=4389.229 cycles=877846
+case=p context_len=1024 compute_unit=cc8_cu1 active_us=4389.229 cycles=877846
+case=p context_len=1024 compute_unit=cc8_status active_us=4389.229 cycles=877846
+case=p context_len=1024 compute_unit=cc8_ctrl active_us=4389.229 cycles=877846
+completed_at=2026-08-11T19:11:25+08:00 overall_status=0

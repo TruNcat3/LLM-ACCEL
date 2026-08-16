@@ -690,9 +690,12 @@ int main() {
         expected.status = CC8_STATUS_OK;
         expected.token_count = 1;
         expected.output_waves = 233;
-        expected.dispatched_mm_tasks = 466;
+        expected.dispatched_mm_tasks =
+            2 * CU8_MAX_TASKS_PER_LAUNCH;
         expected.dispatched_vector_tasks = 5;
-        expected.completed_output_packets = 16112;
+        expected.completed_output_packets =
+            expected.dispatched_mm_tasks *
+            MM_STREAM_8X64_PACKETS_PER_BLOCK;
         expected.last_task = true;
         cc8_status_packet_t got = unpack_cu8_nk_status(
             pack_cu8_nk_status(expected)

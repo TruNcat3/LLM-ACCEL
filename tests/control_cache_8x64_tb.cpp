@@ -155,6 +155,34 @@ static void set_kv_cache_value(
     set_fm_word_lane(words[word_idx], elem % FM_BLOCK_SIZE, value);
 }
 
+static void set_k_cache_value(
+    fm_word_t words[CC8_KV_CACHE_WORDS],
+    unsigned int layer,
+    unsigned int position,
+    unsigned int kv_head,
+    unsigned int elem,
+    fm_t value
+) {
+    set_kv_cache_value(
+        words, layer, position, kv_head, elem, value
+    );
+    const unsigned int transposed_word =
+        CC8_KV_CACHE_ROW_MAJOR_WORDS +
+        (
+            (
+                layer * NUM_KEY_VALUE_HEADS +
+                kv_head
+            ) *
+            HEAD_DIM +
+            elem
+        ) *
+        CC8_K_CACHE_POSITION_WORDS +
+        position / FM_BLOCK_SIZE;
+    set_fm_word_lane(
+        words[transposed_word], position % FM_BLOCK_SIZE, value
+    );
+}
+
 static unsigned int get_kv_cache_word_index(
     unsigned int layer,
     unsigned int position,
@@ -821,7 +849,7 @@ static int run_down_projection_chunk_pipeline_case() {
          token++) {
         for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
             fm_t expected =
-                token < token_count ?
+                token < token_count && elem < CC8_OUTPUTS_PER_WAVE ?
                 result_value(token, elem) :
                 fm_t(0);
             if (get_output_value(token, elem) != expected) {
@@ -988,6 +1016,55 @@ static void preload_attention_constant_results(
             for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
                 packet0.data[lane] = value;
                 packet1.data[lane] = value;
+            }
+            streams.core0_result.write(packet0);
+            streams.core1_result.write(packet1);
+        }
+    }
+}
+
+static void preload_prefill_pv_results(
+    cc8_test_streams_t& streams,
+    unsigned int query_begin,
+    unsigned int token_count,
+    unsigned int tile_begin,
+    unsigned int tile_len,
+    unsigned int elem_base,
+    unsigned int block_id,
+    bool last_stream
+) {
+    for (unsigned int token = 0;
+         token < MM_STREAM_8X64_TOKENS;
+         token++) {
+        unsigned int valid_count = 0;
+        if (token < token_count && query_begin + token >= tile_begin) {
+            valid_count = query_begin + token - tile_begin + 1;
+            if (valid_count > tile_len) {
+                valid_count = tile_len;
+            }
+        }
+        for (unsigned int group = 0;
+             group < MM_STREAM_8X64_WEIGHT_GROUPS;
+             group++) {
+            cu_vec16_packet_t packet0;
+            cu_vec16_packet_t packet1;
+            packet0.valid_mask = 0xffff;
+            packet1.valid_mask = 0xffff;
+            packet0.token_lane = token;
+            packet1.token_lane = token;
+            packet0.elem_base = elem_base + group * CU_VEC_LANES;
+            packet1.elem_base = packet0.elem_base;
+            packet0.block_id = block_id;
+            packet1.block_id = block_id;
+            packet0.last_block =
+                token + 1 == MM_STREAM_8X64_TOKENS &&
+                group + 1 == MM_STREAM_8X64_WEIGHT_GROUPS;
+            packet1.last_block = packet0.last_block;
+            packet0.last_stream = last_stream && packet0.last_block;
+            packet1.last_stream = packet0.last_stream;
+            for (unsigned int lane = 0; lane < CU_VEC_LANES; lane++) {
+                packet0.data[lane] = fm_t(valid_count);
+                packet1.data[lane] = fm_t(valid_count);
             }
             streams.core0_result.write(packet0);
             streams.core1_result.write(packet1);
@@ -1635,6 +1712,365 @@ static int run_attention_pv_route_case() {
         status.dispatched_mm_tasks != 2 * output_waves ||
         status.output_waves != output_waves) {
         std::printf("attention PV status mismatch\n");
+        errors++;
+    }
+    return errors;
+}
+
+static fm_t get_prefill_block_output_value(
+    const fm_word_t output[CC8_FEATURE_WORDS_PER_PORT],
+    unsigned int token,
+    unsigned int head,
+    unsigned int elem
+) {
+    constexpr unsigned int kWordsPerToken =
+        GQA_GROUP_SIZE * CC8_HEAD_WORDS;
+    const unsigned int word =
+        token * kWordsPerToken +
+        head * CC8_HEAD_WORDS + elem / FM_BLOCK_SIZE;
+    return unpack_fm_word_lane(output[word], elem % FM_BLOCK_SIZE);
+}
+
+static int run_attention_prefill_block_case(
+    unsigned int query_begin,
+    unsigned int token_count
+) {
+    clear_data_ports();
+    constexpr unsigned int kWordsPerHead =
+        ceildiv(HEAD_DIM, FM_BLOCK_SIZE);
+    for (unsigned int token = 0; token < token_count; token++) {
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            for (unsigned int elem = 0; elem < HEAD_DIM; elem++) {
+                const unsigned int word =
+                    (token * GQA_GROUP_SIZE + head) * kWordsPerHead +
+                    elem / FM_BLOCK_SIZE;
+                set_fm_word_lane(
+                    input_port0[word], elem % FM_BLOCK_SIZE,
+                    fm_t(0.0625 * (head + 1))
+                );
+                set_fm_word_lane(
+                    input_port1[word], elem % FM_BLOCK_SIZE,
+                    fm_t(0.03125 * (head + 1))
+                );
+            }
+        }
+    }
+
+    const unsigned int context_len = query_begin + token_count;
+    for (unsigned int pos = 0; pos < context_len; pos++) {
+        for (unsigned int kv_head = 0;
+             kv_head < NUM_KEY_VALUE_HEADS;
+             kv_head++) {
+            for (unsigned int elem = 0; elem < HEAD_DIM; elem++) {
+                set_k_cache_value(
+                    kv_cache_k,
+                    0,
+                    pos,
+                    kv_head,
+                    elem,
+                    attention_history_k_value(kv_head, pos, elem)
+                );
+                set_kv_cache_value(
+                    kv_cache_v,
+                    0,
+                    pos,
+                    kv_head,
+                    elem,
+                    attention_history_v_value(kv_head, pos, elem)
+                );
+            }
+        }
+    }
+
+    cc8_test_streams_t streams;
+    for (unsigned int tile_begin = 0;
+         tile_begin < context_len;
+         tile_begin += CC8_ATTN_TILE) {
+        unsigned int tile_len = CC8_ATTN_TILE;
+        if (tile_begin + tile_len > context_len) {
+            tile_len = context_len - tile_begin;
+        }
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            preload_attention_constant_results(
+                streams, fm_t(0), 0, head, false
+            );
+            for (unsigned int wave = 0;
+                 wave < CC8_ATTN_PV_WAVES;
+                 wave++) {
+                const bool last =
+                    tile_begin + CC8_ATTN_TILE >= context_len &&
+                    head + 1 == GQA_GROUP_SIZE &&
+                    wave + 1 == CC8_ATTN_PV_WAVES;
+                preload_prefill_pv_results(
+                    streams,
+                    query_begin,
+                    token_count,
+                    tile_begin,
+                    tile_len,
+                    wave * MM_STREAM_8X64_OUTPUTS,
+                    wave,
+                    last
+                );
+            }
+        }
+    }
+
+    call_control_cache(
+        streams,
+        CC8_OP_ATTN_PREFILL_BLOCK,
+        token_count,
+        query_begin,
+        0
+    );
+
+    int errors = 0;
+    for (unsigned int tile_begin = 0;
+         tile_begin < context_len;
+         tile_begin += CC8_ATTN_TILE) {
+        const unsigned int tile_len =
+            tile_begin + CC8_ATTN_TILE <= context_len ?
+            CC8_ATTN_TILE : context_len - tile_begin;
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            const cu8_task_t qk_task0 = streams.core0_task.read();
+            const cu8_task_t qk_task1 = streams.core1_task.read();
+            if (qk_task0.mode != CU8_MODE_MM_SCALE ||
+                qk_task1.mode != CU8_MODE_MM_SCALE ||
+                qk_task0.k_count != HEAD_DIM ||
+                qk_task1.k_count != HEAD_DIM ||
+                qk_task0.token_count != token_count ||
+                qk_task1.token_count != token_count ||
+                qk_task0.elem_count != CC8_ATTN_TILE ||
+                qk_task1.elem_count != CC8_ATTN_TILE) {
+                std::printf(
+                    "prefill QK task mismatch tile=%u head=%u\n",
+                    tile_begin,
+                    head
+                );
+                errors++;
+            }
+            for (unsigned int elem = 0; elem < HEAD_DIM; elem++) {
+                const mm_stream_8x64_activation_packet_t activation0 =
+                    streams.core0_activation.read();
+                const mm_stream_8x64_activation_packet_t activation1 =
+                    streams.core1_activation.read();
+                for (unsigned int token = 0;
+                     token < MM_STREAM_8X64_TOKENS;
+                     token++) {
+                    const fm_t expected0 = token < token_count ?
+                        fm_t(0.0625 * (head + 1)) : fm_t(0);
+                    const fm_t expected1 = token < token_count ?
+                        fm_t(0.03125 * (head + 1)) : fm_t(0);
+                    if (activation0.data[token] != expected0 ||
+                        activation1.data[token] != expected1) {
+                        if (errors < 8) {
+                            std::printf(
+                                "prefill QK activation mismatch tile=%u head=%u elem=%u token=%u\n",
+                                tile_begin, head, elem, token
+                            );
+                        }
+                        errors++;
+                    }
+                }
+
+                mm_stream_8x64_weight_packet_t weights0[4];
+                mm_stream_8x64_weight_packet_t weights1[4];
+                weights0[0] = streams.core0_weight0.read();
+                weights0[1] = streams.core0_weight1.read();
+                weights0[2] = streams.core0_weight2.read();
+                weights0[3] = streams.core0_weight3.read();
+                weights1[0] = streams.core1_weight0.read();
+                weights1[1] = streams.core1_weight1.read();
+                weights1[2] = streams.core1_weight2.read();
+                weights1[3] = streams.core1_weight3.read();
+                for (unsigned int group = 0; group < 4; group++) {
+                    for (unsigned int lane = 0;
+                         lane < CU_VEC_LANES;
+                         lane++) {
+                        const unsigned int local_pos =
+                            group * CU_VEC_LANES + lane;
+                        const unsigned int absolute_pos =
+                            tile_begin + local_pos;
+                        const wt_linear_t expected0 =
+                            local_pos < tile_len ?
+                            wt_linear_t(attention_history_k_value(
+                                0, absolute_pos, elem
+                            )) : wt_linear_t(0);
+                        const wt_linear_t expected1 =
+                            local_pos < tile_len ?
+                            wt_linear_t(attention_history_k_value(
+                                1, absolute_pos, elem
+                            )) : wt_linear_t(0);
+                        if (weights0[group].data[lane] != expected0 ||
+                            weights1[group].data[lane] != expected1) {
+                            if (errors < 8) {
+                                std::printf(
+                                    "prefill K^T packet mismatch tile=%u head=%u elem=%u pos=%u got=(%f,%f) expected=(%f,%f)\n",
+                                    tile_begin,
+                                    head,
+                                    elem,
+                                    absolute_pos,
+                                    double(weights0[group].data[lane]),
+                                    double(weights1[group].data[lane]),
+                                    double(expected0),
+                                    double(expected1)
+                                );
+                            }
+                            errors++;
+                        }
+                    }
+                }
+            }
+
+            for (unsigned int wave = 0;
+                 wave < CC8_ATTN_PV_WAVES;
+                 wave++) {
+                const cu8_task_t pv_task0 = streams.core0_task.read();
+                const cu8_task_t pv_task1 = streams.core1_task.read();
+                if (pv_task0.mode != CU8_MODE_MM_SCALE ||
+                    pv_task1.mode != CU8_MODE_MM_SCALE ||
+                    pv_task0.k_count != tile_len ||
+                    pv_task1.k_count != tile_len ||
+                    pv_task0.output_scale != fm_t(1.0 / 64.0) ||
+                    pv_task1.output_scale != fm_t(1.0 / 64.0) ||
+                    pv_task0.elem_base !=
+                        wave * MM_STREAM_8X64_OUTPUTS ||
+                    pv_task1.elem_base != pv_task0.elem_base) {
+                    std::printf(
+                        "prefill PV task mismatch tile=%u head=%u wave=%u\n",
+                        tile_begin,
+                        head,
+                        wave
+                    );
+                    errors++;
+                }
+                for (unsigned int local_pos = 0;
+                     local_pos < tile_len;
+                     local_pos++) {
+                    (void)streams.core0_activation.read();
+                    (void)streams.core1_activation.read();
+                    mm_stream_8x64_weight_packet_t weights0[4];
+                    mm_stream_8x64_weight_packet_t weights1[4];
+                    weights0[0] = streams.core0_weight0.read();
+                    weights0[1] = streams.core0_weight1.read();
+                    weights0[2] = streams.core0_weight2.read();
+                    weights0[3] = streams.core0_weight3.read();
+                    weights1[0] = streams.core1_weight0.read();
+                    weights1[1] = streams.core1_weight1.read();
+                    weights1[2] = streams.core1_weight2.read();
+                    weights1[3] = streams.core1_weight3.read();
+                    for (unsigned int group = 0; group < 4; group++) {
+                        for (unsigned int lane = 0;
+                             lane < CU_VEC_LANES;
+                             lane++) {
+                            const unsigned int output_elem =
+                                wave * MM_STREAM_8X64_OUTPUTS +
+                                group * CU_VEC_LANES + lane;
+                            const unsigned int absolute_pos =
+                                tile_begin + local_pos;
+                            const wt_linear_t expected0 =
+                                output_elem < HEAD_DIM ?
+                                wt_linear_t(attention_history_v_value(
+                                    0, absolute_pos, output_elem
+                                )) : wt_linear_t(0);
+                            const wt_linear_t expected1 =
+                                output_elem < HEAD_DIM ?
+                                wt_linear_t(attention_history_v_value(
+                                    1, absolute_pos, output_elem
+                                )) : wt_linear_t(0);
+                            if (weights0[group].data[lane] != expected0 ||
+                                weights1[group].data[lane] != expected1) {
+                                if (errors < 8) {
+                                    std::printf(
+                                        "prefill PV weight mismatch tile=%u head=%u wave=%u pos=%u elem=%u\n",
+                                        tile_begin,
+                                        head,
+                                        wave,
+                                        absolute_pos,
+                                        output_elem
+                                    );
+                                }
+                                errors++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (unsigned int token = 0; token < token_count; token++) {
+        const fm_accum_t expected_sum =
+            fm_accum_t(query_begin + token + 1);
+        const fm_accum_t safe_sum =
+            expected_sum < fm_accum_t(0.000244140625) ?
+            fm_accum_t(0.000244140625) : expected_sum;
+        const fm_t expected = fm_t(
+            expected_sum * fm_accum_t(fm_t(fm_accum_t(1) / safe_sum))
+        );
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            for (unsigned int elem = 0; elem < HEAD_DIM; elem++) {
+                const fm_t got0 = get_prefill_block_output_value(
+                    output_port0, token, head, elem
+                );
+                const fm_t got1 = get_prefill_block_output_value(
+                    output_port1, token, head, elem
+                );
+                if (got0 != expected || got1 != expected) {
+                    if (errors < 8) {
+                        std::printf(
+                            "prefill block output mismatch q=%u token=%u head=%u elem=%u got=(%f,%f) expected=%f\n",
+                            query_begin,
+                            token,
+                            head,
+                            elem,
+                            double(got0),
+                            double(got1),
+                            double(expected)
+                        );
+                    }
+                    errors++;
+                }
+            }
+        }
+    }
+    if (streams.status.empty()) {
+        std::printf("prefill block missing status\n");
+        return errors + 1;
+    }
+    const cc8_status_packet_t got_status = streams.status.read();
+    const unsigned int expected_tasks =
+        CC8_MM_CORE_COUNT * ceildiv(context_len, CC8_ATTN_TILE) *
+        GQA_GROUP_SIZE * (1 + CC8_ATTN_PV_WAVES);
+    if (got_status.status != CC8_STATUS_OK ||
+        got_status.op != CC8_OP_ATTN_PREFILL_BLOCK ||
+        got_status.token_count != token_count ||
+        got_status.dispatched_mm_tasks != expected_tasks ||
+        got_status.completed_output_packets !=
+            expected_tasks * MM_STREAM_8X64_PACKETS_PER_BLOCK) {
+        std::printf(
+            "prefill block status mismatch q=%u tasks=%u expected=%u\n",
+            query_begin,
+            got_status.dispatched_mm_tasks,
+            expected_tasks
+        );
+        errors++;
+    }
+    if (!streams.core0_result.empty() || !streams.core1_result.empty()) {
+        std::printf("prefill block result stream was not fully consumed\n");
+        errors++;
+    }
+    if (!streams.core0_task.empty() || !streams.core1_task.empty() ||
+        !streams.core0_activation.empty() ||
+        !streams.core1_activation.empty() ||
+        !streams.core0_weight0.empty() ||
+        !streams.core0_weight1.empty() ||
+        !streams.core0_weight2.empty() ||
+        !streams.core0_weight3.empty() ||
+        !streams.core1_weight0.empty() ||
+        !streams.core1_weight1.empty() ||
+        !streams.core1_weight2.empty() ||
+        !streams.core1_weight3.empty()) {
+        std::printf("prefill block emitted stream was not fully consumed\n");
         errors++;
     }
     return errors;
@@ -2434,6 +2870,47 @@ static int run_resident_decoder_layer_route_case() {
 }
 
 int main() {
+#ifdef CC8_PREFILL_LAYER_TEST_ONLY
+    init_weights();
+    int errors = 0;
+    errors += run_gate_projection_case();
+    errors += run_down_projection_chunk_pipeline_case();
+    errors += run_silu_mul_route_case(LINEAR_TOKEN_TILE_ACTIVE - 1);
+    errors += run_attention_prefill_block_case(0, MM_STREAM_8X64_TOKENS);
+    if (errors != 0) {
+        std::printf("CONTROL CACHE PREFILL LAYER CSIM FAIL errors=%d\n", errors);
+        return 1;
+    }
+    std::printf("CONTROL CACHE PREFILL LAYER CSIM PASS cases=4\n");
+    return 0;
+#elif defined(CC8_PREFILL_BLOCK_TEST_ONLY)
+    int errors = 0;
+    errors += run_attention_prefill_block_case(0, MM_STREAM_8X64_TOKENS);
+    if (MAX_SEQ_LEN > 1024) {
+        // This is the first context length that exceeds the legacy 32-tile,
+        // 256-task launch bound and mirrors D@1024 in the hw_emu sweep.
+        errors += run_attention_prefill_block_case(1024, 1);
+    }
+    errors += run_attention_prefill_block_case(
+        MAX_SEQ_LEN - MM_STREAM_8X64_TOKENS,
+        MM_STREAM_8X64_TOKENS
+    );
+    if (MAX_SEQ_LEN >= CC8_ATTN_TILE + MM_STREAM_8X64_TOKENS) {
+        errors += run_attention_prefill_block_case(
+            CC8_ATTN_TILE,
+            MM_STREAM_8X64_TOKENS
+        );
+    }
+    if (errors != 0) {
+        std::printf("CONTROL CACHE PREFILL BLOCK CSIM FAIL errors=%d\n", errors);
+        return 1;
+    }
+    std::printf(
+        "CONTROL CACHE PREFILL BLOCK CSIM PASS cases=%u\n",
+        MAX_SEQ_LEN > 1024 ? 4u : 3u
+    );
+    return 0;
+#else
     init_weights();
 
     int errors = 0;
@@ -2446,6 +2923,17 @@ int main() {
     errors += run_attention_qk_route_case();
     errors += run_attention_softmax_route_case();
     errors += run_attention_pv_route_case();
+    errors += run_attention_prefill_block_case(0, MM_STREAM_8X64_TOKENS);
+    errors += run_attention_prefill_block_case(
+        MAX_SEQ_LEN - MM_STREAM_8X64_TOKENS,
+        MM_STREAM_8X64_TOKENS
+    );
+    if (MAX_SEQ_LEN >= CC8_ATTN_TILE + MM_STREAM_8X64_TOKENS) {
+        errors += run_attention_prefill_block_case(
+            CC8_ATTN_TILE,
+            MM_STREAM_8X64_TOKENS
+        );
+    }
     errors += run_attention_flash_route_case(CC8_OP_ATTN_FLASH, 1);
     errors += run_attention_flash_route_case(CC8_OP_DECODE_SMOKE, 0);
     errors += run_attention_flash_route_case(
@@ -2459,6 +2947,7 @@ int main() {
         std::printf("CONTROL CACHE 8X64 CSIM FAIL errors=%d\n", errors);
         return 1;
     }
-    std::printf("CONTROL CACHE 8X64 CSIM PASS cases=15\n");
+    std::printf("CONTROL CACHE 8X64 CSIM PASS cases=18\n");
     return 0;
+#endif
 }

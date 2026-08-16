@@ -7,18 +7,18 @@ static bool cc8_nk_mode_uses_mm(cu8_mode_t mode) {
         mode == CU8_MODE_MM_SCALE;
 }
 
-#if CC8_RESIDENT_LAYER_ONLY
-static void declare_cc8_nk_idle_core1_vector_ports(
+#if CC8_RESIDENT_LAYER_ONLY || defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
+static void declare_cc8_nk_idle_vector_ports(
     hls::stream<cu_vec16_packet_t>& vector_input0_stream,
     hls::stream<cu_vec16_packet_t>& vector_input1_stream,
     unsigned int operator_kind
 ) {
     #pragma HLS inline off
-    // A one-token resident layer intentionally assigns all vector work to
-    // core0.  The core1 NK packer still owns the two physical AXIS ports, so
-    // the surrounding dataflow region requires a syntactic producer for its
-    // typed input FIFOs.  This invalid-operator probe declares that topology
-    // without injecting traffic for any supported runtime operation.
+    // A specialized controller may leave physical vector AXIS ports unused.
+    // The NK packer still consumes the corresponding typed FIFOs, so the HLS
+    // dataflow region requires a syntactic producer.  This invalid-operator
+    // probe declares that topology without injecting traffic for any valid
+    // runtime operation.
     if (operator_kind == ~0u) {
         cu_vec16_packet_t packet;
         packet.valid_mask = 0;
@@ -389,7 +389,21 @@ void control_cache_8x64_dual_core_nk(
         kv_cache_v
     );
 #if CC8_RESIDENT_LAYER_ONLY
-    declare_cc8_nk_idle_core1_vector_ports(
+    declare_cc8_nk_idle_vector_ports(
+        typed_core1_vector_input0_stream,
+        typed_core1_vector_input1_stream,
+        operator_kind
+    );
+#endif
+#ifdef CC8_PREFILL_BLOCK_SYNTH_ONLY
+    // Block-prefill uses only MM/QK/PV packets.  Both compute-core vector
+    // interfaces remain physically present in the shared NK ABI but idle.
+    declare_cc8_nk_idle_vector_ports(
+        typed_core0_vector_input0_stream,
+        typed_core0_vector_input1_stream,
+        operator_kind
+    );
+    declare_cc8_nk_idle_vector_ports(
         typed_core1_vector_input0_stream,
         typed_core1_vector_input1_stream,
         operator_kind

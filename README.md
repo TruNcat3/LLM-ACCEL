@@ -3,8 +3,8 @@
 **A streaming FPGA research prototype for resident LLM decoder execution.**
 
 LLM-ACCEL studies how a model-aware controller and regular stream-only compute
-arrays can execute transformer decoder layers without returning intermediate
-tensors to the host. The current prototype implements Qwen-style RMSNorm,
+arrays can execute transformer decoder subgraphs while keeping intermediate
+tensors and KV state in accelerator memory. The current prototype implements Qwen-style RMSNorm,
 Q/K/V/O projections, RoPE, an HBM-resident KV cache, online attention, gated
 FFN, and residual paths using fixed-point arithmetic.
 
@@ -41,12 +41,12 @@ build directories are intentionally excluded.
 
 ```mermaid
 flowchart LR
-    H[Host<br/>model command + input] --> CMD
+    H[Host<br/>task sequence + input] --> CMD
     W[(External memory<br/>weights + KV cache)] --> L
 
     subgraph CTRL[Model-aware control and cache]
       direction LR
-      CMD[Decode command] --> L[Load next block]
+      CMD[Subgraph task] --> L[Load next block]
       L --> B[Ping-pong GBUF]
       B --> D[Tile and dispatch]
       R[Collect results] --> P[Commit / retain / release]
@@ -85,23 +85,35 @@ not physical-board measurements. The standard layer shape is
 `hidden=2048`, `intermediate=11008`, 16 query heads, 2 KV heads, and
 head dimension 128.
 
-| Experiment | Main result | Interpretation |
-| --- | ---: | --- |
-| 8-token prefill layer | 635,399 cycles at 200 MHz | Complete Q/K/V/O, causal attention for positions 0-7, and FFN pass |
-| Prefill throughput | **194.12 GMAC/s** | 94.78% of the two-CU 204.8 GMAC/s peak |
-| 2-token to 8-token scaling | **3.53x throughput** | Work grows by about 4x while active time grows by 13.2% |
-| Single-token resident layer | 683,601 cycles | 3.418 ms when projected to 200 MHz |
-| Decode utilization | 11.01% physical / **88.09% row-normalized** | Most physical loss is the M=1 shape, not pipeline starvation |
-| Full O projection | 46,898 cycles | 69.87% array efficiency; later waves average 2,210 cycles vs. 2,048 ideal |
-| Closed-loop RTL CoSim | 6,129 cycles, PASS | Bounded streams with deadlock detection enabled |
+| Phase | KV context | Active query tokens | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Prefill | 64 | 8 | 637,103 | 3.186 ms | 194.17 | 94.81% |
+| Prefill | 256 | 8 | 685,489 | 3.427 ms | 182.30 | 89.02% |
+| Prefill | 512 | 8 | 749,407 | 3.747 ms | 168.99 | 82.52% |
+| Prefill | 1024 | 8 | 877,846 | 4.389 ms | 148.09 | 72.31% |
+| Decode | 64 | 1 | 568,040 | 2.840 ms | 27.23 | 13.30% |
+| Decode | 256 | 1 | 590,794 | 2.954 ms | 26.45 | 12.91% |
+| Decode | 512 | 1 | 622,231 | 3.111 ms | 25.45 | 12.43% |
+| Decode | 1024 | 1 | 683,754 | 3.419 ms | 23.77 | 11.61% |
 
-The 8-token result is a diagnostic full-profile build used to expose every
-operator to the test host. Its datapath is efficient, but its controller keeps
-mutually exclusive diagnostic paths and therefore exceeds the target device's
-resource budget. The deployable research direction is to preserve this
-datapath while compiling prefill into the resource-pruned resident schedule.
-This distinction, resource tables, and metric definitions are documented in
-[Experiments](docs/experiments.md).
+`Active query tokens=8` means one full 8-row prefill block, not an eight-token
+prompt. P1024 measures positions 1016--1023 against a causal history of up to
+1024 KV entries. A full 1024-token prefill requires 128 context-dependent
+blocks and is not represented by the P1024 latency alone.
+
+These are Vitis 2022.2 hardware-emulation results at a modeled 200 MHz. They
+sum kernel-active intervals for the host-submitted hardware operators that
+compose a layer. Host scheduling gaps, transfers between calls, CPU test
+fixture work, and CPU golden checks are excluded. See the
+[full report](docs/q214-pd-length-hwemu.md) and
+[raw profiles](results/q214-pd-20260811/).
+
+The Q2.14 sweep validates functional composition and long-context scaling, but
+it is not yet an autonomous single-launch layer. The current host sequences
+operator tasks, performs RoPE/test-fixture packing, and preloads the historical
+KV fixture. The next implementation step is to turn useful operator groups
+into controller-resident subgraph tasks while retaining host-level task
+composition for end-to-end inference.
 
 ## Decoder schedule
 
@@ -128,6 +140,7 @@ inner-layer schedule.
 | `tests/` | Case 1: Focused CSim and closed-loop C/RTL CoSim testbenches |
 | `tcl/` | Case 1: Vitis HLS simulation, synthesis, CoSim, XO export flows |
 | `scripts/` | Case 1: Reproducible long-running HLS and hardware-emulation entry points |
+| `results/` | Versioned derived tables and raw kernel profiles for published experiments |
 | `cases/streaming-split/` | **Case 2**: Streaming split architecture (cc + V8-2_s, D=16 + 4-PC weight) |
 | `docs/` | Architecture, design alternatives, usage, and experimental evidence |
 
@@ -148,6 +161,14 @@ scripts/run_hls_resident_layer_cosim.sh
 # Build and run the resource-pruned resident-layer hardware emulation.
 scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run
+
+# Build the long-context Q2.14 profile and run the P/D length sweep.
+VITIS_8X64_MODEL_PROFILE=qwen-layer-long \
+  CC8_PREFILL_VARIANT=q214exp18 \
+  scripts/build_vitis_8x64_prefill_eval_hwemu.sh all
+scripts/launch_vitis_8x64_pd_sweep_tmux.sh \
+  --build-dir <generated-hw_emu-build> \
+  --profile qwen-layer-long --seed 20260722
 ```
 
 The main pipeline parameters can be swept without editing source:
@@ -174,6 +195,8 @@ prefill evaluation, expected outputs, and artifact locations.
   configuration parameters, and result inspection.
 - [Experiments](docs/experiments.md): evidence levels, performance/resource
   tables, metric definitions, and limitations.
+- [Q2.14 P/D sweep](docs/q214-pd-length-hwemu.md): context-length scaling,
+  precision gates, measurement boundary, and raw-data provenance.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
   4-PC weight multi-bank, ~50 token/s decode (csynth). See
@@ -181,11 +204,13 @@ prefill evaluation, expected outputs, and artifact locations.
 
 ## Scope
 
-The current artifact is a single-layer fixed-point research prototype. It does
-not yet claim end-to-end checkpoint accuracy, long-context prefill throughput,
-LM-head/sampling performance, or physical-board performance. Those are
-evaluation milestones, not prerequisites for studying the controller/compute
-decomposition and streaming schedule implemented here.
+The current artifact is a single-layer fixed-point research prototype. Its
+published P/D numbers are kernel-only, host-orchestrated layer profiles. It
+does not yet claim autonomous end-to-end checkpoint inference,
+LM-head/sampling performance, PCIe-inclusive latency, or physical-board
+performance. The target runtime submits a sequence of coarse compute tasks;
+each task lets the controller autonomously execute a resident subgraph while
+owning intermediate tensors and KV cache in HBM/on-chip buffers.
 
 ## Citation
 

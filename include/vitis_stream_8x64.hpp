@@ -163,20 +163,28 @@ inline cu8_nk_status_word_t pack_cu8_nk_status(
     static_assert(CU8_NK_STATUS_BITS >= 64, "compact 8x64 status word needs 64 bits");
     static_assert(LINEAR_TOKEN_TILE_ACTIVE < 128, "status token_count uses 7-bit compact encoding");
     static_assert(ceildiv(MAX_LINEAR_OUT_DIM, CC8_OUTPUTS_PER_WAVE) < 256, "status output_waves uses 8-bit compact encoding");
-    static_assert(2 * ceildiv(MAX_LINEAR_OUT_DIM, CC8_OUTPUTS_PER_WAVE) < 256, "status dispatched_mm_tasks uses 8-bit compact encoding");
-    static_assert(2 * CU_STREAM_MAX_PACKETS < 65536, "status completed_output_packets uses 16-bit compact encoding");
+    static_assert(2 * ceildiv(MAX_LINEAR_OUT_DIM, CC8_OUTPUTS_PER_WAVE) < 4096, "status dispatched_mm_tasks uses 12-bit compact encoding");
+    static_assert(2 * CU_STREAM_MAX_PACKETS < 131072, "status completed_output_packets uses 17-bit compact encoding");
     cu8_nk_status_word_t word = 0;
     static_assert(CC8_OP_DECODER_LAYER < 32, "status op uses 5-bit encoding");
-    static_assert(2 * CU8_MAX_TASKS_PER_LAUNCH < 1024,
-                  "status MM task count uses 10-bit encoding");
+    // The 64-bit word still has five spare high bits in the old layout.
+    // Use three of them to represent a full 2048-token attention launch:
+    // 3072 system MM tasks and 98304 returned packets.
+    static_assert(2 * CU8_MAX_TASKS_PER_LAUNCH < 4096,
+                  "status MM task count uses 12-bit encoding");
+    static_assert(
+        2 * CU8_MAX_TASKS_PER_LAUNCH *
+            MM_STREAM_8X64_PACKETS_PER_BLOCK < 131072,
+        "status completed packet count uses 17-bit encoding"
+    );
     word.range(4, 0) = static_cast<unsigned int>(status.op);
     word.range(8, 5) = static_cast<unsigned int>(status.status);
     word[9] = status.last_task;
     word.range(16, 10) = status.token_count;
     word.range(24, 17) = status.output_waves;
-    word.range(34, 25) = status.dispatched_mm_tasks;
-    word.range(42, 35) = status.dispatched_vector_tasks;
-    word.range(58, 43) = status.completed_output_packets;
+    word.range(36, 25) = status.dispatched_mm_tasks;
+    word.range(44, 37) = status.dispatched_vector_tasks;
+    word.range(61, 45) = status.completed_output_packets;
     return word;
 }
 
@@ -190,9 +198,9 @@ inline cc8_status_packet_t unpack_cu8_nk_status(
     status.last_task = word[9];
     status.token_count = word.range(16, 10).to_uint();
     status.output_waves = word.range(24, 17).to_uint();
-    status.dispatched_mm_tasks = word.range(34, 25).to_uint();
-    status.dispatched_vector_tasks = word.range(42, 35).to_uint();
-    status.completed_output_packets = word.range(58, 43).to_uint();
+    status.dispatched_mm_tasks = word.range(36, 25).to_uint();
+    status.dispatched_vector_tasks = word.range(44, 37).to_uint();
+    status.completed_output_packets = word.range(61, 45).to_uint();
     return status;
 }
 

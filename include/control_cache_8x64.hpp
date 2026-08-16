@@ -174,6 +174,22 @@ struct cc8_flash_accumulator_t {
         [CU_VEC_LANES];
 };
 
+// Prefill maps the eight physical array rows to eight query tokens.  One CU
+// owns one KV head and walks the eight GQA query heads while retaining the
+// query block and online-softmax state on chip.
+struct cc8_prefill_query_block_t {
+    mm_input_block_t block
+        [GQA_GROUP_SIZE]
+        [MM_STREAM_8X64_TOKENS]
+        [ceildiv(HEAD_DIM, MM_PE_IN)];
+};
+
+struct cc8_prefill_flash_state_t {
+    fm_t online_max[GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+    fm_accum_t online_sum[GQA_GROUP_SIZE][MM_STREAM_8X64_TOKENS];
+    cc8_flash_accumulator_t accumulator[GQA_GROUP_SIZE];
+};
+
 enum cc8_operator_t {
     CC8_OP_NOP = 0,
     CC8_OP_Q_PROJECTION = 1,
@@ -191,7 +207,8 @@ enum cc8_operator_t {
     CC8_OP_SOFTMAX = 13,
     CC8_OP_ATTN_FLASH = 14,
     CC8_OP_DECODE_SMOKE = 15,
-    CC8_OP_DECODER_LAYER = 16
+    CC8_OP_DECODER_LAYER = 16,
+    CC8_OP_ATTN_PREFILL_BLOCK = 17
 };
 
 enum cc8_status_code_t {

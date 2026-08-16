@@ -1,8 +1,11 @@
 cd [file dirname [file dirname [info script]]]
+source tcl/common_hls_model_profile.tcl
 source tcl/common_hls_depth_config.tcl
-open_project -reset qwen_hls_compute_core_8x64_nk_csim_prj[llm_fpga_depth_project_suffix]
+set project_name [llm_fpga_profiled_project_name qwen_hls_compute_core_8x64_nk_csim_prj]
+append project_name [llm_fpga_depth_project_suffix]
+open_project -reset $project_name
 set_top compute_core_8x64_unified_nk
-set cflags "-I./include -std=c++14 -DQWEN_TEST_SMALL[llm_fpga_depth_cflags]"
+set cflags "-I./include -std=c++14[llm_fpga_model_cflags][llm_fpga_depth_cflags]"
 add_files kernel/mm_stream_8x64_fused_mac.cpp -cflags $cflags
 add_files kernel/compute_stream.cpp -cflags $cflags
 add_files kernel/compute_core_8x64_unified.cpp -cflags $cflags

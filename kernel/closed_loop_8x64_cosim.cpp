@@ -72,6 +72,43 @@ static void seed_cc8_closed_loop_c_model(
     );
 }
 
+static void seed_cc8_prefill_block_c_model(
+    hls::stream<cu_vec16_packet_t>& core0_result_stream,
+    hls::stream<cu_vec16_packet_t>& core1_result_stream,
+    unsigned int query_begin,
+    unsigned int token_count
+) {
+    const unsigned int context_len = query_begin + token_count;
+    for (unsigned int tile_begin = 0;
+         tile_begin < context_len;
+         tile_begin += CC8_ATTN_TILE) {
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            seed_cc8_closed_loop_result_block(
+                core0_result_stream, fm_t(0), 0, head, false
+            );
+            seed_cc8_closed_loop_result_block(
+                core1_result_stream, fm_t(0), 0, head, false
+            );
+            for (unsigned int wave = 0;
+                 wave < CC8_ATTN_PV_WAVES;
+                 wave++) {
+                const bool last =
+                    tile_begin + CC8_ATTN_TILE >= context_len &&
+                    head + 1 == GQA_GROUP_SIZE &&
+                    wave + 1 == CC8_ATTN_PV_WAVES;
+                seed_cc8_closed_loop_result_block(
+                    core0_result_stream, fm_t(0),
+                    wave * MM_STREAM_8X64_OUTPUTS, wave, last
+                );
+                seed_cc8_closed_loop_result_block(
+                    core1_result_stream, fm_t(0),
+                    wave * MM_STREAM_8X64_OUTPUTS, wave, last
+                );
+            }
+        }
+    }
+}
+
 static bool cc8_closed_loop_uses_mm(cc8_operator_t op) {
     switch (op) {
     case CC8_OP_Q_PROJECTION:
@@ -387,18 +424,17 @@ static void cc8_closed_loop_compute_core1(
     );
 }
 
-#if CC8_RESIDENT_LAYER_ONLY
-static void declare_cc8_closed_loop_idle_core1_vector_ports(
+#if CC8_RESIDENT_LAYER_ONLY || defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
+static void declare_cc8_closed_loop_idle_vector_ports(
     hls::stream<cu_vec16_packet_t>& vector_input0_stream,
     hls::stream<cu_vec16_packet_t>& vector_input1_stream,
     unsigned int operator_kind
 ) {
     #pragma HLS inline off
-    // The one-token resident layer intentionally schedules vector work only
-    // on core0.  In the real multi-kernel design the unused core1 AXIS ports
-    // may remain idle, but a closed-loop HLS dataflow top requires every
-    // internal stream to have a syntactic producer.  This unreachable probe
-    // declares that topology without injecting traffic into any valid op.
+    // A specialized controller may intentionally leave vector AXIS ports
+    // idle, but a closed-loop HLS dataflow top still requires every internal
+    // stream to have a syntactic producer.  This unreachable probe declares
+    // that topology without injecting traffic into any valid operation.
     if (operator_kind == ~0u) {
         cu_vec16_packet_t packet;
         packet.valid_mask = 0;
@@ -544,7 +580,21 @@ void cc8_closed_loop_inner_cosim(
     bool profiled_mm_case =
         tile_len != 0 &&
         cc8_closed_loop_uses_mm(cc8_operator_t(operator_kind));
-    if (operator_kind == unsigned(CC8_OP_DECODER_LAYER)) {
+    if (operator_kind == unsigned(CC8_OP_ATTN_PREFILL_BLOCK)) {
+        const unsigned int tile_count =
+            ceildiv(position + token_count, CC8_ATTN_TILE);
+        const unsigned int tasks_per_core =
+            tile_count * GQA_GROUP_SIZE * (1 + CC8_ATTN_PV_WAVES);
+        c_model_core0_result_packets =
+            tasks_per_core * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+        c_model_core1_result_packets = c_model_core0_result_packets;
+        seed_cc8_prefill_block_c_model(
+            core0_result_stream,
+            core1_result_stream,
+            position,
+            token_count
+        );
+    } else if (operator_kind == unsigned(CC8_OP_DECODER_LAYER)) {
         unsigned int wave_slots =
             cc8_resident_layer_mm_wave_slots(position);
         unsigned int vector_packets =
@@ -667,7 +717,24 @@ void cc8_closed_loop_inner_cosim(
         kv_cache_v
     );
 #if CC8_RESIDENT_LAYER_ONLY
-    declare_cc8_closed_loop_idle_core1_vector_ports(
+    declare_cc8_closed_loop_idle_vector_ports(
+        core1_vector_input0_stream,
+        core1_vector_input1_stream,
+        operator_kind
+    );
+#endif
+#ifdef CC8_PREFILL_BLOCK_SYNTH_ONLY
+    // Block-prefill schedules only MM/QK/PV work, so all four compute-core
+    // vector-input FIFOs are intentionally idle.  As in the production NK
+    // wrapper, retain an unreachable producer process so that the closed-loop
+    // HLS dataflow graph has exactly one syntactic producer and one consumer
+    // for every internal stream without injecting packets for a valid op.
+    declare_cc8_closed_loop_idle_vector_ports(
+        core0_vector_input0_stream,
+        core0_vector_input1_stream,
+        operator_kind
+    );
+    declare_cc8_closed_loop_idle_vector_ports(
         core1_vector_input0_stream,
         core1_vector_input1_stream,
         operator_kind

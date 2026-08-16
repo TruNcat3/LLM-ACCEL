@@ -1,0 +1,9 @@
+phase	context_len	tokens	q214_checks	q214_failures	q214_max_raw_error	reference_checks	reference_failures	reference_max_raw_error
+p	64	8	16	0	1	16	0	3
+d	64	1	2	0	1	2	0	2
+p	256	8	16	0	1	16	0	5
+d	256	1	2	0	1	2	0	3
+p	512	8	16	0	1	16	0	4
+d	512	1	2	0	0	2	0	2
+p	1024	8	16	0	1	16	0	5
+d	1024	1	2	0	0	2	0	2

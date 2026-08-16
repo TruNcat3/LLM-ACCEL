@@ -126,13 +126,15 @@ each tensor to a golden checker. This produces strong functional evidence and
 allows per-stage profiling, but compiling every diagnostic route together
 duplicates controller state and exceeds the target resource budget.
 
-The production candidate is a static resident prefill task:
+The production candidate uses static resident subgraph tasks:
 
-1. load an 8-token feature block;
-2. execute the complete attention sublayer while intermediates remain resident;
-3. execute the complete FFN sublayer;
-4. commit only the block output and updated KV state;
-5. overlap the next block load through ping-pong GBUFs.
+1. the host submits an attention-sublayer task for an 8-token feature block;
+2. the controller executes RMSNorm through attention residual while Q/K/V/O
+   intermediates remain resident and the KV cache is updated in HBM;
+3. the host submits an FFN-sublayer task referring to the resident output;
+4. the controller executes RMSNorm through FFN residual and commits only the
+   requested output state;
+5. each controller task overlaps the next block load through ping-pong GBUFs.
 
 The 8-token hardware-emulation result shows that the arithmetic schedule can
 reach 94.78% useful-MAC efficiency. The next research step is resource
@@ -155,7 +157,22 @@ Promising candidates are:
 Adding dynamic controller states without a corresponding independent row of
 work cannot increase arithmetic utilization and is therefore not a priority.
 
-## 10. Evaluation principles
+## 10. Runtime task granularity
+
+Three runtime boundaries were considered:
+
+| Boundary | Benefit | Cost | Decision |
+| --- | --- | --- | --- |
+| Host submits every operator | Maximum observability and simple golden checks | Host round trips and transfers fragment the layer | Diagnostic path only |
+| One host command runs the full model | Minimum launch overhead | Large dynamic controller, weak host control over requests/sampling | Not the current target |
+| Host composes coarse resident subgraphs | Static controller schedules with flexible model/runtime composition | Requires explicit tensor-residency handles and task contracts | **Selected** |
+
+The selected target keeps intermediate tensors and KV state in HBM/on-chip
+buffers while allowing the host to combine several task types into complete
+prefill and decode inference. End-to-end reporting must include both the
+controller-active intervals and the host-observed task-sequence latency.
+
+## 11. Evaluation principles
 
 Designs are compared using four independent dimensions:
 

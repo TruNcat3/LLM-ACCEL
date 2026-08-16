@@ -4,7 +4,18 @@
 #include "mm_stream_8x64.hpp"
 #include "stream_depth_config.hpp"
 
-constexpr unsigned int CU8_MAX_TASKS_PER_LAUNCH = 256;
+// A prefill-attention launch emits one QK task and HEAD_DIM/64 PV tasks for
+// every GQA head and sequence tile.  This is a real RTL loop bound: keeping
+// the legacy value of 256 after increasing MAX_SEQ_LEN causes the compute CU
+// to stop reading its task stream before the controller emits last_task.
+constexpr unsigned int CU8_ATTN_TASKS_PER_TILE =
+    GQA_GROUP_SIZE *
+    (1 + ceildiv_size(HEAD_DIM, MM_STREAM_8X64_OUTPUTS));
+constexpr unsigned int CU8_MAX_ATTN_TASKS_PER_LAUNCH =
+    ATTENTION_NUM_TILES * CU8_ATTN_TASKS_PER_TILE;
+constexpr unsigned int CU8_MAX_TASKS_PER_LAUNCH =
+    CU8_MAX_ATTN_TASKS_PER_LAUNCH > 256 ?
+    CU8_MAX_ATTN_TASKS_PER_LAUNCH : 256;
 constexpr unsigned int CU8_MAX_MM_REPEATS = 256;
 
 enum cu8_mode_t {

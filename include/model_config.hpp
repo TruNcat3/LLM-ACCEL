@@ -29,6 +29,17 @@ constexpr unsigned int MAX_SEQ_LEN = 64;
 constexpr unsigned int TEST_PREFILL_LEN = 16;
 constexpr unsigned int ATTENTION_TILE_SIZE = 16;
 constexpr double ROPE_FREQ_RATIO = 0.001;
+#elif defined(QWEN_TEST_QWEN_LAYER_LONG)
+constexpr unsigned int VOCAB_SIZE = 128;
+constexpr unsigned int HIDDEN_SIZE = 2048;
+constexpr unsigned int INTERMEDIATE_SIZE = 11008;
+constexpr unsigned int NUM_LAYERS = 1;
+constexpr unsigned int NUM_ATTENTION_HEADS = 16;
+constexpr unsigned int NUM_KEY_VALUE_HEADS = 2;
+constexpr unsigned int MAX_SEQ_LEN = 2048;
+constexpr unsigned int TEST_PREFILL_LEN = 1024;
+constexpr unsigned int ATTENTION_TILE_SIZE = 32;
+constexpr double ROPE_FREQ_RATIO = 0.8058421877614819;
 #elif defined(QWEN_TEST_QWEN_LAYER)
 constexpr unsigned int VOCAB_SIZE = 128;
 constexpr unsigned int HIDDEN_SIZE = 2048;
@@ -125,7 +136,7 @@ static_assert(ATTENTION_TILE_SIZE > 0, "attention tile must be nonzero");
 static_assert(ATTENTION_TILE_SIZE <= MAX_SEQ_LEN, "attention tile must fit in the configured sequence length");
 static_assert(NUM_WEIGHT_SHARDS % PACKED_WEIGHT_BLOCKS_PER_TILE == 0, "weight shard groups must cover tile blocks");
 static_assert(TEST_PREFILL_LEN <= MAX_SEQ_LEN, "test prefill length must fit in the configured KV cache");
-#if defined(QWEN_TEST_QWEN_LAYER)
+#if defined(QWEN_TEST_QWEN_LAYER) || defined(QWEN_TEST_QWEN_LAYER_LONG)
 static_assert(TEST_PREFILL_LAST_ATTENTION_TILES >= 2, "Qwen-layer prefill must cover at least two attention tile loads");
 static_assert(TEST_DECODE_ATTENTION_TILES >= 3, "Qwen-layer decode must cover at least three attention tile loads");
 #endif

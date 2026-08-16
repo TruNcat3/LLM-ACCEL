@@ -81,7 +81,8 @@ enum operator_kind_t {
     kOpSoftmax = 13,
     kOpAttentionFlash = 14,
     kOpDecodeSmoke = 15,
-    kOpDecoderLayer = 16
+    kOpDecoderLayer = 16,
+    kOpAttnPrefillBlock = 17
 };
 
 struct alignas(64) word512_t {
@@ -97,6 +98,8 @@ using aligned_fix16_vector =
 using golden_fm_t = ap_fixed<16, 8, AP_RND, AP_SAT>;
 using golden_weight_t = ap_fixed<16, 4, AP_RND, AP_SAT>;
 using golden_accum_t = ap_fixed<32, 16, AP_RND, AP_SAT>;
+using golden_scale_t = ap_fixed<24, 4, AP_RND, AP_SAT>;
+using golden_probability_t = ap_fixed<16, 2, AP_RND, AP_SAT>;
 using golden_fused_raw_accum_t = ap_int<48>;
 using golden_fused_fixed_accum_t = ap_fixed<48, 28, AP_TRN, AP_WRAP>;
 
@@ -307,6 +310,10 @@ bool parse_profile(const std::string& name, model_shape_t& shape) {
         shape = {"qwen-layer", 128, 2048, 11008, 1, 16, 2, 96};
         return true;
     }
+    if (name == "qwen-layer-long") {
+        shape = {"qwen-layer-long", 128, 2048, 11008, 1, 16, 2, 2048};
+        return true;
+    }
     if (name == "qwen2.5-3b") {
         shape = {
             "qwen2.5-3b",
@@ -503,6 +510,39 @@ golden_fm_t golden_exp(golden_fm_t value) {
     );
     ap_fixed<16, 8> exp_input = ap_fixed<16, 8>(clamped);
     return golden_fm_t(hls::exp(exp_input));
+}
+
+golden_probability_t golden_attention_probability(golden_fm_t value) {
+    const golden_fm_t clamped = golden_clamp(
+        value,
+        golden_fm_t(-8),
+        golden_fm_t(0)
+    );
+    const ap_fixed<18, 4> exp_input = ap_fixed<18, 4>(clamped);
+    return golden_probability_t(hls::exp(exp_input));
+}
+
+golden_fm_t golden_rescale_exp(
+    golden_fm_t value,
+    golden_fm_t*
+) {
+    return golden_exp(value);
+}
+
+golden_scale_t golden_rescale_exp(
+    golden_fm_t value,
+    golden_scale_t*
+) {
+    const golden_fm_t clamped = golden_clamp(
+        value,
+        golden_fm_t(-8),
+        golden_fm_t(0)
+    );
+    // This is a CPU-only numerical probe: use a high-precision exponential
+    // and quantize only its result.  It tells us whether widening the
+    // rescale arithmetic is beneficial independently of a particular HLS
+    // exp fixed-point instantiation.
+    return golden_scale_t(std::exp(double(clamped)));
 }
 
 golden_fm_t golden_rsqrt(golden_accum_t value) {
@@ -1194,6 +1234,52 @@ public:
         operator_result_t result;
         result.port0 = unpack_tight(data_words_[0], rows, output_cols);
         result.port1 = unpack_tight(data_words_[1], rows, output_cols);
+        result.status = status;
+        result.controller_ms = last_controller_ms_;
+        return result;
+    }
+
+    operator_result_t run_prefill_attention_block(
+        const tensor_t& query0,
+        const tensor_t& query1,
+        unsigned int position,
+        unsigned int token_count,
+        unsigned int layer = 0
+    ) {
+        const unsigned int query_rows =
+            token_count * shape_.gqa_group_size();
+        if (
+            token_count == 0 ||
+            token_count > kMaxTokensPerLaunch ||
+            position + token_count > shape_.max_seq_len ||
+            query0.rows != query_rows ||
+            query1.rows != query_rows ||
+            query0.cols != shape_.head_dim() ||
+            query1.cols != shape_.head_dim()
+        ) {
+            throw std::runtime_error("prefill attention block shape mismatch");
+        }
+
+        clear_data();
+        // The block-attention ABI is token-major, then local GQA-head-major.
+        pack_tight(query0, data_words_[2]);
+        pack_tight(query1, data_words_[3]);
+        const decoded_status_t status = launch(
+            kOpAttnPrefillBlock,
+            layer,
+            token_count,
+            position,
+            0
+        );
+        check_status(kOpAttnPrefillBlock, status);
+
+        operator_result_t result;
+        result.port0 = unpack_tight(
+            data_words_[0], query_rows, shape_.head_dim()
+        );
+        result.port1 = unpack_tight(
+            data_words_[1], query_rows, shape_.head_dim()
+        );
         result.status = status;
         result.controller_ms = last_controller_ms_;
         return result;
@@ -2599,6 +2685,378 @@ tensor_t golden_flash_attention(
     return output;
 }
 
+// Mathematical reference for long-context accuracy.  Unlike the historical
+// global fixed-point golden above, this does not quantize/saturate the full
+// unnormalised PV sum to Q8.8 before division by the softmax denominator.
+// QK scores and V values still enter through the same hardware-visible fixed
+// formats; only the softmax reduction is evaluated in double precision.
+tensor_t golden_flash_attention_reference(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    if (
+        k_cache.rows != v_cache.rows ||
+        k_cache.cols != query.cols ||
+        v_cache.cols != query.cols
+    ) {
+        throw std::runtime_error(
+            "golden flash attention reference shape mismatch"
+        );
+    }
+    const tensor_t scores = golden_attention_mm(
+        query, k_cache, k_cache.rows, true
+    );
+    tensor_t output(query.rows, query.cols);
+    for (unsigned int row = 0; row < query.rows; row++) {
+        double row_max = -128.0;
+        for (unsigned int pos = 0; pos < k_cache.rows; pos++) {
+            row_max = std::max(
+                row_max,
+                double(fixed_from_raw<golden_fm_t>(
+                    scores.at(row, pos)
+                ))
+            );
+        }
+        double sum = 0.0;
+        std::vector<double> probabilities(k_cache.rows, 0.0);
+        for (unsigned int pos = 0; pos < k_cache.rows; pos++) {
+            const double score = double(fixed_from_raw<golden_fm_t>(
+                scores.at(row, pos)
+            ));
+            probabilities[pos] = std::exp(score - row_max);
+            sum += probabilities[pos];
+        }
+        const double safe_sum = std::max(sum, 1.0 / 4096.0);
+        for (unsigned int elem = 0; elem < query.cols; elem++) {
+            double weighted = 0.0;
+            for (unsigned int pos = 0; pos < k_cache.rows; pos++) {
+                const golden_weight_t value = golden_weight_t(
+                    fixed_from_raw<golden_fm_t>(
+                        v_cache.at(pos, elem)
+                    )
+                );
+                weighted += probabilities[pos] * double(value);
+            }
+            output.at(row, elem) = fixed_to_raw(
+                golden_fm_t(weighted / safe_sum)
+            );
+        }
+    }
+    return output;
+}
+
+// Reproduce the controller's tiled online-softmax arithmetic exactly enough
+// to distinguish a scheduling/stream error from fixed-point drift relative to
+// the mathematically equivalent global-softmax reference above.  In
+// particular, each tile quantizes QK scores, probabilities, the PV result and
+// the inter-tile rescale factor back to Q8.8, while the running sum and output
+// accumulator remain Q16.16.
+template <typename Scale, bool WidePv>
+tensor_t golden_tiled_flash_attention_impl(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    if (
+        k_cache.rows != v_cache.rows ||
+        k_cache.cols != query.cols ||
+        v_cache.cols != query.cols
+    ) {
+        throw std::runtime_error(
+            "golden tiled flash attention shape mismatch"
+        );
+    }
+
+    std::vector<golden_fm_t> online_max(
+        query.rows, golden_fm_t(-128)
+    );
+    std::vector<golden_accum_t> online_sum(
+        query.rows, golden_accum_t(0)
+    );
+    std::vector<golden_accum_t> accumulator(
+        std::size_t(query.rows) * query.cols,
+        golden_accum_t(0)
+    );
+
+    for (unsigned int tile_begin = 0;
+         tile_begin < k_cache.rows;
+         tile_begin += kAttentionTile) {
+        const unsigned int tile_len = std::min(
+            kAttentionTile, k_cache.rows - tile_begin
+        );
+        tensor_t k_tile(tile_len, query.cols);
+        tensor_t v_tile(tile_len, query.cols);
+        for (unsigned int pos = 0; pos < tile_len; pos++) {
+            for (unsigned int elem = 0; elem < query.cols; elem++) {
+                k_tile.at(pos, elem) =
+                    k_cache.at(tile_begin + pos, elem);
+                v_tile.at(pos, elem) =
+                    v_cache.at(tile_begin + pos, elem);
+            }
+        }
+
+        const tensor_t scores = golden_attention_mm(
+            query, k_tile, kAttentionTile, true
+        );
+        tensor_t probabilities(query.rows, tile_len);
+        std::vector<Scale> old_scale(
+            query.rows, Scale(0)
+        );
+
+        for (unsigned int row = 0; row < query.rows; row++) {
+            golden_fm_t row_max = online_max[row];
+            for (unsigned int pos = 0; pos < tile_len; pos++) {
+                const golden_fm_t score =
+                    fixed_from_raw<golden_fm_t>(scores.at(row, pos));
+                if (score > row_max) {
+                    row_max = score;
+                }
+            }
+            old_scale[row] = golden_rescale_exp(
+                online_max[row] - row_max,
+                static_cast<Scale*>(nullptr)
+            );
+            golden_accum_t tile_sum(0);
+            for (unsigned int pos = 0; pos < tile_len; pos++) {
+                const golden_fm_t score =
+                    fixed_from_raw<golden_fm_t>(scores.at(row, pos));
+                const golden_fm_t probability =
+                    golden_exp(score - row_max);
+                probabilities.at(row, pos) = fixed_to_raw(probability);
+                tile_sum += golden_accum_t(probability);
+            }
+            online_sum[row] =
+                online_sum[row] * golden_accum_t(old_scale[row]) +
+                tile_sum;
+            online_max[row] = row_max;
+            for (unsigned int elem = 0; elem < query.cols; elem++) {
+                accumulator[std::size_t(row) * query.cols + elem] *=
+                    golden_accum_t(old_scale[row]);
+            }
+        }
+
+        if (WidePv) {
+            // Diagnostic model for a widened compute-to-controller PV
+            // boundary.  The production path below deliberately quantizes
+            // each tile's unnormalised PV result back to Q8.8; retaining the
+            // Q16.16 accumulator here isolates saturation/rounding at that
+            // boundary from inter-tile rescale error.
+            for (unsigned int row = 0; row < query.rows; row++) {
+                for (unsigned int elem = 0; elem < query.cols; elem++) {
+                    golden_accum_t tile_value(0);
+                    for (unsigned int pos = 0; pos < tile_len; pos++) {
+                        const golden_fm_t probability =
+                            fixed_from_raw<golden_fm_t>(
+                                probabilities.at(row, pos)
+                            );
+                        const golden_fm_t value =
+                            fixed_from_raw<golden_fm_t>(
+                                v_tile.at(pos, elem)
+                            );
+                        tile_value +=
+                            golden_accum_t(probability) *
+                            golden_accum_t(value);
+                    }
+                    accumulator[
+                        std::size_t(row) * query.cols + elem
+                    ] += tile_value;
+                }
+            }
+        } else {
+            const tensor_t tile_weighted = golden_attention_mm(
+                probabilities, v_tile, query.cols, false
+            );
+            for (unsigned int row = 0; row < query.rows; row++) {
+                for (unsigned int elem = 0; elem < query.cols; elem++) {
+                    accumulator[std::size_t(row) * query.cols + elem] +=
+                        golden_accum_t(fixed_from_raw<golden_fm_t>(
+                            tile_weighted.at(row, elem)
+                        ));
+                }
+            }
+        }
+    }
+
+    tensor_t output(query.rows, query.cols);
+    for (unsigned int row = 0; row < query.rows; row++) {
+        const golden_accum_t safe_sum =
+            online_sum[row] < golden_accum_t(0.000244140625) ?
+            golden_accum_t(0.000244140625) : online_sum[row];
+        const golden_fm_t inv_sum =
+            golden_fm_t(golden_accum_t(1) / safe_sum);
+        for (unsigned int elem = 0; elem < query.cols; elem++) {
+            output.at(row, elem) = fixed_to_raw(golden_fm_t(
+                accumulator[std::size_t(row) * query.cols + elem] *
+                golden_accum_t(inv_sum)
+            ));
+        }
+    }
+    return output;
+}
+
+tensor_t golden_tiled_flash_attention(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_impl<golden_fm_t, false>(
+        query, k_cache, v_cache
+    );
+}
+
+tensor_t golden_tiled_flash_attention_wide_rescale(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_impl<golden_scale_t, false>(
+        query, k_cache, v_cache
+    );
+}
+
+tensor_t golden_tiled_flash_attention_wide_pv(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_impl<golden_fm_t, true>(
+        query, k_cache, v_cache
+    );
+}
+
+tensor_t golden_tiled_flash_attention_wide_rescale_pv(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_impl<golden_scale_t, true>(
+        query, k_cache, v_cache
+    );
+}
+
+// Production Q2.14 online-softmax model.  The existing 16-bit activation
+// packet carries these raw probability bits; the compute CU interprets them
+// as Q8.8 and applies output_scale=1/64, which is mathematically identical to
+// the Q2.14 multiply below without changing the stream ABI.
+tensor_t golden_tiled_flash_attention_q2_14(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    std::vector<golden_fm_t> online_max(
+        query.rows, golden_fm_t(-128)
+    );
+    std::vector<golden_accum_t> online_sum(
+        query.rows, golden_accum_t(0)
+    );
+    std::vector<golden_accum_t> accumulator(
+        std::size_t(query.rows) * query.cols,
+        golden_accum_t(0)
+    );
+
+    for (unsigned int tile_begin = 0;
+         tile_begin < k_cache.rows;
+         tile_begin += kAttentionTile) {
+        const unsigned int tile_len = std::min(
+            kAttentionTile, k_cache.rows - tile_begin
+        );
+        tensor_t k_tile(tile_len, query.cols);
+        tensor_t v_tile(tile_len, query.cols);
+        for (unsigned int pos = 0; pos < tile_len; pos++) {
+            for (unsigned int elem = 0; elem < query.cols; elem++) {
+                k_tile.at(pos, elem) = k_cache.at(tile_begin + pos, elem);
+                v_tile.at(pos, elem) = v_cache.at(tile_begin + pos, elem);
+            }
+        }
+        const tensor_t scores = golden_attention_mm(
+            query, k_tile, kAttentionTile, true
+        );
+        std::vector<golden_probability_t> probabilities(
+            std::size_t(query.rows) * tile_len,
+            golden_probability_t(0)
+        );
+        for (unsigned int row = 0; row < query.rows; row++) {
+            golden_fm_t row_max = online_max[row];
+            for (unsigned int pos = 0; pos < tile_len; pos++) {
+                const golden_fm_t score =
+                    fixed_from_raw<golden_fm_t>(scores.at(row, pos));
+                if (score > row_max) {
+                    row_max = score;
+                }
+            }
+            const golden_probability_t old_scale =
+                golden_attention_probability(online_max[row] - row_max);
+            golden_accum_t tile_sum(0);
+            for (unsigned int pos = 0; pos < tile_len; pos++) {
+                const golden_fm_t score =
+                    fixed_from_raw<golden_fm_t>(scores.at(row, pos));
+                const golden_probability_t probability =
+                    golden_attention_probability(score - row_max);
+                probabilities[std::size_t(row) * tile_len + pos] =
+                    probability;
+                tile_sum += golden_accum_t(probability);
+            }
+            online_sum[row] =
+                online_sum[row] * golden_accum_t(old_scale) + tile_sum;
+            online_max[row] = row_max;
+            for (unsigned int elem = 0; elem < query.cols; elem++) {
+                accumulator[std::size_t(row) * query.cols + elem] *=
+                    golden_accum_t(old_scale);
+            }
+        }
+
+        // Match the four-bank compute accumulation and its Q8.8 result
+        // packet after the Q2.14 payload's 64x reinterpretation has been
+        // cancelled by the task's 1/64 output scale.
+        for (unsigned int row = 0; row < query.rows; row++) {
+            for (unsigned int elem = 0; elem < query.cols; elem++) {
+                golden_accum_t banks[4] = {
+                    golden_accum_t(0), golden_accum_t(0),
+                    golden_accum_t(0), golden_accum_t(0)
+                };
+                for (unsigned int pos = 0; pos < tile_len; pos++) {
+                    const golden_probability_t probability = probabilities[
+                        std::size_t(row) * tile_len + pos
+                    ];
+                    const golden_weight_t value = golden_weight_t(
+                        fixed_from_raw<golden_fm_t>(v_tile.at(pos, elem))
+                    );
+                    const golden_accum_t product =
+                        golden_accum_t(probability * value);
+                    const unsigned int phase = pos & 3u;
+                    if (pos < 4) {
+                        banks[phase] = product;
+                    } else {
+                        banks[phase] += product;
+                    }
+                }
+                const golden_fm_t tile_value = golden_fm_t(
+                    banks[0] + banks[1] + banks[2] + banks[3]
+                );
+                accumulator[std::size_t(row) * query.cols + elem] +=
+                    golden_accum_t(tile_value);
+            }
+        }
+    }
+
+    tensor_t output(query.rows, query.cols);
+    for (unsigned int row = 0; row < query.rows; row++) {
+        const golden_accum_t safe_sum =
+            online_sum[row] < golden_accum_t(0.000244140625) ?
+            golden_accum_t(0.000244140625) : online_sum[row];
+        const golden_fm_t inv_sum =
+            golden_fm_t(golden_accum_t(1) / safe_sum);
+        for (unsigned int elem = 0; elem < query.cols; elem++) {
+            output.at(row, elem) = fixed_to_raw(golden_fm_t(
+                accumulator[std::size_t(row) * query.cols + elem] *
+                golden_accum_t(inv_sum)
+            ));
+        }
+    }
+    return output;
+}
+
 bool compare_tensors(
     const std::string& name,
     const tensor_t& actual,
@@ -3515,6 +3973,46 @@ bool check_attention_status(
         << " output_waves=" << status.output_waves
         << " expected_output_waves=" << expected_output_waves
         << " status=" << status.code
+        << " mm_tasks=" << status.mm_tasks
+        << " expected_mm_tasks=" << expected_tasks
+        << " packets=" << status.completed_packets
+        << " expected_packets=" << expected_packets
+        << " controller_ms=" << controller_ms
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
+}
+
+bool check_prefill_block_attention_status(
+    const std::string& tag,
+    const model_shape_t& shape,
+    const decoded_status_t& status,
+    unsigned int position,
+    unsigned int token_count,
+    double controller_ms
+) {
+    const unsigned int tile_count =
+        unsigned(ceildiv(position + token_count, kAttentionTile));
+    const unsigned int tasks_per_core =
+        tile_count * shape.gqa_group_size() *
+        (1 + attention_output_waves(shape));
+    const unsigned int expected_tasks = 2 * tasks_per_core;
+    const unsigned int expected_packets =
+        expected_tasks * kMmPacketsPerBlock;
+    const bool pass =
+        status.op == unsigned(kOpAttnPrefillBlock) &&
+        status.code == 0 &&
+        status.output_waves == attention_output_waves(shape) &&
+        status.mm_tasks == expected_tasks &&
+        status.completed_packets == expected_packets &&
+        status.last_task;
+    std::cout
+        << tag
+        << " position_begin=" << position
+        << " token_count=" << token_count
+        << " context_len=" << (position + token_count)
+        << " tile_count=" << tile_count
+        << " attention_calls=1"
         << " mm_tasks=" << status.mm_tasks
         << " expected_mm_tasks=" << expected_tasks
         << " packets=" << status.completed_packets
@@ -4576,11 +5074,296 @@ bool run_prefill_vector_profile(
     return pass;
 }
 
+bool run_prefill_softmax_diagnostic(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    unsigned int requested_prefill_len,
+    unsigned int requested_prefill_start,
+    uint32_t seed
+) {
+    const unsigned int prefill_len =
+        requested_prefill_len == 0 ? 8 : requested_prefill_len;
+    if (
+        prefill_len == 0 ||
+        prefill_len > shape.max_seq_len ||
+        requested_prefill_start >= prefill_len
+    ) {
+        throw std::runtime_error(
+            "diagnose-prefill-softmax requires 0 <= prefill-start < "
+            "prefill-len <= max_seq_len"
+        );
+    }
+    const unsigned int token_count =
+        prefill_len - requested_prefill_start;
+    if (token_count == 0 || token_count > kMaxTokensPerLaunch) {
+        throw std::runtime_error(
+            "diagnose-prefill-softmax supports one block of 1..8 tokens"
+        );
+    }
+    if (shape.num_layers != 1 || shape.num_kv_heads != 2) {
+        throw std::runtime_error(
+            "diagnose-prefill-softmax expects the one-layer, two-KV-head profile"
+        );
+    }
+
+    const unsigned int layer = 0;
+    const unsigned int head_dim = shape.head_dim();
+    const unsigned int group_size = shape.gqa_group_size();
+    const tensor_t hidden = make_random_tensor(
+        prefill_len,
+        shape.hidden_size,
+        seed ^ 0x76000001u,
+        -64,
+        64
+    );
+    tensor_t cache_k0 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010001u, -32, 32
+    );
+    tensor_t cache_k1 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010002u, -32, 32
+    );
+    tensor_t cache_v0 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010003u, -32, 32
+    );
+    tensor_t cache_v1 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010004u, -32, 32
+    );
+
+    const tensor_t block_hidden = tensor_rows(
+        hidden, requested_prefill_start, token_count
+    );
+    const tensor_t normalized = golden_rmsnorm(
+        block_hidden, model.norm_row(layer, false)
+    );
+    tensor_t q = golden_projection(
+        shape, model, kOpQProjection, normalized, layer
+    );
+    tensor_t k = golden_projection(
+        shape, model, kOpKProjection, normalized, layer
+    );
+    tensor_t v = golden_projection(
+        shape, model, kOpVProjection, normalized, layer
+    );
+    tensor_t query_block0(token_count * group_size, head_dim);
+    tensor_t query_block1(token_count * group_size, head_dim);
+
+    for (unsigned int local_token = 0;
+         local_token < token_count;
+         local_token++) {
+        const unsigned int position = requested_prefill_start + local_token;
+        tensor_t q_row = tensor_rows(q, local_token, 1);
+        tensor_t k_row = tensor_rows(k, local_token, 1);
+        const tensor_t v_row = tensor_rows(v, local_token, 1);
+        profile_apply_rope(shape, q_row, k_row, position);
+        tensor_store_rows(
+            query_block0,
+            local_token * group_size,
+            profile_build_query_group(shape, q_row, 0)
+        );
+        tensor_store_rows(
+            query_block1,
+            local_token * group_size,
+            profile_build_query_group(shape, q_row, 1)
+        );
+        const tensor_t k_payload = profile_build_kv_payload(shape, k_row);
+        const tensor_t v_payload = profile_build_kv_payload(shape, v_row);
+        for (unsigned int elem = 0; elem < head_dim; elem++) {
+            cache_k0.at(position, elem) = k_payload.at(0, elem);
+            cache_k1.at(position, elem) = k_payload.at(1, elem);
+            cache_v0.at(position, elem) = v_payload.at(0, elem);
+            cache_v1.at(position, elem) = v_payload.at(1, elem);
+        }
+    }
+
+    bool current_within_tolerance = true;
+    bool wide_within_tolerance = true;
+    bool wide_pv_within_tolerance = true;
+    bool wide_rescale_pv_within_tolerance = true;
+    bool q2_14_within_tolerance = true;
+    bool legacy_global_reference_within_tolerance = true;
+    bool current_reference_within_tolerance = true;
+    bool q2_14_reference_within_tolerance = true;
+    for (unsigned int local_token = 0;
+         local_token < token_count;
+         local_token++) {
+        const unsigned int position = requested_prefill_start + local_token;
+        const tensor_t query0 = tensor_rows(
+            query_block0, local_token * group_size, group_size
+        );
+        const tensor_t query1 = tensor_rows(
+            query_block1, local_token * group_size, group_size
+        );
+        const tensor_t active_k0 = tensor_prefix_rows(cache_k0, position + 1);
+        const tensor_t active_k1 = tensor_prefix_rows(cache_k1, position + 1);
+        const tensor_t active_v0 = tensor_prefix_rows(cache_v0, position + 1);
+        const tensor_t active_v1 = tensor_prefix_rows(cache_v1, position + 1);
+        const std::string name =
+            "prefill_softmax_pos" + std::to_string(position);
+        const tensor_t global0 = golden_flash_attention(
+            query0, active_k0, active_v0
+        );
+        const tensor_t global1 = golden_flash_attention(
+            query1, active_k1, active_v1
+        );
+        const tensor_t reference0 = golden_flash_attention_reference(
+            query0, active_k0, active_v0
+        );
+        const tensor_t reference1 = golden_flash_attention_reference(
+            query1, active_k1, active_v1
+        );
+        const tensor_t tiled0 = golden_tiled_flash_attention(
+            query0, active_k0, active_v0
+        );
+        const tensor_t tiled1 = golden_tiled_flash_attention(
+            query1, active_k1, active_v1
+        );
+        const tensor_t q2_14_0 = golden_tiled_flash_attention_q2_14(
+            query0, active_k0, active_v0
+        );
+        const tensor_t q2_14_1 = golden_tiled_flash_attention_q2_14(
+            query1, active_k1, active_v1
+        );
+        current_within_tolerance = compare_tensors(
+            name + "_port0_tiled_global",
+            tiled0,
+            global0,
+            4
+        ) && current_within_tolerance;
+        current_within_tolerance = compare_tensors(
+            name + "_port1_tiled_global",
+            tiled1,
+            global1,
+            4
+        ) && current_within_tolerance;
+        wide_within_tolerance = compare_tensors(
+            name + "_port0_wide_rescale_global",
+            golden_tiled_flash_attention_wide_rescale(
+                query0, active_k0, active_v0
+            ),
+            global0,
+            4
+        ) && wide_within_tolerance;
+        wide_pv_within_tolerance = compare_tensors(
+            name + "_port0_wide_pv_global",
+            golden_tiled_flash_attention_wide_pv(
+                query0, active_k0, active_v0
+            ),
+            global0,
+            4
+        ) && wide_pv_within_tolerance;
+        wide_pv_within_tolerance = compare_tensors(
+            name + "_port1_wide_pv_global",
+            golden_tiled_flash_attention_wide_pv(
+                query1, active_k1, active_v1
+            ),
+            global1,
+            4
+        ) && wide_pv_within_tolerance;
+        wide_rescale_pv_within_tolerance = compare_tensors(
+            name + "_port0_wide_rescale_pv_global",
+            golden_tiled_flash_attention_wide_rescale_pv(
+                query0, active_k0, active_v0
+            ),
+            global0,
+            4
+        ) && wide_rescale_pv_within_tolerance;
+        q2_14_within_tolerance = compare_tensors(
+            name + "_port0_q2_14_global",
+            q2_14_0,
+            global0,
+            4
+        ) && q2_14_within_tolerance;
+        q2_14_within_tolerance = compare_tensors(
+            name + "_port1_q2_14_global",
+            q2_14_1,
+            global1,
+            4
+        ) && q2_14_within_tolerance;
+        legacy_global_reference_within_tolerance = compare_tensors(
+            name + "_port0_legacy_global_reference",
+            global0,
+            reference0,
+            4
+        ) && legacy_global_reference_within_tolerance;
+        legacy_global_reference_within_tolerance = compare_tensors(
+            name + "_port1_legacy_global_reference",
+            global1,
+            reference1,
+            4
+        ) && legacy_global_reference_within_tolerance;
+        current_reference_within_tolerance = compare_tensors(
+            name + "_port0_tiled_reference",
+            tiled0,
+            reference0,
+            4
+        ) && current_reference_within_tolerance;
+        current_reference_within_tolerance = compare_tensors(
+            name + "_port1_tiled_reference",
+            tiled1,
+            reference1,
+            4
+        ) && current_reference_within_tolerance;
+        q2_14_reference_within_tolerance = compare_tensors(
+            name + "_port0_q2_14_reference",
+            q2_14_0,
+            reference0,
+            5
+        ) && q2_14_reference_within_tolerance;
+        q2_14_reference_within_tolerance = compare_tensors(
+            name + "_port1_q2_14_reference",
+            q2_14_1,
+            reference1,
+            5
+        ) && q2_14_reference_within_tolerance;
+        wide_rescale_pv_within_tolerance = compare_tensors(
+            name + "_port1_wide_rescale_pv_global",
+            golden_tiled_flash_attention_wide_rescale_pv(
+                query1, active_k1, active_v1
+            ),
+            global1,
+            4
+        ) && wide_rescale_pv_within_tolerance;
+        wide_within_tolerance = compare_tensors(
+            name + "_port1_wide_rescale_global",
+            golden_tiled_flash_attention_wide_rescale(
+                query1, active_k1, active_v1
+            ),
+            global1,
+            4
+        ) && wide_within_tolerance;
+    }
+    std::cout
+        << "PREFILL_SOFTMAX_DIAGNOSTIC prefill_start="
+        << requested_prefill_start
+        << " prefill_len=" << prefill_len
+        << " token_count=" << token_count
+        << " tile_count=" << ceildiv(prefill_len, kAttentionTile)
+        << " tiled_global_within_tolerance="
+        << (current_within_tolerance ? 1 : 0)
+        << " wide_rescale_global_within_tolerance="
+        << (wide_within_tolerance ? 1 : 0)
+        << " wide_pv_global_within_tolerance="
+        << (wide_pv_within_tolerance ? 1 : 0)
+        << " wide_rescale_pv_global_within_tolerance="
+        << (wide_rescale_pv_within_tolerance ? 1 : 0)
+        << " q2_14_global_within_tolerance="
+        << (q2_14_within_tolerance ? 1 : 0)
+        << " legacy_global_reference_within_tolerance="
+        << (legacy_global_reference_within_tolerance ? 1 : 0)
+        << " tiled_reference_within_tolerance="
+        << (current_reference_within_tolerance ? 1 : 0)
+        << " q2_14_reference_within_tolerance="
+        << (q2_14_reference_within_tolerance ? 1 : 0)
+        << " COMPLETE\n";
+    return true;
+}
+
 bool run_prefill_block_profile(
     const model_shape_t& shape,
     const model_data_t& model,
     accelerator_t& accelerator,
     unsigned int requested_prefill_len,
+    unsigned int requested_prefill_start,
     uint32_t seed
 ) {
     const unsigned int prefill_len =
@@ -4588,6 +5371,11 @@ bool run_prefill_block_profile(
     if (prefill_len == 0 || prefill_len > shape.max_seq_len) {
         throw std::runtime_error(
             "profile-prefill-block --prefill-len must be in 1..max_seq_len"
+        );
+    }
+    if (requested_prefill_start >= prefill_len) {
+        throw std::runtime_error(
+            "profile-prefill-block --prefill-start must be smaller than --prefill-len"
         );
     }
     if (shape.num_layers != 1 || shape.num_kv_heads != 2) {
@@ -4607,18 +5395,33 @@ bool run_prefill_block_profile(
         -64,
         64
     );
-    tensor_t final_hidden(prefill_len, shape.hidden_size);
-    tensor_t cache_k0(prefill_len, head_dim);
-    tensor_t cache_k1(prefill_len, head_dim);
-    tensor_t cache_v0(prefill_len, head_dim);
-    tensor_t cache_v1(prefill_len, head_dim);
+    const unsigned int processed_tokens =
+        prefill_len - requested_prefill_start;
+    tensor_t final_hidden(processed_tokens, shape.hidden_size);
+    // Resume-mode profiling preloads a deterministic, non-zero KV prefix.
+    // This lets a single target block exercise the same HBM reads and online
+    // attention schedule as a long prompt without simulating every preceding
+    // transformer block in hw_emu.  Rows produced by the target block replace
+    // the corresponding fixture rows below.
+    tensor_t cache_k0 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010001u, -32, 32
+    );
+    tensor_t cache_k1 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010002u, -32, 32
+    );
+    tensor_t cache_v0 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010003u, -32, 32
+    );
+    tensor_t cache_v1 = make_random_tensor(
+        prefill_len, head_dim, seed ^ 0x76010004u, -32, 32
+    );
 
     accelerator.initialize_kv_cache_heads(
         layer,
-        tensor_t(0, head_dim),
-        tensor_t(0, head_dim),
-        tensor_t(0, head_dim),
-        tensor_t(0, head_dim)
+        tensor_prefix_rows(cache_k0, requested_prefill_start),
+        tensor_prefix_rows(cache_k1, requested_prefill_start),
+        tensor_prefix_rows(cache_v0, requested_prefill_start),
+        tensor_prefix_rows(cache_v1, requested_prefill_start)
     );
 
     bool pass = true;
@@ -4627,7 +5430,7 @@ bool run_prefill_block_profile(
     unsigned int attention_mm_tasks = 0;
     unsigned int attention_packets = 0;
 
-    for (unsigned int block_begin = 0;
+    for (unsigned int block_begin = requested_prefill_start;
          block_begin < prefill_len;
          block_begin += block_size) {
         const unsigned int token_count = std::min(
@@ -4698,6 +5501,8 @@ bool run_prefill_block_profile(
         ) && pass;
 
         tensor_t attention(token_count, shape.hidden_size);
+        tensor_t query_block0(token_count * group_size, head_dim);
+        tensor_t query_block1(token_count * group_size, head_dim);
         for (unsigned int local_token = 0;
              local_token < token_count;
              local_token++) {
@@ -4711,55 +5516,157 @@ bool run_prefill_block_profile(
             tensor_t k_payload = profile_build_kv_payload(shape, k_row);
             tensor_t v_payload = profile_build_kv_payload(shape, v_row);
 
+            tensor_store_rows(
+                query_block0, local_token * group_size, query0
+            );
+            tensor_store_rows(
+                query_block1, local_token * group_size, query1
+            );
+
             for (unsigned int elem = 0; elem < head_dim; elem++) {
                 cache_k0.at(position, elem) = k_payload.at(0, elem);
                 cache_k1.at(position, elem) = k_payload.at(1, elem);
                 cache_v0.at(position, elem) = v_payload.at(0, elem);
                 cache_v1.at(position, elem) = v_payload.at(1, elem);
             }
+        }
 
-            operator_result_t decoded = accelerator.run_attention(
-                kOpDecodeSmoke,
-                query0,
-                query1,
-                &k_payload,
-                &v_payload,
-                position,
-                1,
-                layer
+        // Test-fixture handoff: make the newly projected K/V rows visible to
+        // the controller-resident block-attention path.  Production prefill
+        // will replace this host migration with an on-device projection-to-
+        // cache handoff; controller execution and timing measured below do
+        // not include this migration.
+        accelerator.initialize_kv_cache_heads(
+            layer,
+            tensor_prefix_rows(cache_k0, block_begin + token_count),
+            tensor_prefix_rows(cache_k1, block_begin + token_count),
+            tensor_prefix_rows(cache_v0, block_begin + token_count),
+            tensor_prefix_rows(cache_v1, block_begin + token_count)
+        );
+        operator_result_t decoded = accelerator.run_prefill_attention_block(
+            query_block0,
+            query_block1,
+            block_begin,
+            token_count,
+            layer
+        );
+        bool block_pass = check_prefill_block_attention_status(
+            "PREFILL_BLOCK_ATTENTION_STATUS",
+            shape,
+            decoded.status,
+            block_begin,
+            token_count,
+            decoded.controller_ms
+        );
+
+        for (unsigned int local_token = 0;
+             local_token < token_count;
+             local_token++) {
+            const unsigned int position = block_begin + local_token;
+            const tensor_t decoded0 = tensor_rows(
+                decoded.port0, local_token * group_size, group_size
             );
-            bool token_pass = check_attention_status(
-                "PREFILL_BLOCK_ATTENTION_STATUS",
-                shape,
-                decoded.status,
-                position,
-                decoded.controller_ms
+            const tensor_t decoded1 = tensor_rows(
+                decoded.port1, local_token * group_size, group_size
             );
-            token_pass = compare_tensors(
-                prefix + "_attention_pos" + std::to_string(position) + "_port0",
-                decoded.port0,
-                golden_flash_attention(
-                    query0,
-                    tensor_prefix_rows(cache_k0, position + 1),
-                    tensor_prefix_rows(cache_v0, position + 1)
-                ),
+            const tensor_t query_token0 = tensor_rows(
+                query_block0,
+                local_token * group_size,
+                group_size
+            );
+            const tensor_t query_token1 = tensor_rows(
+                query_block1,
+                local_token * group_size,
+                group_size
+            );
+            const tensor_t active_k0 =
+                tensor_prefix_rows(cache_k0, position + 1);
+            const tensor_t active_k1 =
+                tensor_prefix_rows(cache_k1, position + 1);
+            const tensor_t active_v0 =
+                tensor_prefix_rows(cache_v0, position + 1);
+            const tensor_t active_v1 =
+                tensor_prefix_rows(cache_v1, position + 1);
+            const tensor_t global0 = golden_flash_attention(
+                query_token0, active_k0, active_v0
+            );
+            const tensor_t global1 = golden_flash_attention(
+                query_token1, active_k1, active_v1
+            );
+            const tensor_t reference0 = golden_flash_attention_reference(
+                query_token0, active_k0, active_v0
+            );
+            const tensor_t reference1 = golden_flash_attention_reference(
+                query_token1, active_k1, active_v1
+            );
+            const tensor_t q2_14_0 = golden_tiled_flash_attention_q2_14(
+                query_token0, active_k0, active_v0
+            );
+            const tensor_t q2_14_1 = golden_tiled_flash_attention_q2_14(
+                query_token1, active_k1, active_v1
+            );
+
+            const std::string position_name =
+                prefix + "_attention_pos" + std::to_string(position);
+            const bool q2_14_hw0 = compare_tensors(
+                position_name + "_port0_q2_14_hw",
+                decoded0,
+                q2_14_0,
                 4
-            ) && token_pass;
-            token_pass = compare_tensors(
-                prefix + "_attention_pos" + std::to_string(position) + "_port1",
-                decoded.port1,
-                golden_flash_attention(
-                    query1,
-                    tensor_prefix_rows(cache_k1, position + 1),
-                    tensor_prefix_rows(cache_v1, position + 1)
-                ),
+            );
+            const bool reference_hw0 = compare_tensors(
+                position_name + "_port0_reference",
+                decoded0,
+                reference0,
+                5
+            );
+            const bool q2_14_reference0 = compare_tensors(
+                position_name + "_port0_q2_14_reference",
+                q2_14_0,
+                reference0,
+                5
+            );
+            const bool q2_14_hw1 = compare_tensors(
+                position_name + "_port1_q2_14_hw",
+                decoded1,
+                q2_14_1,
                 4
-            ) && token_pass;
-            pass = token_pass && pass;
+            );
+            const bool reference_hw1 = compare_tensors(
+                position_name + "_port1_reference",
+                decoded1,
+                reference1,
+                5
+            );
+            const bool q2_14_reference1 = compare_tensors(
+                position_name + "_port1_q2_14_reference",
+                q2_14_1,
+                reference1,
+                5
+            );
+            // Retain the historical global fixed-point golden as a
+            // non-gating diagnostic: it saturates the unnormalised long-
+            // context PV result to Q8.8 and is not a valid accuracy oracle.
+            compare_tensors(
+                position_name + "_port0_legacy_global_diagnostic",
+                decoded0,
+                global0,
+                4
+            );
+            compare_tensors(
+                position_name + "_port1_legacy_global_diagnostic",
+                decoded1,
+                global1,
+                4
+            );
+            block_pass =
+                q2_14_hw0 && q2_14_hw1 &&
+                reference_hw0 && reference_hw1 &&
+                q2_14_reference0 && q2_14_reference1 && block_pass;
             profile_scatter_attention_group_row(
                 attention,
                 local_token,
-                decoded.port0,
+                decoded0,
                 0,
                 group_size,
                 head_dim
@@ -4767,15 +5674,16 @@ bool run_prefill_block_profile(
             profile_scatter_attention_group_row(
                 attention,
                 local_token,
-                decoded.port1,
+                decoded1,
                 1,
                 group_size,
                 head_dim
             );
-            attention_calls++;
-            attention_mm_tasks += decoded.status.mm_tasks;
-            attention_packets += decoded.status.completed_packets;
         }
+        pass = block_pass && pass;
+        attention_calls++;
+        attention_mm_tasks += decoded.status.mm_tasks;
+        attention_packets += decoded.status.completed_packets;
 
         tensor_t projected = accelerator.run_feature(
             kOpOProjection,
@@ -4884,7 +5792,11 @@ bool run_prefill_block_profile(
             golden_residual(residual, down),
             0
         ) && pass;
-        tensor_store_rows(final_hidden, block_begin, block_output);
+        tensor_store_rows(
+            final_hidden,
+            block_begin - requested_prefill_start,
+            block_output
+        );
 
         std::cout
             << "PREFILL_BLOCK_PROFILE block=" << block_count_total
@@ -4900,6 +5812,8 @@ bool run_prefill_block_profile(
 
     std::cout
         << "PREFILL_PROFILE prefill_len=" << prefill_len
+        << " prefill_start=" << requested_prefill_start
+        << " processed_tokens=" << processed_tokens
         << " block_size=" << block_size
         << " blocks=" << block_count_total
         << " attention_calls=" << attention_calls
@@ -5628,9 +6542,9 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable << " [options]\n"
-        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector\n"
+        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
         << "  --prefill-start N   First P-stage position (resume support)\n"
-        << "  --profile small|medium|qwen-layer|qwen2.5-3b\n"
+        << "  --profile small|medium|qwen-layer|qwen-layer-long|qwen2.5-3b\n"
         << "  --xclbin <file>          Required for run/generate\n"
         << "  --data <dir>             Packed Fix16 model directory\n"
         << "  --tokens <id,id,...>     Prompt token IDs\n"
@@ -5808,11 +6722,15 @@ int main(int argc, const char* argv[]) {
             command.mode != "profile-attention-sublayer" &&
             command.mode != "profile-ffn-sublayer" &&
             command.mode != "profile-prefill-block" &&
-            command.mode != "profile-prefill-vector"
+            command.mode != "profile-prefill-vector" &&
+            command.mode != "diagnose-prefill-softmax"
         ) {
             throw std::runtime_error("unknown --mode " + command.mode);
         }
-        if (command.xclbin.empty()) {
+        if (
+            command.mode != "diagnose-prefill-softmax" &&
+            command.xclbin.empty()
+        ) {
             throw std::runtime_error("--xclbin is required for run/generate");
         }
         if (command.profile != kDeviceProfile) {
@@ -5881,6 +6799,7 @@ int main(int argc, const char* argv[]) {
                 command.mode == "profile-ffn-sublayer" ||
                 command.mode == "profile-prefill-block" ||
                 command.mode == "profile-prefill-vector" ||
+                command.mode == "diagnose-prefill-softmax" ||
                 command.random_model
             )
         ) {
@@ -5892,6 +6811,15 @@ int main(int argc, const char* argv[]) {
                 command.tie_embeddings,
                 command.mode == "generate"
             );
+        }
+        if (command.mode == "diagnose-prefill-softmax") {
+            return run_prefill_softmax_diagnostic(
+                shape,
+                model,
+                command.attention_prefill_len,
+                command.attention_prefill_start,
+                command.random_seed
+            ) ? 0 : 1;
         }
         accelerator_t accelerator(
             shape,
@@ -6031,6 +6959,7 @@ int main(int argc, const char* argv[]) {
                 model,
                 accelerator,
                 command.attention_prefill_len,
+                command.attention_prefill_start,
                 command.random_seed
             ) ? 0 : 1;
         }

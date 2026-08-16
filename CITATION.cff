@@ -2,6 +2,8 @@ cff-version: 1.2.0
 message: "If you use LLM-ACCEL in academic work, please cite this repository."
 title: "LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution"
 type: software
+version: 0.3.0
+date-released: 2026-08-16
 authors:
   - family-names: "TruNcat3"
     alias: "TruNcat3"

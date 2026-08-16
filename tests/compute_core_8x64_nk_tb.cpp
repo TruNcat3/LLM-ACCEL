@@ -567,6 +567,66 @@ static int run_two_mm_task_zero_case() {
     return errors;
 }
 
+static int run_long_task_bound_case() {
+    hls::stream<cu8_nk_vector_word_t> out_stream;
+    hls::stream<cu8_nk_task_word_t> task_stream;
+    hls::stream<cu8_nk_activation_word_t> activation_stream;
+    hls::stream<cu8_nk_weight_word_t> weight_stream0;
+    hls::stream<cu8_nk_weight_word_t> weight_stream1;
+    hls::stream<cu8_nk_weight_word_t> weight_stream2;
+    hls::stream<cu8_nk_weight_word_t> weight_stream3;
+    hls::stream<cu8_nk_vector_word_t> vector_input0_stream;
+    hls::stream<cu8_nk_vector_word_t> vector_input1_stream;
+
+    // Mode 15 intentionally exercises the vector switch default without
+    // consuming data.  The final task is placed at the exact configured RTL
+    // bound, proving that a 2048-token attention launch can be fully drained.
+    for (unsigned int task_idx = 0;
+         task_idx < CU8_MAX_TASKS_PER_LAUNCH;
+         task_idx++) {
+        cu8_task_t task;
+        task.mode = static_cast<cu8_mode_t>(15);
+        task.result_policy = CU8_RESULT_RELEASE;
+        task.k_count = 0;
+        task.token_count = 0;
+        task.elem_count = 0;
+        task.packet_count = 0;
+        task.elem_base = 0;
+        task.block_id = task_idx;
+        task.repeat_count = 1;
+        task.elem_stride = 0;
+        task.block_stride = 0;
+        task.output_scale = fm_t(1);
+        task.last_task = task_idx + 1 == CU8_MAX_TASKS_PER_LAUNCH;
+        task_stream.write(pack_cu8_nk_task(task));
+    }
+
+    compute_core_8x64_unified_nk(
+        out_stream,
+        task_stream,
+        activation_stream,
+        weight_stream0,
+        weight_stream1,
+        weight_stream2,
+        weight_stream3,
+        vector_input0_stream,
+        vector_input1_stream
+    );
+
+    if (!task_stream.empty() || !out_stream.empty()) {
+        std::printf(
+            "COMPUTE CORE 8X64 NK LONG TASK BOUND FAIL max_tasks=%u\n",
+            CU8_MAX_TASKS_PER_LAUNCH
+        );
+        return 1;
+    }
+    std::printf(
+        "COMPUTE CORE 8X64 NK LONG TASK BOUND PASS max_tasks=%u\n",
+        CU8_MAX_TASKS_PER_LAUNCH
+    );
+    return 0;
+}
+
 int main() {
     int errors = 0;
     errors += run_silu_mul_case();
@@ -574,6 +634,9 @@ int main() {
     errors += run_mm_zero_case();
     errors += run_mm_repeat_zero_case();
     errors += run_two_mm_task_zero_case();
+    if (CU8_MAX_TASKS_PER_LAUNCH > 256) {
+        errors += run_long_task_bound_case();
+    }
 
     std::printf(
         "COMPUTE CORE 8X64 NK CSIM %s\n",

@@ -37,6 +37,7 @@ No result in this document is a physical-board measurement.
 | Resident-layer hw_emu | Full standard layer, random fixed-point weights, position 0 | PASS, 2048 outputs bit exact |
 | 2-token prefill hw_emu | Full standard projections, attention, and FFN | PASS |
 | 8-token prefill hw_emu | Full standard projections, positions 0-7 causal attention, and FFN | PASS |
+| Q2.14 P/D length sweep | Final 8-token P block and next-token D at contexts 64/256/512/1024 | 8/8 PASS |
 
 The 8-token run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -88,7 +89,7 @@ Moving from one to two tiles increases cycles by 1.95x, close to the doubled
 padded work. The low valid-MAC utilization at context 65 reflects one valid
 entry in the second 64-entry tile, not a protocol stall.
 
-## 7. Eight-token prefill
+## 7. Eight-token prefill baseline
 
 ### Functional workload
 
@@ -149,7 +150,47 @@ duplicated GBUF state.
 For comparison, the resource-pruned resident `.cw1` controller estimates
 3.746 ns, 488 BRAM18, 90 DSP, 421,880 FF, and 390,283 LUT.
 
-## 8. Interpretation
+## 8. Q2.14 multi-length P/D sweep
+
+The Q2.14 implementation was exercised with deterministic non-zero weights,
+activations, and KV fixtures at four context lengths. Prefill measures the
+final 8-token query block; Decode measures one new token.
+
+| Phase | Context | Active query tokens | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| P | 64 | 8 | 637,103 | 3.1855 ms | 194.174 | 94.812% |
+| P | 256 | 8 | 685,489 | 3.4274 ms | 182.304 | 89.016% |
+| P | 512 | 8 | 749,407 | 3.7470 ms | 168.994 | 82.516% |
+| P | 1024 | 8 | 877,846 | 4.3892 ms | 148.090 | 72.310% |
+| D | 64 | 1 | 568,040 | 2.8402 ms | 27.229 | 13.296% |
+| D | 256 | 1 | 590,794 | 2.9540 ms | 26.447 | 12.913% |
+| D | 512 | 1 | 622,231 | 3.1112 ms | 25.448 | 12.426% |
+| D | 1024 | 1 | 683,754 | 3.4188 ms | 23.771 | 11.607% |
+
+Every Q2.14 bit-accurate comparison passed. The maximum raw error was 1;
+comparisons against the higher-precision attention reference also passed with
+a maximum raw error of 5. Task and result-packet counts matched in all cases.
+
+The `Tokens` column is the active query-block height, not total prompt length.
+P1024 covers positions 1016--1023; it is the final-block cost and not the sum
+of all 128 blocks in a complete 1024-token prefill.
+
+### Measurement boundary
+
+The host currently invokes the hardware operators composing the layer. The
+reported cycle count sums their controller-kernel active intervals. The main
+dense, vector, and attention arithmetic is on the FPGA, but the profile host
+still performs operator sequencing, RoPE/test-fixture packing, historical KV
+preload, projection-to-cache fixture migration, and CPU golden checks. Those
+host operations and transfer gaps are not timed.
+
+Accordingly, these numbers measure accelerator datapath efficiency and
+context scaling; they are not PCIe-inclusive end-to-end inference latency.
+The raw `profile_kernels.csv` files and validation logs are published under
+[`results/q214-pd-20260811/`](../results/q214-pd-20260811/), with the complete
+interpretation in [Q2.14 P/D sweep](q214-pd-length-hwemu.md).
+
+## 9. Interpretation
 
 The combined results support three conclusions:
 
@@ -161,25 +202,31 @@ The combined results support three conclusions:
    schedule is fast and correct but must be compiled into the pruned resident
    controller before physical implementation.
 
-## 9. Current experimental boundaries
+## 10. Current experimental boundaries
 
-- Prefill covers one 8-token block and positions 0-7 in the first 64-entry
-  attention tile.
+- Prefill now covers a final 8-token block through a 1024-entry context, but a
+  complete prompt is not replayed block by block in hardware emulation.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
   embedding, final normalization, LM head, sampling, long-context growth, and
   inter-layer effects; it is therefore not reported as end-to-end throughput.
 - Hardware-emulation CPU wall time is not accelerator latency.
+- Operator-level host scheduling and data-transfer gaps are excluded from the
+  published active-cycle totals.
 - Final frequency, routing, power, and physical throughput require a completed
   implementation experiment.
 
-## 10. Next experiments
+## 11. Next experiments
 
-1. Compile the verified 8-token schedule into a resource-pruned resident
-   prefill layer and repeat synthesis, deadlock-on CoSim, and hw_emu.
-2. Sweep multiple 8-token blocks and attention tile counts to quantify
-   long-context behavior.
-3. Replace the Flash-PV II=4 dependence with banked/interleaved accumulation.
-4. Evaluate multi-request row batching for M=1 decode.
-5. Run place-and-route and physical measurements for the pruned configuration.
+1. Define coarse host-visible tasks such as attention-sublayer, FFN-sublayer,
+   and layer-finalize instead of exposing individual operators.
+2. Let the controller autonomously expand each task into a static subgraph,
+   retaining intermediate tensors in ping-pong GBUFs or HBM according to an
+   explicit residency policy.
+3. Move RoPE and projection-to-KV-cache handoff into the controller so the KV
+   cache is updated without host migration.
+4. Compose multiple coarse tasks in the host to run a true end-to-end decoder
+   path, and report both kernel-active and host-observed latency.
+5. Repeat deadlock-on CoSim and multi-length hw_emu before physical
+   implementation; then evaluate multi-request row batching for M=1 decode.

@@ -567,7 +567,62 @@ static int check_resident_layer_result(unsigned int position) {
 #endif
 
 int main() {
-#ifdef CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM
+#ifdef CC8_CLOSED_LOOP_PREFILL_BLOCK_COSIM
+    clear_test_data();
+    const unsigned int query_begin = CC8_ATTN_TILE;
+    const unsigned int token_count = MM_STREAM_8X64_TOKENS;
+    call_closed_loop(
+        CC8_OP_ATTN_PREFILL_BLOCK,
+        token_count,
+        query_begin
+    );
+    int errors = 0;
+    for (unsigned int word = 0;
+         word < token_count * GQA_GROUP_SIZE * CC8_HEAD_WORDS;
+         word++) {
+        if (output_port0[word] != fm_word_t(0) ||
+            output_port1[word] != fm_word_t(0)) {
+            if (errors < 8) {
+                std::printf("PREFILL BLOCK output mismatch word=%u\n", word);
+            }
+            errors++;
+        }
+    }
+    const fm_word_t status_word = status_output[0];
+    const unsigned int expected_tasks =
+        CC8_MM_CORE_COUNT *
+        ceildiv(query_begin + token_count, CC8_ATTN_TILE) *
+        GQA_GROUP_SIZE * (1 + CC8_ATTN_PV_WAVES);
+    if (status_word.range(31, 0).to_uint() !=
+            unsigned(CC8_OP_ATTN_PREFILL_BLOCK) ||
+        status_word.range(63, 32).to_uint() != unsigned(CC8_STATUS_OK) ||
+        status_word.range(95, 64).to_uint() != token_count ||
+        status_word.range(159, 128).to_uint() != expected_tasks ||
+        status_word.range(223, 192).to_uint() !=
+            expected_tasks * MM_STREAM_8X64_PACKETS_PER_BLOCK ||
+        !status_word[224]) {
+        std::printf(
+            "PREFILL BLOCK status mismatch op=%u status=%u tokens=%u waves=%u mm=%u/%u vec=%u packets=%u/%u last=%u\n",
+            status_word.range(31, 0).to_uint(),
+            status_word.range(63, 32).to_uint(),
+            status_word.range(95, 64).to_uint(),
+            status_word.range(127, 96).to_uint(),
+            status_word.range(159, 128).to_uint(),
+            expected_tasks,
+            status_word.range(191, 160).to_uint(),
+            status_word.range(223, 192).to_uint(),
+            expected_tasks * MM_STREAM_8X64_PACKETS_PER_BLOCK,
+            unsigned(status_word[224])
+        );
+        errors++;
+    }
+    std::printf(
+        "CLOSED LOOP 8X64 PREFILL BLOCK RTL COSIM %s tiles=%u\n",
+        errors == 0 ? "PASS" : "FAIL",
+        ceildiv(query_begin + token_count, CC8_ATTN_TILE)
+    );
+    return errors == 0 ? 0 : 1;
+#elif defined(CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM)
     clear_test_data();
     initialize_resident_layer_aux();
     constexpr unsigned int position = 0;

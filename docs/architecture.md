@@ -33,7 +33,7 @@ out of the arithmetic islands.
 
 ```mermaid
 flowchart TB
-    API[Host command] --> CTRL[Control/cache kernel]
+    API[Host task sequence] --> CTRL[Control/cache kernel]
     MEM[(Weights, activations, KV cache)] <--> CTRL
     CTRL -->|fixed-width input packets| CU0[8x64 CU 0]
     CTRL -->|fixed-width input packets| CU1[8x64 CU 1]
@@ -130,7 +130,31 @@ automatically better: they cost storage, enlarge backpressure networks, and can
 worsen placement. Every change to stream depth or stage overlap is required to
 pass closed-loop RTL CoSim with deadlock detection enabled.
 
-## 7. Resident decoder schedule
+## 7. Coarse-task execution model
+
+The intended runtime boundary is deliberately between two extremes. The host
+does not submit matrix tiles, but the controller is also not required to run
+an entire model from one command. The host composes a sequence of coarse
+compute tasks; each task expands inside the controller into a static resident
+subgraph.
+
+| Host-visible task | Controller-resident subgraph | Persistent state |
+| --- | --- | --- |
+| Attention sublayer | RMSNorm, Q/K/V, RoPE, KV append/read, tiled online attention, O projection, residual | hidden handle, layer/position, KV length and cache addresses |
+| FFN sublayer | RMSNorm, Gate/Up, SiLU multiply, Down, residual | input/output residency and ping-pong GBUF selection |
+| Finalize/output | Commit selected hidden block and status | output address, checksum/counters |
+
+This task granularity supports host-level composition across layers, requests,
+and sampling policy while keeping PCIe out of intermediate-tensor and KV-cache
+traffic. Task descriptors carry tensor addresses/handles and shape metadata;
+controller status records completion and the next valid residency state.
+
+The published Q2.14 profile still uses the host to invoke individual operators
+for visibility and golden checking. Converting that diagnostic path into the
+coarse tasks above is the next implementation stage, not a property claimed by
+the current performance table.
+
+### Resident subgraph schedule
 
 A controller layer task expands into a static sequence:
 
@@ -151,8 +175,10 @@ attention RMSNorm
 ```
 
 Each result has an explicit policy: commit to external memory, retain in the
-GBUF for a following operator, or release. A production layer task therefore
-does not require host round trips between operators.
+GBUF for a following operator, or release. A coarse task therefore does not
+require host round trips between operators inside its subgraph. The host may
+submit the following coarse task using the resident output handle rather than
+copying the tensor through host memory.
 
 ## 8. Online attention and KV-cache ownership
 

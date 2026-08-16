@@ -6,7 +6,7 @@ proc llm_fpga_model_profile {} {
     }
 
     switch -- $profile {
-        small - medium - weight-chunk - qwen-layer - qwen2.5-3b {
+        small - medium - weight-chunk - qwen-layer - qwen-layer-long - qwen2.5-3b {
             return $profile
         }
         default {
@@ -21,6 +21,7 @@ proc llm_fpga_model_tag {} {
         medium { return medium }
         weight-chunk { return weight_chunk }
         qwen-layer { return qwen_layer }
+        qwen-layer-long { return qwen_layer_long }
         qwen2.5-3b { return qwen2_5_3b }
     }
 }
@@ -31,6 +32,7 @@ proc llm_fpga_model_cflags {} {
         medium { return " -DQWEN_TEST_COSIM_MEDIUM" }
         weight-chunk { return " -DQWEN_TEST_WEIGHT_CHUNK" }
         qwen-layer { return " -DQWEN_TEST_QWEN_LAYER" }
+        qwen-layer-long { return " -DQWEN_TEST_QWEN_LAYER_LONG" }
         qwen2.5-3b { return "" }
     }
 }

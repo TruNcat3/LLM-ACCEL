@@ -26,6 +26,7 @@ not supplied.
 | `small` | Fast software/HLS development |
 | `medium` | Larger protocol and pipeline checks |
 | `qwen-layer` | Standard one-layer shape: 2048/11008 |
+| `qwen-layer-long` | One-layer long-context profile with `max_seq_len=2048` |
 | `qwen2.5-3b` | Full-model layout configuration |
 
 Select a profile with `VITIS_8X64_MODEL_PROFILE`. Generated artifacts are
@@ -113,6 +114,33 @@ The prefill profile is intentionally diagnostic: it performs operator-level
 golden checks and should not be interpreted as a resource-pruned deployment
 image.
 
+### Run the Q2.14 P/D context-length sweep
+
+Build the prefill-specialized hardware-emulation image and host:
+
+```bash
+VITIS_8X64_MODEL_PROFILE=qwen-layer-long \
+CC8_PREFILL_VARIANT=q214exp18 \
+scripts/build_vitis_8x64_prefill_eval_hwemu.sh all
+```
+
+Then launch one isolated hardware-emulation process per phase/length:
+
+```bash
+scripts/launch_vitis_8x64_pd_sweep_tmux.sh \
+  --prefix q214_pd \
+  --build-dir <generated-hw_emu-build> \
+  --profile qwen-layer-long \
+  --seed 20260722
+
+scripts/watch_vitis_8x64_pd_sweep_tmux.sh q214_pd 3600
+```
+
+The sweep covers P/D at contexts 64, 256, 512, and 1024. Prefill runs the
+final 8-token block at each length; Decode runs one new token. The publication
+artifact and expected tables are in
+[`results/q214-pd-20260811/`](../results/q214-pd-20260811/).
+
 ## 4. Pipeline parameters
 
 | Variable | Default research setting | Meaning |
@@ -149,7 +177,9 @@ end with `PASS` and process the expected task and packet counts.
 ### Hardware-emulation cycles
 
 Use `profile_kernels.csv` from the simulation directory. The `Running Time`
-field is simulated kernel-active time. Convert it with the clock embedded in
+field is simulated kernel-active time. The Q2.14 layer profile contains
+multiple host-submitted hardware operator calls, so the published number is
+the accumulated controller active time. Convert it with the clock embedded in
 the xclbin:
 
 ```text
@@ -158,6 +188,11 @@ cycles = running_time_us * frequency_MHz
 
 Do not use XSim CPU wall time as accelerator latency. Hardware emulation can
 take hours while simulating only milliseconds of device time.
+
+The active-cycle number excludes host scheduling gaps, buffer migration,
+CPU-side RoPE/test-fixture packing, KV fixture preload, and golden checks. Use
+host-observed elapsed time separately when evaluating the future coarse-task
+end-to-end runtime.
 
 ### HLS reports
 
@@ -181,6 +216,7 @@ The published standard experiments use deterministic seeds:
 | --- | ---: | --- |
 | Resident single-token layer | 20260718 | 2048 outputs match bit-for-bit |
 | 8-token prefill | 20260722 | final checksum `0xb72a92cb5224f0c7` |
+| Q2.14 P/D length sweep | 20260722 | 8/8 exits zero; Q2.14 max raw error <= 1 |
 
 The 8-token run must also report 48 attention MM tasks and 1536 completed
 packets.
