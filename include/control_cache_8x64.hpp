@@ -208,7 +208,13 @@ enum cc8_operator_t {
     CC8_OP_ATTN_FLASH = 14,
     CC8_OP_DECODE_SMOKE = 15,
     CC8_OP_DECODER_LAYER = 16,
-    CC8_OP_ATTN_PREFILL_BLOCK = 17
+    CC8_OP_ATTN_PREFILL_BLOCK = 17,
+    // Coarse host-visible tasks.  Each task keeps all internal tensors in
+    // controller-local buffers; only the sublayer boundary is materialized
+    // in HBM so the host can compose tasks without copying intermediates.
+    CC8_OP_ATTENTION_SUBLAYER = 18,
+    CC8_OP_FFN_SUBLAYER = 19,
+    CC8_OP_FINAL_NORM = 20
 };
 
 enum cc8_status_code_t {

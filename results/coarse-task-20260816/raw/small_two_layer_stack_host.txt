@@ -1,0 +1,9 @@
+profile=small
+mode=verify-composed-stack
+seed=20260718
+position=0
+RANDOM task_composed_decoder_stack PASS values=64 max_raw_error=0 tolerance=32
+TASK_COMPOSED_STACK_VERIFY seed=20260718 position=0 attention_op=18 ffn_op=19 final_norm_op=20 layers=2 tasks=5 expected_tasks=5 intermediate_host_copy=0 attention_controller_ms=52007.4 ffn_controller_ms=38005.3 final_norm_controller_ms=7000.78 kernel_active_ms=97013.4 input_migration_ms=65.3498 auxiliary_migration_ms=106.329 status_kernel_ms=10001.4 status_migration_ms=110.804 output_migration_ms=42.6233 profiled_sequence_ms=107340 host_elapsed_ms=112388 PASS
+
+HW-Emu event and host durations above are simulator wall-time proxies. The
+authoritative modeled interval is in small_two_layer_stack_profile_kernels.csv.

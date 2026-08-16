@@ -112,6 +112,9 @@ bool cc8_get_operator_spec(
         spec.out_dim = HEAD_DIM;
         return true;
     case CC8_OP_DECODER_LAYER:
+    case CC8_OP_ATTENTION_SUBLAYER:
+    case CC8_OP_FFN_SUBLAYER:
+    case CC8_OP_FINAL_NORM:
         // The resident layer path uses a fixed descriptor sequence rather
         // than dispatching one of the individual operator specifications.
         return true;
@@ -5860,10 +5863,14 @@ void control_cache_8x64_dual_core(
     #pragma HLS array_partition variable=gbuf1.block complete dim=1
 
 #if !defined(CC8_PREFILL_LAYER_ONLY)
-    if (op == CC8_OP_DECODER_LAYER) {
-        // V1 resident scheduling is the single-token decode layer.  Prefill
-        // reuses the same datapath in token tiles once this closed loop is
-        // validated in hw_emu.
+    cc8_hidden_buffer_t hidden0;
+    cc8_hidden_buffer_t hidden1;
+    #pragma HLS bind_storage variable=hidden0.block type=ram_2p impl=bram
+    #pragma HLS bind_storage variable=hidden1.block type=ram_2p impl=bram
+    #pragma HLS array_partition variable=hidden0.block complete dim=1
+    #pragma HLS array_partition variable=hidden1.block complete dim=1
+
+    if (op == CC8_OP_FINAL_NORM) {
         if (token_count != 1) {
             status.status = CC8_STATUS_BAD_TOKEN_COUNT;
             core0_task_stream.write(build_cc8_stop_task());
@@ -5871,45 +5878,6 @@ void control_cache_8x64_dual_core(
             status_stream.write(status);
             return;
         }
-        if (position >= MAX_SEQ_LEN) {
-            status.status = CC8_STATUS_BAD_POSITION;
-            core0_task_stream.write(build_cc8_stop_task());
-            core1_task_stream.write(build_cc8_stop_task());
-            status_stream.write(status);
-            return;
-        }
-
-        cc8_hidden_buffer_t hidden0;
-        cc8_hidden_buffer_t hidden1;
-        cc8_resident_query_buffer_t query0;
-        cc8_resident_query_buffer_t query1;
-        cc8_resident_k_buffer_t current_k;
-        cc8_current_kv_words_t current_v_words;
-        #pragma HLS bind_storage variable=hidden0.block type=ram_2p impl=bram
-        #pragma HLS bind_storage variable=hidden1.block type=ram_2p impl=bram
-        #pragma HLS bind_storage variable=query0.value type=ram_2p impl=bram
-        #pragma HLS bind_storage variable=query1.value type=ram_2p impl=bram
-        #pragma HLS bind_storage variable=current_k.value type=ram_2p impl=bram
-        #pragma HLS array_partition variable=hidden0.block complete dim=1
-        #pragma HLS array_partition variable=hidden1.block complete dim=1
-        #pragma HLS array_partition variable=query0.value complete dim=1
-        #pragma HLS array_partition variable=query0.value complete dim=2
-        #pragma HLS array_partition variable=query1.value complete dim=1
-        #pragma HLS array_partition variable=query1.value complete dim=2
-        #pragma HLS array_partition variable=current_k.value complete dim=1
-        #pragma HLS array_partition variable=current_k.value complete dim=2
-        #pragma HLS array_partition variable=current_v_words.word complete dim=0
-
-        unsigned int total_mm_tasks = 0;
-        unsigned int total_vector_tasks = 0;
-        unsigned int total_packets = 0;
-        unsigned int total_wave_slots = 0;
-        weight_addr_t layer_base =
-            weight_addr_t(layer_id) * weight_addr_t(LAYER_WEIGHT_SIZE);
-
-        // Stage 0/1: bulk-load hidden and the first norm row, then normalize
-        // entirely on chip.  aux0 also carries the position-specific RoPE
-        // cosine/sine table after the norm row.
         load_cc8_feature_gbuf(
             hidden0,
             input_port0,
@@ -5926,7 +5894,7 @@ void control_cache_8x64_dual_core(
             1,
             HIDDEN_SIZE
         );
-        total_vector_tasks += run_cc8_vector_gbuf_task(
+        status.dispatched_vector_tasks = run_cc8_vector_gbuf_task(
             core0_task_stream,
             core0_vector_input0_stream,
             core0_vector_input1_stream,
@@ -5944,17 +5912,161 @@ void control_cache_8x64_dual_core(
             HIDDEN_SIZE,
             1,
             1,
-            false
+            true
         );
+        status.completed_output_packets =
+            ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+        store_cc8_gbuf_to_hbm(
+            output_port0,
+            output_port1,
+            hidden1,
+            HIDDEN_SIZE
+        );
+        status_stream.write(status);
+        return;
+    }
+
+    const bool resident_layer_task =
+        op == CC8_OP_DECODER_LAYER ||
+        op == CC8_OP_ATTENTION_SUBLAYER ||
+        op == CC8_OP_FFN_SUBLAYER;
+    if (resident_layer_task) {
+        // The controller exposes both a compatibility full-layer task and
+        // two coarse sublayer tasks.  Attention writes its residual state to
+        // HBM; a following FFN task reads that device-resident state through
+        // a host-side buffer rebind, without a CPU copy.  All tensors inside
+        // either sublayer remain in the local hidden/wide banks.
+        if (token_count != 1) {
+            status.status = CC8_STATUS_BAD_TOKEN_COUNT;
+            core0_task_stream.write(build_cc8_stop_task());
+            core1_task_stream.write(build_cc8_stop_task());
+            status_stream.write(status);
+            return;
+        }
+        if (position >= MAX_SEQ_LEN) {
+            status.status = CC8_STATUS_BAD_POSITION;
+            core0_task_stream.write(build_cc8_stop_task());
+            core1_task_stream.write(build_cc8_stop_task());
+            status_stream.write(status);
+            return;
+        }
+
+        cc8_resident_query_buffer_t query0;
+        cc8_resident_query_buffer_t query1;
+        cc8_resident_k_buffer_t current_k;
+        cc8_current_kv_words_t current_v_words;
+        #pragma HLS bind_storage variable=query0.value type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=query1.value type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=current_k.value type=ram_2p impl=bram
+        #pragma HLS array_partition variable=query0.value complete dim=1
+        #pragma HLS array_partition variable=query0.value complete dim=2
+        #pragma HLS array_partition variable=query1.value complete dim=1
+        #pragma HLS array_partition variable=query1.value complete dim=2
+        #pragma HLS array_partition variable=current_k.value complete dim=1
+        #pragma HLS array_partition variable=current_k.value complete dim=2
+        #pragma HLS array_partition variable=current_v_words.word complete dim=0
+
+        unsigned int total_mm_tasks = 0;
+        unsigned int total_vector_tasks = 0;
+        unsigned int total_packets = 0;
+        unsigned int total_wave_slots = 0;
+        weight_addr_t layer_base =
+            weight_addr_t(layer_id) * weight_addr_t(LAYER_WEIGHT_SIZE);
+
+        // Attention/full-layer starts with hidden0 -> hidden1.  Standalone
+        // FFN deliberately loads the HBM sublayer boundary into hidden1 and
+        // normalizes to hidden0, which recreates exactly the bank state at
+        // projection step 4 of the full resident schedule.
+        const bool starts_with_attention =
+            op != CC8_OP_FFN_SUBLAYER;
+        if (starts_with_attention) {
+            load_cc8_feature_gbuf(
+                hidden0,
+                input_port0,
+                input_port1,
+                LINEAR_TOKEN_TILE_ACTIVE,
+                token_count,
+                HIDDEN_SIZE
+            );
+            load_cc8_feature_gbuf(
+                gbuf0,
+                aux_port0,
+                aux_port0,
+                1,
+                1,
+                HIDDEN_SIZE
+            );
+            total_vector_tasks += run_cc8_vector_gbuf_task(
+                core0_task_stream,
+                core0_vector_input0_stream,
+                core0_vector_input1_stream,
+                core0_result_stream,
+                core1_task_stream,
+                core1_vector_input0_stream,
+                core1_vector_input1_stream,
+                core1_result_stream,
+                hidden0,
+                gbuf0,
+                hidden1,
+                CC8_OP_RMSNORM,
+                CU8_MODE_RMSNORM,
+                token_count,
+                HIDDEN_SIZE,
+                1,
+                1,
+                false
+            );
+        } else {
+            load_cc8_feature_gbuf(
+                hidden1,
+                input_port0,
+                input_port1,
+                LINEAR_TOKEN_TILE_ACTIVE,
+                token_count,
+                HIDDEN_SIZE
+            );
+            load_cc8_feature_gbuf(
+                gbuf1,
+                aux_port1,
+                aux_port1,
+                1,
+                1,
+                HIDDEN_SIZE
+            );
+            total_vector_tasks += run_cc8_vector_gbuf_task(
+                core0_task_stream,
+                core0_vector_input0_stream,
+                core0_vector_input1_stream,
+                core0_result_stream,
+                core1_task_stream,
+                core1_vector_input0_stream,
+                core1_vector_input1_stream,
+                core1_result_stream,
+                hidden1,
+                gbuf1,
+                hidden0,
+                CC8_OP_RMSNORM,
+                CU8_MODE_RMSNORM,
+                token_count,
+                HIDDEN_SIZE,
+                1,
+                1,
+                false
+            );
+        }
         total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
 
         // Stages 2-5 share one physical projection engine.  Keeping the
         // call at one syntactic site prevents HLS from cloning the complete
         // 16-shard weight loader for hidden and FFN buffer port shapes.
-        for (unsigned int projection_step = 0;
-             projection_step < 7;
+        const unsigned int projection_begin =
+            op == CC8_OP_FFN_SUBLAYER ? 4 : 0;
+        const unsigned int projection_end =
+            op == CC8_OP_ATTENTION_SUBLAYER ? 4 : 7;
+        for (unsigned int projection_step = projection_begin;
+             projection_step < projection_end;
              projection_step++) {
-            #pragma HLS loop_tripcount min=7 max=7
+            #pragma HLS loop_tripcount min=3 max=7
 
             mm_projection_kind_t projection =
                 projection_step == 0 ? MM_PROJECTION_Q :
@@ -6125,39 +6237,41 @@ void control_cache_8x64_dual_core(
                     HIDDEN_SIZE,
                     token_count,
                     token_count,
-                    false
+                    op == CC8_OP_ATTENTION_SUBLAYER
                 );
                 total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
 
-                load_cc8_feature_gbuf(
-                    gbuf1,
-                    aux_port1,
-                    aux_port1,
-                    1,
-                    1,
-                    HIDDEN_SIZE
-                );
-                total_vector_tasks += run_cc8_vector_gbuf_task(
-                    core0_task_stream,
-                    core0_vector_input0_stream,
-                    core0_vector_input1_stream,
-                    core0_result_stream,
-                    core1_task_stream,
-                    core1_vector_input0_stream,
-                    core1_vector_input1_stream,
-                    core1_result_stream,
-                    hidden1,
-                    gbuf1,
-                    hidden0,
-                    CC8_OP_RMSNORM,
-                    CU8_MODE_RMSNORM,
-                    token_count,
-                    HIDDEN_SIZE,
-                    1,
-                    1,
-                    false
-                );
-                total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+                if (op != CC8_OP_ATTENTION_SUBLAYER) {
+                    load_cc8_feature_gbuf(
+                        gbuf1,
+                        aux_port1,
+                        aux_port1,
+                        1,
+                        1,
+                        HIDDEN_SIZE
+                    );
+                    total_vector_tasks += run_cc8_vector_gbuf_task(
+                        core0_task_stream,
+                        core0_vector_input0_stream,
+                        core0_vector_input1_stream,
+                        core0_result_stream,
+                        core1_task_stream,
+                        core1_vector_input0_stream,
+                        core1_vector_input1_stream,
+                        core1_result_stream,
+                        hidden1,
+                        gbuf1,
+                        hidden0,
+                        CC8_OP_RMSNORM,
+                        CU8_MODE_RMSNORM,
+                        token_count,
+                        HIDDEN_SIZE,
+                        1,
+                        1,
+                        false
+                    );
+                    total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+                }
             } else if (projection_step == 5) {
                 // Gate may be overwritten once both Gate and Up packets have
                 // been accepted; the packet handshake keeps this II=1.
@@ -6203,12 +6317,21 @@ void control_cache_8x64_dual_core(
                 total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
             }
         }
-        store_cc8_gbuf_to_hbm(
-            output_port0,
-            output_port1,
-            hidden0,
-            HIDDEN_SIZE
-        );
+        if (op == CC8_OP_ATTENTION_SUBLAYER) {
+            store_cc8_gbuf_to_hbm(
+                output_port0,
+                output_port1,
+                hidden1,
+                HIDDEN_SIZE
+            );
+        } else {
+            store_cc8_gbuf_to_hbm(
+                output_port0,
+                output_port1,
+                hidden0,
+                HIDDEN_SIZE
+            );
+        }
         status.output_waves = total_wave_slots;
         status.dispatched_mm_tasks = total_mm_tasks;
         status.dispatched_vector_tasks = total_vector_tasks;

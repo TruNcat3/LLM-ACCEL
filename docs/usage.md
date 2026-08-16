@@ -99,6 +99,39 @@ Equivalent model-level host arguments are:
 --position 0
 ```
 
+### Run the coarse-task resident runtime
+
+The same image exposes an Attention+FFN pair and a complete selected-profile
+stack followed by final RMSNorm:
+
+```bash
+# Task 18 -> Task 19, standard Qwen layer dimensions by default.
+VITIS_8X64_MODEL_PROFILE=qwen-layer \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed
+
+# Two layers and Task 20 in the small cross-layer contract profile.
+VITIS_8X64_MODEL_PROFILE=small \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+VITIS_8X64_MODEL_PROFILE=small \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
+```
+
+The corresponding host modes are `verify-composed-layer` and
+`verify-composed-stack`. A passing stack reports `2 * layers + 1` tasks,
+`intermediate_host_copy=0`, and a passing CPU fixed-point final-hidden check.
+The normal `run` and `generate` paths select the same runtime with
+`--coarse-tasks`.
+
+The closed-loop finite-FIFO checks are:
+
+```bash
+make hls_csim_closed_loop_8x64_composed_layer
+make hls_cosim_closed_loop_8x64_composed_layer
+```
+
+The CoSim flow keeps deadlock detection enabled and rejects source changes
+between RTL synthesis and simulation by comparing SHA-256 fingerprints.
+
 ### Run the 8-token diagnostic prefill
 
 ```bash
@@ -189,10 +222,12 @@ cycles = running_time_us * frequency_MHz
 Do not use XSim CPU wall time as accelerator latency. Hardware emulation can
 take hours while simulating only milliseconds of device time.
 
-The active-cycle number excludes host scheduling gaps, buffer migration,
-CPU-side RoPE/test-fixture packing, KV fixture preload, and golden checks. Use
-host-observed elapsed time separately when evaluating the future coarse-task
-end-to-end runtime.
+For the Q2.14 diagnostic table, active cycles exclude host scheduling gaps,
+buffer migration, CPU-side RoPE/test-fixture packing, KV fixture preload, and
+golden checks. For the coarse-task runtime, use both the run-local CU interval
+and the host-observed sequence fields. The latter include the initial input,
+per-layer auxiliary migrations, status synchronizations, and final output, but
+remain simulator wall-time proxies under HW Emu.
 
 ### HLS reports
 
@@ -215,6 +250,8 @@ The published standard experiments use deterministic seeds:
 | Experiment | Seed | Expected checkpoint |
 | --- | ---: | --- |
 | Resident single-token layer | 20260718 | 2048 outputs match bit-for-bit |
+| Coarse Task 18/19 layer | 20260718 | golden PASS and `intermediate_host_copy=0` |
+| Coarse two-layer Task 18/19 + Task 20 stack | 20260718 | 5/5 tasks; 64 outputs exact |
 | 8-token prefill | 20260722 | final checksum `0xb72a92cb5224f0c7` |
 | Q2.14 P/D length sweep | 20260722 | 8/8 exits zero; Q2.14 max raw error <= 1 |
 

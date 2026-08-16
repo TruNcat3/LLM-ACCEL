@@ -138,25 +138,27 @@ an entire model from one command. The host composes a sequence of coarse
 compute tasks; each task expands inside the controller into a static resident
 subgraph.
 
-| Host-visible task | Controller-resident subgraph | Persistent state |
-| --- | --- | --- |
-| Attention sublayer | RMSNorm, Q/K/V, RoPE, KV append/read, tiled online attention, O projection, residual | hidden handle, layer/position, KV length and cache addresses |
-| FFN sublayer | RMSNorm, Gate/Up, SiLU multiply, Down, residual | input/output residency and ping-pong GBUF selection |
-| Finalize/output | Commit selected hidden block and status | output address, checksum/counters |
+| ID | Host-visible task | Controller-resident subgraph | Persistent state |
+| ---: | --- | --- | --- |
+| 18 | Attention sublayer | RMSNorm, Q/K/V, RoPE, KV append/read, tiled online attention, O projection, residual | layer/position, KV addresses, hidden HBM pair B -> A |
+| 19 | FFN sublayer | RMSNorm, Gate/Up, SiLU multiply, Down, residual | hidden HBM pair A -> B |
+| 20 | Final RMSNorm | Model-level normalization after the last decoder layer | final hidden HBM pair B -> A |
 
 This task granularity supports host-level composition across layers, requests,
 and sampling policy while keeping PCIe out of intermediate-tensor and KV-cache
 traffic. Task descriptors carry tensor addresses/handles and shape metadata;
 controller status records completion and the next valid residency state.
 
-The published Q2.14 profile still uses the host to invoke individual operators
-for visibility and golden checking. Converting that diagnostic path into the
-coarse tasks above is the next implementation stage, not a property claimed by
-the current performance table.
+The Q2.14 P/D profile remains an operator-level diagnostic path for visibility
+and golden checking. The coarse tasks above are now implemented and validated
+as a separate runtime: closed-loop RTL CoSim passes Tasks 18/19/20, and a
+two-layer/five-task HW-Emu stack passes with no intermediate host copy. Keeping
+the result sets separate prevents the old kernel-only P/D table from being
+misread as coarse-task end-to-end latency.
 
 ### Resident subgraph schedule
 
-A controller layer task expands into a static sequence:
+A Task-18/19 pair expands into the static sequence:
 
 ```text
 attention RMSNorm
@@ -174,11 +176,11 @@ attention RMSNorm
   -> FFN residual
 ```
 
-Each result has an explicit policy: commit to external memory, retain in the
-GBUF for a following operator, or release. A coarse task therefore does not
-require host round trips between operators inside its subgraph. The host may
-submit the following coarse task using the resident output handle rather than
-copying the tensor through host memory.
+Each result has an explicit policy: retain in a GBUF for the following
+operator, materialize the sublayer boundary in one of two HBM feature pairs,
+or release. Task 18 writes pair A, Task 19 consumes A and writes B, and the next
+layer consumes B directly. Only status is returned between tasks; the final
+hidden tensor is migrated once after Task 20.
 
 ## 8. Online attention and KV-cache ownership
 

@@ -2869,6 +2869,283 @@ static int run_resident_decoder_layer_route_case() {
     return errors;
 }
 
+static int check_resident_sublayer_route(
+    cc8_test_streams_t& streams,
+    cc8_operator_t expected_op,
+    unsigned int expected_mm_wave_slots,
+    unsigned int expected_vector_tasks,
+    unsigned int expected_vector_packets,
+    const char* label
+) {
+    int errors = 0;
+    unsigned int core0_tasks = 0;
+    bool saw_core0_last = false;
+    while (!streams.core0_task.empty()) {
+        cu8_task_t task = streams.core0_task.read();
+        core0_tasks++;
+        if (task.last_task) {
+            if (saw_core0_last || !streams.core0_task.empty()) {
+                errors++;
+            }
+            saw_core0_last = true;
+        }
+    }
+    unsigned int core1_tasks = 0;
+    bool saw_core1_stop = false;
+    while (!streams.core1_task.empty()) {
+        cu8_task_t task = streams.core1_task.read();
+        core1_tasks++;
+        if (task.mode == CU8_MODE_STOP) {
+            saw_core1_stop = task.last_task && streams.core1_task.empty();
+        } else if (task.last_task) {
+            errors++;
+        }
+    }
+    const unsigned int expected_core0_tasks =
+        expected_mm_wave_slots + expected_vector_tasks;
+    const unsigned int expected_core1_tasks =
+        expected_mm_wave_slots + 1;
+    if (!saw_core0_last || !saw_core1_stop ||
+        core0_tasks != expected_core0_tasks ||
+        core1_tasks != expected_core1_tasks) {
+        std::printf(
+            "%s task sequence mismatch c0=%u/%u c1=%u/%u last0=%u stop1=%u\n",
+            label,
+            core0_tasks,
+            expected_core0_tasks,
+            core1_tasks,
+            expected_core1_tasks,
+            unsigned(saw_core0_last),
+            unsigned(saw_core1_stop)
+        );
+        errors++;
+    }
+
+    const unsigned int expected_packets =
+        expected_mm_wave_slots * CC8_MM_CORE_COUNT *
+            MM_STREAM_8X64_PACKETS_PER_BLOCK +
+        expected_vector_packets;
+    if (streams.status.empty()) {
+        std::printf("%s status missing\n", label);
+        errors++;
+    } else {
+        cc8_status_packet_t status = streams.status.read();
+        if (status.op != expected_op ||
+            status.status != CC8_STATUS_OK ||
+            status.token_count != 1 ||
+            status.output_waves != expected_mm_wave_slots ||
+            status.dispatched_mm_tasks !=
+                expected_mm_wave_slots * CC8_MM_CORE_COUNT ||
+            status.dispatched_vector_tasks != expected_vector_tasks ||
+            status.completed_output_packets != expected_packets ||
+            !status.last_task) {
+            std::printf(
+                "%s status mismatch op=%u waves=%u mm=%u vec=%u packets=%u/%u\n",
+                label,
+                unsigned(status.op),
+                status.output_waves,
+                status.dispatched_mm_tasks,
+                status.dispatched_vector_tasks,
+                status.completed_output_packets,
+                expected_packets
+            );
+            errors++;
+        }
+    }
+    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+        if (get_output_value(0, elem) != result_value(0, elem)) {
+            if (errors < 8) {
+                std::printf("%s output mismatch elem=%u\n", label, elem);
+            }
+            errors++;
+        }
+    }
+    return errors;
+}
+
+static int run_attention_sublayer_route_case() {
+    clear_data_ports();
+    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+        set_feature_value(
+            input_port0,
+            input_port1,
+            0,
+            elem,
+            input_value(0, elem)
+        );
+        set_fm_word_lane(
+            aux_port0[elem / FM_BLOCK_SIZE],
+            elem % FM_BLOCK_SIZE,
+            fm_t(1)
+        );
+    }
+    for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
+        set_fm_word_lane(
+            aux_port0[CC8_ROPE_COS_WORD_OFFSET + i / FM_BLOCK_SIZE],
+            i % FM_BLOCK_SIZE,
+            fm_t(1)
+        );
+    }
+
+    cc8_test_streams_t streams;
+    preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
+    const mm_projection_kind_t qkv[3] = {
+        MM_PROJECTION_Q,
+        MM_PROJECTION_K,
+        MM_PROJECTION_V
+    };
+    for (unsigned int projection_idx = 0;
+         projection_idx < 3;
+         projection_idx++) {
+        mm_projection_spec_t projection;
+        get_mm_projection_spec(qkv[projection_idx], projection);
+        const unsigned int waves =
+            ceildiv(projection.out_dim, CC8_OUTPUTS_PER_WAVE);
+        for (unsigned int wave = 0; wave < waves; wave++) {
+            preload_mm_results(
+                streams,
+                wave * CC8_OUTPUTS_PER_WAVE,
+                wave * CC8_OUTPUTS_PER_WAVE + MM_STREAM_8X64_OUTPUTS,
+                false
+            );
+        }
+    }
+    preload_attention_constant_results(streams, fm_t(0), 0, 0, false);
+    for (unsigned int wave = 0;
+         wave < ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
+         wave++) {
+        preload_attention_constant_results(
+            streams,
+            fm_t(0),
+            wave * MM_STREAM_8X64_OUTPUTS,
+            wave,
+            false
+        );
+    }
+    mm_projection_spec_t o_projection;
+    get_mm_projection_spec(MM_PROJECTION_ATTN_O, o_projection);
+    for (unsigned int wave = 0;
+         wave < ceildiv(o_projection.out_dim, CC8_OUTPUTS_PER_WAVE);
+         wave++) {
+        preload_mm_results(
+            streams,
+            wave * CC8_OUTPUTS_PER_WAVE,
+            wave * CC8_OUTPUTS_PER_WAVE + MM_STREAM_8X64_OUTPUTS,
+            false
+        );
+    }
+    preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
+
+    call_control_cache(streams, CC8_OP_ATTENTION_SUBLAYER, 1, 0, 0);
+    const unsigned int expected_waves =
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
+        1 + ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+    return check_resident_sublayer_route(
+        streams,
+        CC8_OP_ATTENTION_SUBLAYER,
+        expected_waves,
+        2,
+        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        "attention sublayer"
+    );
+}
+
+static int run_ffn_sublayer_route_case() {
+    clear_data_ports();
+    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+        set_feature_value(
+            input_port0,
+            input_port1,
+            0,
+            elem,
+            input_value(0, elem)
+        );
+        set_fm_word_lane(
+            aux_port1[elem / FM_BLOCK_SIZE],
+            elem % FM_BLOCK_SIZE,
+            fm_t(1)
+        );
+    }
+
+    cc8_test_streams_t streams;
+    preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
+    const mm_projection_kind_t ffn[3] = {
+        MM_PROJECTION_FFN_GATE,
+        MM_PROJECTION_FFN_UP,
+        MM_PROJECTION_FFN_DOWN
+    };
+    for (unsigned int projection_idx = 0;
+         projection_idx < 3;
+         projection_idx++) {
+        mm_projection_spec_t projection;
+        get_mm_projection_spec(ffn[projection_idx], projection);
+        const unsigned int waves =
+            ceildiv(projection.out_dim, CC8_OUTPUTS_PER_WAVE);
+        for (unsigned int wave = 0; wave < waves; wave++) {
+            preload_mm_results(
+                streams,
+                wave * CC8_OUTPUTS_PER_WAVE,
+                wave * CC8_OUTPUTS_PER_WAVE + MM_STREAM_8X64_OUTPUTS,
+                false
+            );
+        }
+        if (projection_idx == 1) {
+            preload_vector_results(
+                streams.core0_result,
+                0,
+                1,
+                INTERMEDIATE_SIZE
+            );
+        }
+    }
+    preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
+
+    call_control_cache(streams, CC8_OP_FFN_SUBLAYER, 1, 0, 0);
+    const unsigned int expected_waves =
+        2 * ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+    return check_resident_sublayer_route(
+        streams,
+        CC8_OP_FFN_SUBLAYER,
+        expected_waves,
+        3,
+        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
+            ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES),
+        "ffn sublayer"
+    );
+}
+
+static int run_final_norm_route_case() {
+    clear_data_ports();
+    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+        set_feature_value(
+            input_port0,
+            input_port1,
+            0,
+            elem,
+            input_value(0, elem)
+        );
+        set_fm_word_lane(
+            aux_port0[elem / FM_BLOCK_SIZE],
+            elem % FM_BLOCK_SIZE,
+            fm_t(1)
+        );
+    }
+    cc8_test_streams_t streams;
+    preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
+    call_control_cache(streams, CC8_OP_FINAL_NORM, 1, 0, 0);
+    return check_resident_sublayer_route(
+        streams,
+        CC8_OP_FINAL_NORM,
+        0,
+        1,
+        ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        "final norm"
+    );
+}
+
 int main() {
 #ifdef CC8_PREFILL_LAYER_TEST_ONLY
     init_weights();
@@ -2942,12 +3219,15 @@ int main() {
     );
     errors += run_attention_argument_validation_cases();
     errors += run_resident_decoder_layer_route_case();
+    errors += run_attention_sublayer_route_case();
+    errors += run_ffn_sublayer_route_case();
+    errors += run_final_norm_route_case();
 
     if (errors != 0) {
         std::printf("CONTROL CACHE 8X64 CSIM FAIL errors=%d\n", errors);
         return 1;
     }
-    std::printf("CONTROL CACHE 8X64 CSIM PASS cases=18\n");
+    std::printf("CONTROL CACHE 8X64 CSIM PASS cases=21\n");
     return 0;
 #endif
 }

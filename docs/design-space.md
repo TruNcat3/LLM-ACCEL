@@ -126,19 +126,23 @@ each tensor to a golden checker. This produces strong functional evidence and
 allows per-stage profiling, but compiling every diagnostic route together
 duplicates controller state and exceeds the target resource budget.
 
-The production candidate uses static resident subgraph tasks:
+The implemented coarse-task runtime uses static resident subgraphs:
 
-1. the host submits an attention-sublayer task for an 8-token feature block;
+1. the host submits Task 18 for an attention sublayer;
 2. the controller executes RMSNorm through attention residual while Q/K/V/O
    intermediates remain resident and the KV cache is updated in HBM;
-3. the host submits an FFN-sublayer task referring to the resident output;
+3. the Task-18 residual is materialized in HBM pair A and the host submits
+   Task 19 referring to that resident output;
 4. the controller executes RMSNorm through FFN residual and commits only the
-   requested output state;
-5. each controller task overlaps the next block load through ping-pong GBUFs.
+   completed layer to HBM pair B;
+5. the following layer consumes pair B without a host copy, and Task 20 applies
+   final RMSNorm after the last layer.
 
 The 8-token hardware-emulation result shows that the arithmetic schedule can
-reach 94.78% useful-MAC efficiency. The next research step is resource
-specialization, not a new compute array.
+reach 94.78% useful-MAC efficiency. The separate coarse-task evidence proves
+the HBM residency contract; standard-shape cycles are reported independently
+because diagnostic prefill and coarse-task runs have different host/runtime
+boundaries.
 
 ## 9. Decode utilization candidates
 

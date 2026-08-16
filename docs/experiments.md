@@ -31,13 +31,15 @@ No result in this document is a physical-board measurement.
 | Test | Workload | Result |
 | --- | --- | --- |
 | Focused CSim | Packet panel, RoPE banking, probability state, vector paths | PASS |
-| Controller CSim | 15 functional cases including multi-token paths | PASS |
+| Controller CSim | 21 functional cases including Tasks 18/19/20 | PASS |
 | Controller C/RTL CoSim | 13 transactions, deadlock detection enabled | PASS |
 | Closed controller-compute CoSim | Finite-depth feedback network | PASS, 6,129 cycles |
 | Resident-layer hw_emu | Full standard layer, random fixed-point weights, position 0 | PASS, 2048 outputs bit exact |
 | 2-token prefill hw_emu | Full standard projections, attention, and FFN | PASS |
 | 8-token prefill hw_emu | Full standard projections, positions 0-7 causal attention, and FFN | PASS |
 | Q2.14 P/D length sweep | Final 8-token P block and next-token D at contexts 64/256/512/1024 | 8/8 PASS |
+| Coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 7,983 cycles |
+| Coarse-task stack HW Emu | Two layers, five tasks, final norm, no intermediate host copy | PASS, 64 outputs exact |
 
 The 8-token run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -171,7 +173,8 @@ Every Q2.14 bit-accurate comparison passed. The maximum raw error was 1;
 comparisons against the higher-precision attention reference also passed with
 a maximum raw error of 5. Task and result-packet counts matched in all cases.
 
-The `Tokens` column is the active query-block height, not total prompt length.
+The `Active query tokens` column is the query-block height, not total prompt
+length or request batch size.
 P1024 covers positions 1016--1023; it is the final-block cost and not the sum
 of all 128 blocks in a complete 1024-token prefill.
 
@@ -190,7 +193,35 @@ The raw `profile_kernels.csv` files and validation logs are published under
 [`results/q214-pd-20260811/`](../results/q214-pd-20260811/), with the complete
 interpretation in [Q2.14 P/D sweep](q214-pd-length-hwemu.md).
 
-## 9. Interpretation
+## 9. Coarse-task resident runtime
+
+Tasks 18, 19, and 20 replace the operator-level host boundary with Attention,
+FFN, and final-normalization subgraphs. Hidden state is ping-ponged between two
+HBM feature pairs, while the KV cache remains controller-owned. Only task
+status is returned until the final hidden migration.
+
+| Gate | Result |
+| --- | --- |
+| Controller route CSim | PASS, 21 cases |
+| Three-task closed-loop CSim | PASS |
+| Three-task RTL CoSim | PASS, 7,983 cycles, deadlock detection enabled |
+| Small two-layer/five-task HW Emu | PASS, 64/64 exact, no intermediate host copy |
+
+The small profile validates cross-layer HBM residency rather than Qwen-layer
+throughput:
+
+| Scope | Layers | Tasks | XSim cycles | Projected latency at 200 MHz |
+| --- | ---: | ---: | ---: | ---: |
+| Attention+FFN layer | 1 | 2 | 14,579 | 72.897 us |
+| Stack plus final norm | 2 | 5 | 29,017 | 145.086 us |
+
+Cycles use the generated 300-MHz XSim clock and are projected to the 200-MHz
+physical target. Host/OpenCL event durations under HW Emu are simulator
+wall-time proxies. Standard-dimension data and raw profiles are maintained in
+[`results/coarse-task-20260816/`](../results/coarse-task-20260816/); see the
+[runtime report](coarse-task-runtime.md) for the task and measurement boundary.
+
+## 10. Interpretation
 
 The combined results support three conclusions:
 
@@ -202,7 +233,7 @@ The combined results support three conclusions:
    schedule is fast and correct but must be compiled into the pruned resident
    controller before physical implementation.
 
-## 10. Current experimental boundaries
+## 11. Current experimental boundaries
 
 - Prefill now covers a final 8-token block through a 1024-entry context, but a
   complete prompt is not replayed block by block in hardware emulation.
@@ -213,20 +244,20 @@ The combined results support three conclusions:
   inter-layer effects; it is therefore not reported as end-to-end throughput.
 - Hardware-emulation CPU wall time is not accelerator latency.
 - Operator-level host scheduling and data-transfer gaps are excluded from the
-  published active-cycle totals.
+  Q2.14 active-cycle totals. Coarse-task data is reported separately.
 - Final frequency, routing, power, and physical throughput require a completed
   implementation experiment.
 
-## 11. Next experiments
+## 12. Next experiments
 
-1. Define coarse host-visible tasks such as attention-sublayer, FFN-sublayer,
-   and layer-finalize instead of exposing individual operators.
-2. Let the controller autonomously expand each task into a static subgraph,
-   retaining intermediate tensors in ping-pong GBUFs or HBM according to an
-   explicit residency policy.
-3. Move RoPE and projection-to-KV-cache handoff into the controller so the KV
-   cache is updated without host migration.
-4. Compose multiple coarse tasks in the host to run a true end-to-end decoder
-   path, and report both kernel-active and host-observed latency.
-5. Repeat deadlock-on CoSim and multi-length hw_emu before physical
-   implementation; then evaluate multi-request row batching for M=1 decode.
+1. Complete the standard Qwen-layer Task-18/19 HW-Emu correctness and cycle
+   gate, then include Task 20 in the same standard-shape image.
+2. Move the small per-layer norm/RoPE coefficient migration into persistent
+   model-initialization storage so a task sequence needs only descriptors and
+   status traffic.
+3. Exercise the multi-layer host composition path with the full model shape,
+   recording both kernel-active cycles and host-observed sequence latency.
+4. Extend the same coarse-task contract from single-token decode to blockwise
+   prefill while preserving controller-owned KV update.
+5. After functional closure, evaluate multi-request row batching for M=1
+   decode and repeat physical placement/resource checks.

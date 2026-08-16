@@ -80,8 +80,12 @@ See [Architecture](docs/architecture.md) for the execution model and
 
 ## Key results
 
-All measurements below are from Vitis HLS or RTL hardware emulation. They are
-not physical-board measurements. The standard layer shape is
+### Operator-level Q2.14 diagnostic
+
+The P/D table below is from the earlier **host-orchestrated, operator-level**
+diagnostic path. All eight rows are Vitis 2022.2 hardware-emulation results;
+they are neither coarse-task end-to-end measurements nor physical-board
+measurements. The standard layer shape is
 `hidden=2048`, `intermediate=11008`, 16 query heads, 2 KV heads, and
 head dimension 128.
 
@@ -109,11 +113,25 @@ fixture work, and CPU golden checks are excluded. See the
 [raw profiles](results/q214-pd-20260811/).
 
 The Q2.14 sweep validates functional composition and long-context scaling, but
-it is not yet an autonomous single-launch layer. The current host sequences
-operator tasks, performs RoPE/test-fixture packing, and preloads the historical
-KV fixture. The next implementation step is to turn useful operator groups
-into controller-resident subgraph tasks while retaining host-level task
-composition for end-to-end inference.
+the host still sequences operators, applies RoPE, and prepares the KV test
+fixture. Main dense, attention, vector, and FFN arithmetic runs in the FPGA;
+CPU golden arithmetic is validation-only and is excluded from the measured
+interval.
+
+### Controller-resident coarse-task validation
+
+The new coarse-task
+runtime implements the production boundary separately: Task 18 owns the full
+attention sublayer including RoPE and KV update, Task 19 owns the FFN sublayer,
+and Task 20 owns final RMSNorm. Hidden state remains in HBM across tasks and
+layers; the host reads status records until the final output migration.
+
+The two-layer small-profile HW-Emu contract test runs five tasks and passes all
+64 final-hidden values exactly with `intermediate_host_copy=0`. Closed-loop RTL
+CoSim also passes all three task types in 7,983 cycles with deadlock detection
+enabled. These are residency/protocol results; standard Qwen-layer performance
+is reported in the dedicated [coarse-task runtime](docs/coarse-task-runtime.md)
+artifact after its HW-Emu gate completes.
 
 ## Decoder schedule
 
@@ -158,9 +176,17 @@ export VITIS_ENV_SCRIPT=/path/to/vitis_env_22.sh
 make hls_csim_closed_loop_8x64_resident_layer
 scripts/run_hls_resident_layer_cosim.sh
 
+# Three-command coarse-task closed loop with a source fingerprint guard.
+make hls_csim_closed_loop_8x64_composed_layer
+make hls_cosim_closed_loop_8x64_composed_layer
+
 # Build and run the resource-pruned resident-layer hardware emulation.
 scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run
+
+# Host-composed Attention+FFN or full profile stack plus final norm.
+scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed
+scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
 
 # Build the long-context Q2.14 profile and run the P/D length sweep.
 VITIS_8X64_MODEL_PROFILE=qwen-layer-long \
@@ -197,6 +223,8 @@ prefill evaluation, expected outputs, and artifact locations.
   tables, metric definitions, and limitations.
 - [Q2.14 P/D sweep](docs/q214-pd-length-hwemu.md): context-length scaling,
   precision gates, measurement boundary, and raw-data provenance.
+- [Coarse-task runtime](docs/coarse-task-runtime.md): Task 18/19/20 contract,
+  HBM-resident composition, CoSim/HW-Emu evidence, and resource cost.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
   4-PC weight multi-bank, ~50 token/s decode (csynth). See
@@ -204,13 +232,12 @@ prefill evaluation, expected outputs, and artifact locations.
 
 ## Scope
 
-The current artifact is a single-layer fixed-point research prototype. Its
-published P/D numbers are kernel-only, host-orchestrated layer profiles. It
-does not yet claim autonomous end-to-end checkpoint inference,
-LM-head/sampling performance, PCIe-inclusive latency, or physical-board
-performance. The target runtime submits a sequence of coarse compute tasks;
-each task lets the controller autonomously execute a resident subgraph while
-owning intermediate tensors and KV cache in HBM/on-chip buffers.
+The standard performance artifact remains a single-layer fixed-point research
+prototype. Its Q2.14 P/D numbers are kernel-only, host-orchestrated diagnostic
+profiles. The coarse-task runtime now executes controller-resident subgraphs
+and proves cross-task/cross-layer hidden residency, but it does not yet claim
+checkpoint-level 36-layer inference, LM-head/sampling performance,
+PCIe-inclusive physical latency, or physical-board performance.
 
 ## Citation
 

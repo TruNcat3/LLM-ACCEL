@@ -177,7 +177,11 @@ static int check_status() {
     return 0;
 }
 
-static void call_closed_loop_raw(
+static void call_closed_loop_raw_ports(
+    fm_word_t* selected_output_port0,
+    fm_word_t* selected_output_port1,
+    fm_word_t* selected_input_port0,
+    fm_word_t* selected_input_port1,
     cc8_operator_t op,
     unsigned int token_count,
     unsigned int position,
@@ -188,11 +192,11 @@ static void call_closed_loop_raw(
 #else
     cc8_closed_loop_inner_cosim(
 #endif
-        output_port0,
-        output_port1,
+        selected_output_port0,
+        selected_output_port1,
         status_output,
-        input_port0,
-        input_port1,
+        selected_input_port0,
+        selected_input_port1,
         aux_port0,
         aux_port1,
         unsigned(op),
@@ -218,6 +222,24 @@ static void call_closed_loop_raw(
         weight_shards[15],
         kv_cache_k,
         kv_cache_v
+    );
+}
+
+static void call_closed_loop_raw(
+    cc8_operator_t op,
+    unsigned int token_count,
+    unsigned int position,
+    unsigned int tile_len
+) {
+    call_closed_loop_raw_ports(
+        output_port0,
+        output_port1,
+        input_port0,
+        input_port1,
+        op,
+        token_count,
+        position,
+        tile_len
     );
 }
 
@@ -467,7 +489,8 @@ static int check_vector_status(
 }
 #endif
 
-#ifdef CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM
+#if defined(CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM) || \
+    defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM)
 static void initialize_resident_layer_aux() {
     for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
         set_fm_word_lane(
@@ -564,6 +587,47 @@ static int check_resident_layer_result(unsigned int position) {
     }
     return errors;
 }
+
+static int check_composed_task_status(
+    cc8_operator_t expected_op,
+    unsigned int expected_waves,
+    unsigned int expected_vector_tasks,
+    unsigned int expected_vector_packets,
+    const char* label
+) {
+    const fm_word_t word = status_output[0];
+    const unsigned int expected_packets =
+        expected_waves * CC8_MM_CORE_COUNT *
+            MM_STREAM_8X64_PACKETS_PER_BLOCK +
+        expected_vector_packets;
+    int errors = 0;
+    if (word.range(31, 0).to_uint() != unsigned(expected_op) ||
+        word.range(63, 32).to_uint() != unsigned(CC8_STATUS_OK) ||
+        word.range(95, 64).to_uint() != 1 ||
+        word.range(127, 96).to_uint() != expected_waves ||
+        word.range(159, 128).to_uint() !=
+            expected_waves * CC8_MM_CORE_COUNT ||
+        word.range(191, 160).to_uint() != expected_vector_tasks ||
+        word.range(223, 192).to_uint() != expected_packets ||
+        !word[224]) {
+        std::printf(
+            "CLOSED LOOP %s status mismatch op=%u status=%u waves=%u/%u mm=%u vec=%u/%u packets=%u/%u last=%u\n",
+            label,
+            word.range(31, 0).to_uint(),
+            word.range(63, 32).to_uint(),
+            word.range(127, 96).to_uint(),
+            expected_waves,
+            word.range(159, 128).to_uint(),
+            word.range(191, 160).to_uint(),
+            expected_vector_tasks,
+            word.range(223, 192).to_uint(),
+            expected_packets,
+            unsigned(word[224])
+        );
+        errors++;
+    }
+    return errors;
+}
 #endif
 
 int main() {
@@ -620,6 +684,82 @@ int main() {
         "CLOSED LOOP 8X64 PREFILL BLOCK RTL COSIM %s tiles=%u\n",
         errors == 0 ? "PASS" : "FAIL",
         ceildiv(query_begin + token_count, CC8_ATTN_TILE)
+    );
+    return errors == 0 ? 0 : 1;
+#elif defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM)
+    clear_test_data();
+    initialize_resident_layer_aux();
+    constexpr unsigned int position = 0;
+
+    // Task A writes the attention residual to output_port*.  Task B swaps
+    // the HBM bindings: it reads those same buffers as inputs and writes the
+    // final layer result into the original input buffers.  This mirrors the
+    // XRT host's device-resident ping-pong without a CPU tensor copy.
+    call_closed_loop(
+        CC8_OP_ATTENTION_SUBLAYER,
+        1,
+        position
+    );
+    const unsigned int attention_waves =
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(position + 1, CC8_ATTN_TILE) *
+            (1 + ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS)) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+    int errors = check_composed_task_status(
+        CC8_OP_ATTENTION_SUBLAYER,
+        attention_waves,
+        2,
+        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        "attention sublayer"
+    );
+
+    call_closed_loop_raw_ports(
+        input_port0,
+        input_port1,
+        output_port0,
+        output_port1,
+        CC8_OP_FFN_SUBLAYER,
+        1,
+        position,
+        0
+    );
+    const unsigned int ffn_waves =
+        2 * ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+    errors += check_composed_task_status(
+        CC8_OP_FFN_SUBLAYER,
+        ffn_waves,
+        3,
+        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
+            ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES),
+        "ffn sublayer"
+    );
+
+    call_closed_loop(CC8_OP_FINAL_NORM, 1, position);
+    errors += check_composed_task_status(
+        CC8_OP_FINAL_NORM,
+        0,
+        1,
+        ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        "final norm"
+    );
+    for (unsigned int word = 0;
+         word < ceildiv(HIDDEN_SIZE, FM_BLOCK_SIZE);
+         word++) {
+        if (output_port0[word] != fm_word_t(0)) {
+            if (errors < 8) {
+                std::printf(
+                    "CLOSED LOOP composed output mismatch word=%u\n",
+                    word
+                );
+            }
+            errors++;
+        }
+    }
+    std::printf(
+        "CLOSED LOOP 8X64 COMPOSED LAYER RTL COSIM %s tasks=3 intermediate_host_copy=0\n",
+        errors == 0 ? "PASS" : "FAIL"
     );
     return errors == 0 ? 0 : 1;
 #elif defined(CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM)

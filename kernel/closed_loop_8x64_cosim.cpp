@@ -245,7 +245,27 @@ static unsigned int cc8_resident_layer_mm_wave_slots(
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
 }
 
-static void seed_cc8_closed_loop_resident_layer_c_model(
+static unsigned int cc8_attention_sublayer_mm_wave_slots(
+    unsigned int position
+) {
+    const unsigned int attention_tiles =
+        ceildiv(position + 1, CC8_ATTN_TILE);
+    const unsigned int attention_output_waves =
+        ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
+    return
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
+        attention_tiles * (1 + attention_output_waves) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+}
+
+static unsigned int cc8_ffn_sublayer_mm_wave_slots() {
+    return
+        2 * ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+}
+
+static void seed_cc8_closed_loop_attention_sublayer_c_model(
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
     unsigned int position
@@ -320,6 +340,14 @@ static void seed_cc8_closed_loop_resident_layer_c_model(
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
+}
+
+static void seed_cc8_closed_loop_ffn_sublayer_c_model(
+    hls::stream<cu_vec16_packet_t>& core0_result_stream,
+    hls::stream<cu_vec16_packet_t>& core1_result_stream
+) {
+    const unsigned int hidden_waves =
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
     seed_cc8_closed_loop_vector_results(
         core0_result_stream,
         0,
@@ -361,6 +389,22 @@ static void seed_cc8_closed_loop_resident_layer_c_model(
         1,
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
+    );
+}
+
+static void seed_cc8_closed_loop_resident_layer_c_model(
+    hls::stream<cu_vec16_packet_t>& core0_result_stream,
+    hls::stream<cu_vec16_packet_t>& core1_result_stream,
+    unsigned int position
+) {
+    seed_cc8_closed_loop_attention_sublayer_c_model(
+        core0_result_stream,
+        core1_result_stream,
+        position
+    );
+    seed_cc8_closed_loop_ffn_sublayer_c_model(
+        core0_result_stream,
+        core1_result_stream
     );
 }
 
@@ -576,7 +620,8 @@ void cc8_closed_loop_inner_cosim(
     bool vector_case =
         operator_kind == unsigned(CC8_OP_RESIDUAL_ADD) ||
         operator_kind == unsigned(CC8_OP_SILU_MUL) ||
-        operator_kind == unsigned(CC8_OP_RMSNORM);
+        operator_kind == unsigned(CC8_OP_RMSNORM) ||
+        operator_kind == unsigned(CC8_OP_FINAL_NORM);
     bool profiled_mm_case =
         tile_len != 0 &&
         cc8_closed_loop_uses_mm(cc8_operator_t(operator_kind));
@@ -609,6 +654,36 @@ void cc8_closed_loop_inner_cosim(
             core0_result_stream,
             core1_result_stream,
             position
+        );
+    } else if (operator_kind == unsigned(CC8_OP_ATTENTION_SUBLAYER)) {
+        const unsigned int wave_slots =
+            cc8_attention_sublayer_mm_wave_slots(position);
+        const unsigned int vector_packets =
+            2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+        c_model_core0_result_packets =
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
+            vector_packets;
+        c_model_core1_result_packets =
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+        seed_cc8_closed_loop_attention_sublayer_c_model(
+            core0_result_stream,
+            core1_result_stream,
+            position
+        );
+    } else if (operator_kind == unsigned(CC8_OP_FFN_SUBLAYER)) {
+        const unsigned int wave_slots =
+            cc8_ffn_sublayer_mm_wave_slots();
+        const unsigned int vector_packets =
+            2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
+            ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES);
+        c_model_core0_result_packets =
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
+            vector_packets;
+        c_model_core1_result_packets =
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+        seed_cc8_closed_loop_ffn_sublayer_c_model(
+            core0_result_stream,
+            core1_result_stream
         );
     } else if (vector_case) {
         unsigned int core0_tokens =

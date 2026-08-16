@@ -5,9 +5,9 @@ cd "$(dirname "$0")/.."
 
 phase="${1:-all}"
 case "${phase}" in
-    control-xo|status-xo|link|host|all|run) ;;
+    control-xo|status-xo|link|host|all|run|run-composed|run-stack) ;;
     *)
-        echo "usage: $0 [control-xo|status-xo|link|host|all|run]" >&2
+        echo "usage: $0 [control-xo|status-xo|link|host|all|run|run-composed|run-stack]" >&2
         exit 2
         ;;
 esac
@@ -30,18 +30,25 @@ timeout_seconds="${VITIS_8X64_HW_EMU_TIMEOUT:-43200}"
 seed="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 debug_build="${VITIS_8X64_HWEMU_DEBUG:-0}"
 
-if [ "${profile}" != "qwen-layer" ]; then
-    echo "resident-layer hw_emu currently requires VITIS_8X64_MODEL_PROFILE=qwen-layer" >&2
-    exit 2
-fi
+case "${profile}" in
+    qwen-layer|small) ;;
+    *)
+        echo "resident-layer hw_emu supports VITIS_8X64_MODEL_PROFILE=qwen-layer or small" >&2
+        exit 2
+        ;;
+esac
 
 profile_tag="${profile//./_}"
 profile_tag="${profile_tag//-/_}"
 tag="${profile_tag}.resident_layer.d${fifo_depth}.ii${load_ii}.r${wave_repeat}.wr${wave_result_depth}.cw${cross_wave_dataflow}.scratch"
 
-default_compute_dir="vitis_8x64/xo.${profile_tag}.dynamic_bounds"
-if [ ! -s "${default_compute_dir}/compute_core_8x64_unified_nk.xo" ]; then
-    default_compute_dir="vitis_8x64/xo.${profile_tag}"
+if [ "${profile}" = "small" ]; then
+    default_compute_dir="vitis_8x64/xo"
+else
+    default_compute_dir="vitis_8x64/xo.${profile_tag}.dynamic_bounds"
+    if [ ! -s "${default_compute_dir}/compute_core_8x64_unified_nk.xo" ]; then
+        default_compute_dir="vitis_8x64/xo.${profile_tag}"
+    fi
 fi
 
 compute_xo_dir="${VITIS_8X64_BASE_COMPUTE_XO_DIR:-${default_compute_dir}}"
@@ -132,10 +139,11 @@ build_host() {
     make vitis_8x64_qwen_host vitis_8x64_emconfig \
         TARGET=hw_emu DEVICE="${device}" \
         VITIS_8X64_MODEL_PROFILE="${profile}" \
-        VITIS_8X64_BUILD_DIR="${build_dir}"
+        BUILD_DIR="${build_dir}"
 }
 
 run_hwemu() {
+    local mode="${1:-verify-resident-layer}"
     for input in "${xclbin}" "${host_exe}" "${emconfig}"; do
         if [ ! -s "${input}" ]; then
             echo "Missing or empty resident-layer hw_emu input: ${input}" >&2
@@ -148,7 +156,7 @@ run_hwemu() {
         timeout "${timeout_seconds}" \
             ./host_qwen_8x64.exe \
             --xclbin ./qwen_8x64_dual.xclbin \
-            --mode verify-resident-layer \
+            --mode "${mode}" \
             --profile "${profile}" \
             --random-model \
             --seed "${seed}" \
@@ -161,7 +169,9 @@ case "${phase}" in
     status-xo) build_status_xo ;;
     link) link_hwemu ;;
     host) build_host ;;
-    run) run_hwemu ;;
+    run) run_hwemu verify-resident-layer ;;
+    run-composed) run_hwemu verify-composed-layer ;;
+    run-stack) run_hwemu verify-composed-stack ;;
     all)
         build_control_xo
         build_status_xo

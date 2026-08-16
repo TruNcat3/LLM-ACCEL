@@ -1,0 +1,9 @@
+profile=small
+mode=verify-composed-layer
+seed=20260718
+position=0
+RANDOM task_composed_decoder_layer PASS values=64 max_raw_error=0 tolerance=16
+TASK_COMPOSED_LAYER_VERIFY seed=20260718 position=0 attention_op=18 ffn_op=19 layers=1 tasks=2 intermediate_host_copy=0 attention_controller_ms=26003.4 ffn_controller_ms=16001.7 kernel_active_ms=42005.1 input_migration_ms=65.1814 auxiliary_migration_ms=42.0436 status_kernel_ms=4000.45 status_migration_ms=42.8605 output_migration_ms=43.0575 profiled_sequence_ms=46198.7 host_elapsed_ms=48245 PASS
+
+HW-Emu event and host durations above are simulator wall-time proxies. The
+authoritative modeled interval is in small_one_layer_profile_kernels.csv.

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -82,7 +83,10 @@ enum operator_kind_t {
     kOpAttentionFlash = 14,
     kOpDecodeSmoke = 15,
     kOpDecoderLayer = 16,
-    kOpAttnPrefillBlock = 17
+    kOpAttnPrefillBlock = 17,
+    kOpAttentionSublayer = 18,
+    kOpFfnSublayer = 19,
+    kOpFinalNorm = 20
 };
 
 struct alignas(64) word512_t {
@@ -369,6 +373,26 @@ struct operator_result_t {
     double controller_ms = -1.0;
 };
 
+struct composed_layer_result_t {
+    tensor_t output;
+    decoded_status_t attention_status;
+    decoded_status_t ffn_status;
+    decoded_status_t final_norm_status;
+    double attention_controller_ms = -1.0;
+    double ffn_controller_ms = -1.0;
+    double final_norm_controller_ms = 0.0;
+    double kernel_active_ms = -1.0;
+    double input_migration_ms = 0.0;
+    double auxiliary_migration_ms = 0.0;
+    double status_kernel_ms = 0.0;
+    double status_migration_ms = 0.0;
+    double output_migration_ms = 0.0;
+    double profiled_sequence_ms = -1.0;
+    double host_elapsed_ms = -1.0;
+    unsigned int layer_count = 0;
+    unsigned int task_count = 0;
+};
+
 struct command_line_t {
     std::string mode = "plan";
     std::string profile = "small";
@@ -396,6 +420,7 @@ struct command_line_t {
     bool verbose_ops = false;
     bool hardware_softmax = false;
     bool resident_layer = false;
+    bool coarse_tasks = false;
     bool tie_embeddings = false;
     bool skip_weight_preload = false;
     bool load_only = false;
@@ -631,6 +656,20 @@ double event_milliseconds(const cl::Event& event) {
         return -1.0;
     }
     return double(end - start) * 1.0e-6;
+}
+
+const char* event_timing_domain() {
+    const char* mode = std::getenv("XCL_EMULATION_MODE");
+    return mode != nullptr && std::strcmp(mode, "hw_emu") == 0 ?
+        "hw_emu_host_wall_proxy" :
+        "device_event";
+}
+
+double add_profiled_milliseconds(double total, double sample) {
+    if (total < 0.0 || sample < 0.0) {
+        return -1.0;
+    }
+    return total + sample;
 }
 
 bool file_exists(const std::string& path) {
@@ -1087,6 +1126,271 @@ public:
         );
     }
 
+    composed_layer_result_t run_composed_decoder_stack(
+        const tensor_t& hidden,
+        unsigned int layer_begin,
+        unsigned int layer_count,
+        unsigned int position,
+        bool include_final_norm
+    ) {
+        if (
+            hidden.rows != 1 ||
+            hidden.cols != shape_.hidden_size ||
+            layer_count == 0 ||
+            layer_begin >= shape_.num_layers ||
+            layer_begin + layer_count > shape_.num_layers ||
+            position >= shape_.max_seq_len
+        ) {
+            throw std::runtime_error(
+                "composed decoder stack input shape mismatch"
+            );
+        }
+
+        clear_data();
+        pack_feature(hidden, data_words_[2], data_words_[3]);
+
+        const std::size_t norm_words =
+            ceildiv(shape_.hidden_size, kValuesPerWord);
+        const std::size_t rope_words =
+            ceildiv(shape_.head_dim() / 2, kValuesPerWord);
+        if (norm_words + 2 * rope_words > data_words_[4].size()) {
+            throw std::runtime_error(
+                "composed layer aux0 is too small for RoPE"
+            );
+        }
+        composed_layer_result_t result;
+        result.attention_controller_ms = 0.0;
+        result.ffn_controller_ms = 0.0;
+        result.layer_count = layer_count;
+        result.task_count =
+            2 * layer_count + (include_final_norm ? 1u : 0u);
+        const auto host_begin = std::chrono::steady_clock::now();
+        std::vector<cl::Memory> initial_inputs = {
+            data_buffers_[2],
+            data_buffers_[3],
+            status_buffer_
+        };
+        cl::Event initial_input_event;
+        check_cl(
+            transfer_queue_.enqueueMigrateMemObjects(
+                initial_inputs,
+                0,
+                nullptr,
+                &initial_input_event
+            ),
+            "migrate composed layer inputs"
+        );
+        check_cl(
+            transfer_queue_.finish(),
+            "finish composed layer input migration"
+        );
+        result.input_migration_ms =
+            event_milliseconds(initial_input_event);
+
+        try {
+            for (unsigned int layer_offset = 0;
+                 layer_offset < layer_count;
+                 layer_offset++) {
+                const unsigned int layer = layer_begin + layer_offset;
+                clear_words(data_words_[4]);
+                clear_words(data_words_[5]);
+                pack_tight(model_.norm_row(layer, false), data_words_[4]);
+                pack_tight(model_.norm_row(layer, true), data_words_[5]);
+                for (unsigned int i = 0;
+                     i < shape_.head_dim() / 2;
+                     i++) {
+                    const double exponent =
+                        double(2 * i) / shape_.head_dim();
+                    const double inverse_frequency =
+                        1.0 / std::pow(kRopeTheta, exponent);
+                    const double angle = position * inverse_frequency;
+                    const std::size_t word = i / kValuesPerWord;
+                    const unsigned int lane = i % kValuesPerWord;
+                    data_words_[4][norm_words + word].value[lane] =
+                        quantize_fix16(std::cos(angle));
+                    data_words_[4][norm_words + rope_words + word]
+                        .value[lane] =
+                        quantize_fix16(std::sin(angle));
+                }
+                std::vector<cl::Memory> layer_aux = {
+                    data_buffers_[4],
+                    data_buffers_[5]
+                };
+                cl::Event layer_aux_event;
+                check_cl(
+                    transfer_queue_.enqueueMigrateMemObjects(
+                        layer_aux,
+                        0,
+                        nullptr,
+                        &layer_aux_event
+                    ),
+                    "migrate composed layer auxiliary inputs"
+                );
+                check_cl(
+                    transfer_queue_.finish(),
+                    "finish composed layer auxiliary migration"
+                );
+                result.auxiliary_migration_ms =
+                    add_profiled_milliseconds(
+                        result.auxiliary_migration_ms,
+                        event_milliseconds(layer_aux_event)
+                    );
+
+                // Task A: input pair 2/3 -> attention residual pair 0/1.
+                bind_controller_data_ports(0, 1, 2, 3);
+                result.attention_status = execute_bound_resident_task(
+                    kOpAttentionSublayer,
+                    layer,
+                    position
+                );
+                result.attention_controller_ms += last_controller_ms_;
+                result.status_kernel_ms = add_profiled_milliseconds(
+                    result.status_kernel_ms,
+                    last_status_kernel_ms_
+                );
+                result.status_migration_ms = add_profiled_milliseconds(
+                    result.status_migration_ms,
+                    last_status_migration_ms_
+                );
+                check_status(
+                    kOpAttentionSublayer,
+                    result.attention_status
+                );
+
+                // Task B consumes pair 0/1 directly and writes pair 2/3.
+                // The completed hidden state therefore remains in the same
+                // device pair for the next layer's Task A.
+                bind_controller_data_ports(2, 3, 0, 1);
+                result.ffn_status = execute_bound_resident_task(
+                    kOpFfnSublayer,
+                    layer,
+                    position
+                );
+                result.ffn_controller_ms += last_controller_ms_;
+                result.status_kernel_ms = add_profiled_milliseconds(
+                    result.status_kernel_ms,
+                    last_status_kernel_ms_
+                );
+                result.status_migration_ms = add_profiled_milliseconds(
+                    result.status_migration_ms,
+                    last_status_migration_ms_
+                );
+                check_status(kOpFfnSublayer, result.ffn_status);
+            }
+
+            unsigned int final_output0 = 2;
+            unsigned int final_output1 = 3;
+            if (include_final_norm) {
+                clear_words(data_words_[4]);
+                clear_words(data_words_[5]);
+                pack_tight(model_.final_norm_row(), data_words_[4]);
+                std::vector<cl::Memory> final_aux = {data_buffers_[4]};
+                cl::Event final_aux_event;
+                check_cl(
+                    transfer_queue_.enqueueMigrateMemObjects(
+                        final_aux,
+                        0,
+                        nullptr,
+                        &final_aux_event
+                    ),
+                    "migrate final norm weights"
+                );
+                check_cl(
+                    transfer_queue_.finish(),
+                    "finish final norm weight migration"
+                );
+                result.auxiliary_migration_ms =
+                    add_profiled_milliseconds(
+                        result.auxiliary_migration_ms,
+                        event_milliseconds(final_aux_event)
+                    );
+                bind_controller_data_ports(0, 1, 2, 3);
+                result.final_norm_status = execute_bound_resident_task(
+                    kOpFinalNorm,
+                    0,
+                    position
+                );
+                result.final_norm_controller_ms = last_controller_ms_;
+                result.status_kernel_ms = add_profiled_milliseconds(
+                    result.status_kernel_ms,
+                    last_status_kernel_ms_
+                );
+                result.status_migration_ms = add_profiled_milliseconds(
+                    result.status_migration_ms,
+                    last_status_migration_ms_
+                );
+                check_status(kOpFinalNorm, result.final_norm_status);
+                final_output0 = 0;
+                final_output1 = 1;
+            }
+
+            std::vector<cl::Memory> final_outputs = {
+                data_buffers_[final_output0],
+                data_buffers_[final_output1]
+            };
+            cl::Event final_output_event;
+            check_cl(
+                transfer_queue_.enqueueMigrateMemObjects(
+                    final_outputs,
+                    CL_MIGRATE_MEM_OBJECT_HOST,
+                    nullptr,
+                    &final_output_event
+                ),
+                "migrate composed stack outputs"
+            );
+            check_cl(
+                transfer_queue_.finish(),
+                "finish composed stack output migration"
+            );
+            result.output_migration_ms =
+                event_milliseconds(final_output_event);
+        } catch (...) {
+            bind_controller_data_ports(0, 1, 2, 3);
+            throw;
+        }
+        bind_controller_data_ports(0, 1, 2, 3);
+
+        const auto host_end = std::chrono::steady_clock::now();
+        result.kernel_active_ms =
+            result.attention_controller_ms +
+            result.ffn_controller_ms +
+            result.final_norm_controller_ms;
+        result.profiled_sequence_ms = result.kernel_active_ms;
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.input_migration_ms
+        );
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.auxiliary_migration_ms
+        );
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.status_kernel_ms
+        );
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.status_migration_ms
+        );
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.output_migration_ms
+        );
+        result.host_elapsed_ms =
+            std::chrono::duration<double, std::milli>(
+                host_end - host_begin
+            ).count();
+        const unsigned int host_output0 = include_final_norm ? 0 : 2;
+        const unsigned int host_output1 = include_final_norm ? 1 : 3;
+        result.output = unpack_feature(
+            data_words_[host_output0],
+            data_words_[host_output1],
+            1,
+            shape_.hidden_size
+        );
+        return result;
+    }
+
     decoded_status_t run_mm_wave_profile(
         operator_kind_t op,
         const tensor_t& lhs,
@@ -1438,6 +1742,174 @@ public:
     }
 
 private:
+    void bind_controller_data_ports(
+        unsigned int output0,
+        unsigned int output1,
+        unsigned int input0,
+        unsigned int input1
+    ) {
+        if (
+            output0 >= data_buffers_.size() ||
+            output1 >= data_buffers_.size() ||
+            input0 >= data_buffers_.size() ||
+            input1 >= data_buffers_.size()
+        ) {
+            throw std::runtime_error("controller data-port index out of range");
+        }
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerOutput0Arg,
+                data_buffers_[output0]
+            ),
+            "bind controller output port 0"
+        );
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerOutput1Arg,
+                data_buffers_[output1]
+            ),
+            "bind controller output port 1"
+        );
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerInput0Arg,
+                data_buffers_[input0]
+            ),
+            "bind controller input port 0"
+        );
+        check_cl(
+            controller_kernel_.setArg(
+                kControllerInput1Arg,
+                data_buffers_[input1]
+            ),
+            "bind controller input port 1"
+        );
+    }
+
+    decoded_status_t execute_bound_resident_task(
+        operator_kind_t op,
+        unsigned int layer,
+        unsigned int position
+    ) {
+        check_cl(
+            controller_kernel_.setArg(kControllerOperatorArg, unsigned(op)),
+            "set composed task operator"
+        );
+        check_cl(
+            controller_kernel_.setArg(kControllerLayerArg, layer),
+            "set composed task layer"
+        );
+        check_cl(
+            controller_kernel_.setArg(kControllerTokenCountArg, 1u),
+            "set composed task token count"
+        );
+        check_cl(
+            controller_kernel_.setArg(kControllerPositionArg, position),
+            "set composed task position"
+        );
+        check_cl(
+            controller_kernel_.setArg(kControllerTileLenArg, 0u),
+            "set composed task tile length"
+        );
+
+        cl::Event controller_event;
+        cl::Event compute0_event;
+        cl::Event compute1_event;
+        cl::Event status_event;
+        check_cl(
+            controller_queue_.enqueueTask(
+                controller_kernel_,
+                nullptr,
+                &controller_event
+            ),
+            "enqueue composed controller task"
+        );
+        check_cl(
+            compute0_queue_.enqueueTask(
+                compute0_kernel_,
+                nullptr,
+                &compute0_event
+            ),
+            "enqueue composed compute0 task"
+        );
+        check_cl(
+            compute1_queue_.enqueueTask(
+                compute1_kernel_,
+                nullptr,
+                &compute1_event
+            ),
+            "enqueue composed compute1 task"
+        );
+
+        std::array<cl_int, 3> flush_status = {{
+            CL_SUCCESS,
+            CL_SUCCESS,
+            CL_SUCCESS
+        }};
+        const auto flush_queue = [](
+            cl::CommandQueue& queue,
+            cl_int& status
+        ) {
+            status = queue.flush();
+        };
+        std::thread flush_compute0(
+            flush_queue,
+            std::ref(compute0_queue_),
+            std::ref(flush_status[0])
+        );
+        std::thread flush_compute1(
+            flush_queue,
+            std::ref(compute1_queue_),
+            std::ref(flush_status[1])
+        );
+        std::thread flush_controller(
+            flush_queue,
+            std::ref(controller_queue_),
+            std::ref(flush_status[2])
+        );
+        flush_compute0.join();
+        flush_compute1.join();
+        flush_controller.join();
+        check_cl(flush_status[0], "flush composed compute0");
+        check_cl(flush_status[1], "flush composed compute1");
+        check_cl(flush_status[2], "flush composed controller");
+
+        controller_event.wait();
+        compute0_event.wait();
+        compute1_event.wait();
+        last_controller_ms_ = event_milliseconds(controller_event);
+
+        check_cl(
+            status_queue_.enqueueTask(
+                status_kernel_,
+                nullptr,
+                &status_event
+            ),
+            "enqueue composed status task"
+        );
+        check_cl(status_queue_.flush(), "flush composed status task");
+        status_event.wait();
+        last_status_kernel_ms_ = event_milliseconds(status_event);
+        std::vector<cl::Memory> status_only = {status_buffer_};
+        cl::Event status_migration_event;
+        check_cl(
+            transfer_queue_.enqueueMigrateMemObjects(
+                status_only,
+                CL_MIGRATE_MEM_OBJECT_HOST,
+                nullptr,
+                &status_migration_event
+            ),
+            "migrate composed task status"
+        );
+        check_cl(
+            transfer_queue_.finish(),
+            "finish composed task status migration"
+        );
+        last_status_migration_ms_ =
+            event_milliseconds(status_migration_event);
+        return decode_status(status_words_[0]);
+    }
+
     unsigned int feature_input_dim(operator_kind_t op) const {
         switch (op) {
         case kOpQProjection:
@@ -2392,6 +2864,8 @@ private:
     bool verbose_ops_;
     bool skip_weight_preload_;
     double last_controller_ms_ = -1.0;
+    double last_status_kernel_ms_ = -1.0;
+    double last_status_migration_ms_ = -1.0;
 
     std::array<aligned_word_vector, 6> data_words_;
     aligned_word_vector kv_cache_k_words_;
@@ -3564,6 +4038,70 @@ bool run_decode_smoke_verification(
     return pass;
 }
 
+tensor_t golden_single_entry_decoder_layer(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    const tensor_t& hidden,
+    const tensor_t& attention_norm,
+    const tensor_t& ffn_norm,
+    unsigned int layer
+) {
+    tensor_t normalized = golden_rmsnorm(hidden, attention_norm);
+    tensor_t v = golden_projection(
+        shape,
+        model,
+        kOpVProjection,
+        normalized,
+        layer
+    );
+    // With one KV entry, online softmax is exactly one.  Each query head
+    // therefore receives the V row of its GQA group.
+    tensor_t attention(1, shape.hidden_size);
+    const unsigned int group_size = shape.gqa_group_size();
+    const unsigned int head_dim = shape.head_dim();
+    for (unsigned int query_head = 0;
+         query_head < shape.num_heads;
+         query_head++) {
+        const unsigned int kv_head = query_head / group_size;
+        for (unsigned int elem = 0; elem < head_dim; elem++) {
+            attention.at(0, query_head * head_dim + elem) =
+                v.at(0, kv_head * head_dim + elem);
+        }
+    }
+    tensor_t projected = golden_projection(
+        shape,
+        model,
+        kOpOProjection,
+        attention,
+        layer
+    );
+    tensor_t post_attention = golden_residual(hidden, projected);
+    tensor_t ffn_input = golden_rmsnorm(post_attention, ffn_norm);
+    tensor_t gate = golden_projection(
+        shape,
+        model,
+        kOpFfnGate,
+        ffn_input,
+        layer
+    );
+    tensor_t up = golden_projection(
+        shape,
+        model,
+        kOpFfnUp,
+        ffn_input,
+        layer
+    );
+    tensor_t activated = golden_silu_mul(gate, up);
+    tensor_t down = golden_projection(
+        shape,
+        model,
+        kOpFfnDown,
+        activated,
+        layer
+    );
+    return golden_residual(post_attention, down);
+}
+
 bool run_resident_layer_verification(
     const model_shape_t& shape,
     const model_data_t& model,
@@ -3593,60 +4131,14 @@ bool run_resident_layer_verification(
         position
     );
 
-    tensor_t normalized = golden_rmsnorm(hidden, attention_norm);
-    tensor_t v = golden_projection(
+    tensor_t expected = golden_single_entry_decoder_layer(
         shape,
         model,
-        kOpVProjection,
-        normalized,
+        hidden,
+        attention_norm,
+        ffn_norm,
         0
     );
-    // With one KV entry, online softmax is exactly one.  Each query head
-    // therefore receives the V row of its GQA group.
-    tensor_t attention(1, shape.hidden_size);
-    const unsigned int group_size = shape.gqa_group_size();
-    const unsigned int head_dim = shape.head_dim();
-    for (unsigned int query_head = 0;
-         query_head < shape.num_heads;
-         query_head++) {
-        const unsigned int kv_head = query_head / group_size;
-        for (unsigned int elem = 0; elem < head_dim; elem++) {
-            attention.at(0, query_head * head_dim + elem) =
-                v.at(0, kv_head * head_dim + elem);
-        }
-    }
-    tensor_t projected = golden_projection(
-        shape,
-        model,
-        kOpOProjection,
-        attention,
-        0
-    );
-    tensor_t post_attention = golden_residual(hidden, projected);
-    tensor_t ffn_input = golden_rmsnorm(post_attention, ffn_norm);
-    tensor_t gate = golden_projection(
-        shape,
-        model,
-        kOpFfnGate,
-        ffn_input,
-        0
-    );
-    tensor_t up = golden_projection(
-        shape,
-        model,
-        kOpFfnUp,
-        ffn_input,
-        0
-    );
-    tensor_t activated = golden_silu_mul(gate, up);
-    tensor_t down = golden_projection(
-        shape,
-        model,
-        kOpFfnDown,
-        activated,
-        0
-    );
-    tensor_t expected = golden_residual(post_attention, down);
 
     const bool pass = compare_tensors(
         "resident_decoder_layer",
@@ -3659,6 +4151,161 @@ bool run_resident_layer_verification(
         << " position=" << position
         << " hidden=" << shape.hidden_size
         << " intermediate=" << shape.intermediate_size
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
+}
+
+bool run_composed_layer_verification(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    accelerator_t& accelerator,
+    uint32_t seed,
+    unsigned int position
+) {
+    if (position != 0) {
+        throw std::runtime_error(
+            "initial composed-layer golden test currently starts at position 0"
+        );
+    }
+    tensor_t hidden = make_random_tensor(
+        1,
+        shape.hidden_size,
+        seed ^ 0x7461736bu,
+        -48,
+        48
+    );
+    tensor_t attention_norm = model.norm_row(0, false);
+    tensor_t ffn_norm = model.norm_row(0, true);
+    composed_layer_result_t actual =
+        accelerator.run_composed_decoder_stack(
+            hidden,
+            0,
+            1,
+            position,
+            false
+        );
+    tensor_t expected = golden_single_entry_decoder_layer(
+        shape,
+        model,
+        hidden,
+        attention_norm,
+        ffn_norm,
+        0
+    );
+    const bool pass = compare_tensors(
+        "task_composed_decoder_layer",
+        actual.output,
+        expected,
+        16
+    );
+    std::cout
+        << "TASK_COMPOSED_LAYER_VERIFY seed=" << seed
+        << " position=" << position
+        << " attention_op=" << actual.attention_status.op
+        << " ffn_op=" << actual.ffn_status.op
+        << " layers=" << actual.layer_count
+        << " tasks=" << actual.task_count
+        << " intermediate_host_copy=0"
+        << " event_timing_domain=" << event_timing_domain()
+        << " attention_controller_ms="
+        << actual.attention_controller_ms
+        << " ffn_controller_ms=" << actual.ffn_controller_ms
+        << " kernel_active_ms=" << actual.kernel_active_ms
+        << " input_migration_ms=" << actual.input_migration_ms
+        << " auxiliary_migration_ms="
+        << actual.auxiliary_migration_ms
+        << " status_kernel_ms=" << actual.status_kernel_ms
+        << " status_migration_ms=" << actual.status_migration_ms
+        << " output_migration_ms=" << actual.output_migration_ms
+        << " profiled_sequence_ms=" << actual.profiled_sequence_ms
+        << " host_elapsed_ms=" << actual.host_elapsed_ms
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
+}
+
+bool run_composed_stack_verification(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    accelerator_t& accelerator,
+    uint32_t seed,
+    unsigned int position
+) {
+    if (position != 0) {
+        throw std::runtime_error(
+            "initial composed-stack golden test currently starts at position 0"
+        );
+    }
+    tensor_t hidden = make_random_tensor(
+        1,
+        shape.hidden_size,
+        seed ^ 0x73746163u,
+        -48,
+        48
+    );
+    composed_layer_result_t actual =
+        accelerator.run_composed_decoder_stack(
+            hidden,
+            0,
+            shape.num_layers,
+            position,
+            true
+        );
+
+    tensor_t expected = hidden;
+    for (unsigned int layer = 0; layer < shape.num_layers; layer++) {
+        expected = golden_single_entry_decoder_layer(
+            shape,
+            model,
+            expected,
+            model.norm_row(layer, false),
+            model.norm_row(layer, true),
+            layer
+        );
+    }
+    expected = golden_rmsnorm(expected, model.final_norm_row());
+
+    const unsigned int expected_tasks = 2 * shape.num_layers + 1;
+    const bool protocol_pass =
+        actual.layer_count == shape.num_layers &&
+        actual.task_count == expected_tasks &&
+        actual.attention_status.op == unsigned(kOpAttentionSublayer) &&
+        actual.ffn_status.op == unsigned(kOpFfnSublayer) &&
+        actual.final_norm_status.op == unsigned(kOpFinalNorm);
+    const int tolerance = 16 * int(shape.num_layers);
+    const bool data_pass = compare_tensors(
+        "task_composed_decoder_stack",
+        actual.output,
+        expected,
+        tolerance
+    );
+    const bool pass = protocol_pass && data_pass;
+    std::cout
+        << "TASK_COMPOSED_STACK_VERIFY seed=" << seed
+        << " position=" << position
+        << " attention_op=" << actual.attention_status.op
+        << " ffn_op=" << actual.ffn_status.op
+        << " final_norm_op=" << actual.final_norm_status.op
+        << " layers=" << actual.layer_count
+        << " tasks=" << actual.task_count
+        << " expected_tasks=" << expected_tasks
+        << " intermediate_host_copy=0"
+        << " event_timing_domain=" << event_timing_domain()
+        << " attention_controller_ms="
+        << actual.attention_controller_ms
+        << " ffn_controller_ms=" << actual.ffn_controller_ms
+        << " final_norm_controller_ms="
+        << actual.final_norm_controller_ms
+        << " kernel_active_ms=" << actual.kernel_active_ms
+        << " input_migration_ms=" << actual.input_migration_ms
+        << " auxiliary_migration_ms="
+        << actual.auxiliary_migration_ms
+        << " status_kernel_ms=" << actual.status_kernel_ms
+        << " status_migration_ms=" << actual.status_migration_ms
+        << " output_migration_ms=" << actual.output_migration_ms
+        << " profiled_sequence_ms=" << actual.profiled_sequence_ms
+        << " host_elapsed_ms=" << actual.host_elapsed_ms
         << " " << (pass ? "PASS" : "FAIL")
         << "\n";
     return pass;
@@ -6011,7 +6658,8 @@ public:
         accelerator_t& accelerator,
         unsigned int layer_count,
         bool hardware_softmax,
-        bool resident_layer
+        bool resident_layer,
+        bool coarse_tasks
     )
         : shape_(shape),
           model_(model),
@@ -6021,7 +6669,8 @@ public:
               shape.num_layers :
               layer_count
           ),
-          resident_layer_(resident_layer) {
+          resident_layer_(resident_layer),
+          coarse_tasks_(coarse_tasks) {
         if (layer_count_ > shape.num_layers) {
             throw std::runtime_error("--layers exceeds the selected profile");
         }
@@ -6037,6 +6686,16 @@ public:
                 << "using one-launch resident decoder-layer scheduling "
                 << "(on-chip intermediates + controller KV/softmax)\n";
         }
+        if (coarse_tasks_) {
+            std::cout
+                << "using host-composed attention/FFN tasks "
+                << "(HBM-resident boundary, no intermediate host copy)\n";
+        }
+        if (resident_layer_ && coarse_tasks_) {
+            throw std::runtime_error(
+                "--resident-layer and --coarse-tasks are mutually exclusive"
+            );
+        }
     }
 
     tensor_t run_token(unsigned int token_id, unsigned int position) {
@@ -6045,7 +6704,49 @@ public:
         }
 
         tensor_t hidden = model_.embedding(token_id);
+        if (coarse_tasks_) {
+            composed_layer_result_t result =
+                accelerator_.run_composed_decoder_stack(
+                    hidden,
+                    0,
+                    layer_count_,
+                    position,
+                    true
+                );
+            hidden = result.output;
+            std::cout
+                << "COARSE_TASK_STACK layers=" << result.layer_count
+                << " tasks=" << result.task_count
+                << " position=" << position
+                << " event_timing_domain=" << event_timing_domain()
+                << " attention_controller_ms="
+                << result.attention_controller_ms
+                << " ffn_controller_ms="
+                << result.ffn_controller_ms
+                << " final_norm_controller_ms="
+                << result.final_norm_controller_ms
+                << " kernel_active_ms="
+                << result.kernel_active_ms
+                << " input_migration_ms="
+                << result.input_migration_ms
+                << " auxiliary_migration_ms="
+                << result.auxiliary_migration_ms
+                << " status_kernel_ms="
+                << result.status_kernel_ms
+                << " status_migration_ms="
+                << result.status_migration_ms
+                << " output_migration_ms="
+                << result.output_migration_ms
+                << " profiled_sequence_ms="
+                << result.profiled_sequence_ms
+                << " host_elapsed_ms="
+                << result.host_elapsed_ms
+                << " intermediate_host_copy=0\n";
+        }
         for (unsigned int layer = 0; layer < layer_count_; layer++) {
+            if (coarse_tasks_) {
+                break;
+            }
             if (resident_layer_) {
                 hidden = accelerator_.run_decoder_layer(
                     hidden,
@@ -6156,6 +6857,9 @@ public:
             );
         }
 
+        if (coarse_tasks_) {
+            return hidden;
+        }
         tensor_t final_norm = model_.final_norm_row();
         return accelerator_.run_feature(
             kOpRmsNorm,
@@ -6332,6 +7036,7 @@ private:
     accelerator_t& accelerator_;
     unsigned int layer_count_;
     bool resident_layer_;
+    bool coarse_tasks_;
 };
 
 bool get_option(
@@ -6525,6 +7230,7 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
         argv,
         "--resident-layer"
     );
+    command.coarse_tasks = has_flag(argc, argv, "--coarse-tasks");
     command.tie_embeddings = has_flag(
         argc,
         argv,
@@ -6542,7 +7248,7 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable << " [options]\n"
-        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
+        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
         << "  --prefill-start N   First P-stage position (resume support)\n"
         << "  --profile small|medium|qwen-layer|qwen-layer-long|qwen2.5-3b\n"
         << "  --xclbin <file>          Required for run/generate\n"
@@ -6570,6 +7276,7 @@ void print_usage(const char* executable) {
         << "  --tie-embeddings         Reuse embedding as the LM head\n"
         << "  --hardware-softmax       Deprecated; decode uses controller online softmax\n"
         << "  --resident-layer         Execute each decoder layer in one controller launch\n"
+        << "  --coarse-tasks           Compose controller-resident attention and FFN tasks through HBM without an intermediate host copy\n"
         << "  --skip-weight-preload    Program xclbin without migrating weights\n"
         << "  --load-only              Stop after xclbin/context/buffer setup\n"
         << "  --verbose-ops            Print every controller launch\n";
@@ -6712,6 +7419,8 @@ int main(int argc, const char* argv[]) {
             command.mode != "verify-random" &&
             command.mode != "verify-decode-smoke" &&
             command.mode != "verify-resident-layer" &&
+            command.mode != "verify-composed-layer" &&
+            command.mode != "verify-composed-stack" &&
             command.mode != "verify-nop" &&
             command.mode != "verify-nop-ctrl-only" &&
             command.mode != "verify-nop-ctrl-enqueue-only" &&
@@ -6788,6 +7497,8 @@ int main(int argc, const char* argv[]) {
                 command.mode == "verify-random" ||
                 command.mode == "verify-decode-smoke" ||
                 command.mode == "verify-resident-layer" ||
+                command.mode == "verify-composed-layer" ||
+                command.mode == "verify-composed-stack" ||
                 command.mode == "verify-nop" ||
                 command.mode == "verify-nop-ctrl-only" ||
                 command.mode == "verify-nop-ctrl-enqueue-only" ||
@@ -6849,6 +7560,24 @@ int main(int argc, const char* argv[]) {
         }
         if (command.mode == "verify-resident-layer") {
             return run_resident_layer_verification(
+                shape,
+                model,
+                accelerator,
+                command.random_seed,
+                command.attention_position
+            ) ? 0 : 1;
+        }
+        if (command.mode == "verify-composed-layer") {
+            return run_composed_layer_verification(
+                shape,
+                model,
+                accelerator,
+                command.random_seed,
+                command.attention_position
+            ) ? 0 : 1;
+        }
+        if (command.mode == "verify-composed-stack") {
+            return run_composed_stack_verification(
                 shape,
                 model,
                 accelerator,
@@ -6978,7 +7707,8 @@ int main(int argc, const char* argv[]) {
             accelerator,
             command.layer_count,
             command.hardware_softmax,
-            command.resident_layer
+            command.resident_layer,
+            command.coarse_tasks
         );
 
         const auto begin = std::chrono::steady_clock::now();

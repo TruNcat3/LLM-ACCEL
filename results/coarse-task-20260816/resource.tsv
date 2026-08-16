@@ -1,0 +1,4 @@
+design	bram18	dsp	ff	lut	hls_estimated_period_ns
+resident_controller_baseline	488	90	421880	390283	3.746
+coarse_task_controller	488	102	446088	406157	3.746
+coarse_task_system_estimate	584	1456	841000	642000	NA

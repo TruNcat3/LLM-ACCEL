@@ -25,7 +25,7 @@ XPLATFORM := $(firstword \
 	$(wildcard /opt/xilinx/platforms/$(DEVICE)/$(DEVICE).xpfm))
 
 ifeq ($(XPLATFORM),)
-$(warning 未在默认目录找到 $(DEVICE)，v++ 将直接使用设备名称)
+$(warning $(DEVICE) was not found in the default paths; v++ will use the device name directly)
 XPLATFORM := $(DEVICE)
 endif
 
@@ -70,6 +70,7 @@ endif
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
 .PHONY: hls_csim_nk hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
 .PHONY: hls_csynth_status_xo hls_csynth_xo
 .PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts vitis_8x64_host vitis_8x64_qwen_host vitis_8x64_emconfig
@@ -77,7 +78,7 @@ endif
 .PHONY: clean
 
 help:
-	@echo "双 8x64 Qwen 加速器构建入口"
+	@echo "Dual-8x64 Qwen accelerator build entry points"
 	@echo "  make hls_csim_compute"
 	@echo "  make hls_csynth_compute"
 	@echo "  make hls_cosim_compute"
@@ -86,6 +87,10 @@ help:
 	@echo "  make hls_cosim_control"
 	@echo "  make hls_csim_nk"
 	@echo "  make hls_cosim_closed_loop_8x64_resident_layer"
+	@echo "  make hls_csim_closed_loop_8x64_composed_layer"
+	@echo "  make hls_cosim_closed_loop_8x64_composed_layer"
+	@echo "  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed"
+	@echo "  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack"
 	@echo "  make vitis_8x64_xo"
 	@echo "  make vitis_8x64_link TARGET=sw_emu|hw_emu|hw"
 	@echo "  make vitis_8x64_run_smoke TARGET=sw_emu|hw_emu|hw"
@@ -121,6 +126,12 @@ hls_csim_closed_loop_8x64_resident_layer:
 
 hls_cosim_closed_loop_8x64_resident_layer:
 	scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_layer.tcl
+
+hls_csim_closed_loop_8x64_composed_layer:
+	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_composed_layer.tcl
+
+hls_cosim_closed_loop_8x64_composed_layer:
+	scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_composed_layer.tcl
 
 $(COMPUTE_XO): \
 	kernel/mm_stream_8x64_fused_mac.cpp \

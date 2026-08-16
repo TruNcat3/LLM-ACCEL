@@ -166,7 +166,7 @@ inline cu8_nk_status_word_t pack_cu8_nk_status(
     static_assert(2 * ceildiv(MAX_LINEAR_OUT_DIM, CC8_OUTPUTS_PER_WAVE) < 4096, "status dispatched_mm_tasks uses 12-bit compact encoding");
     static_assert(2 * CU_STREAM_MAX_PACKETS < 131072, "status completed_output_packets uses 17-bit compact encoding");
     cu8_nk_status_word_t word = 0;
-    static_assert(CC8_OP_DECODER_LAYER < 32, "status op uses 5-bit encoding");
+    static_assert(CC8_OP_FINAL_NORM < 32, "status op uses 5-bit encoding");
     // The 64-bit word still has five spare high bits in the old layout.
     // Use three of them to represent a full 2048-token attention launch:
     // 3072 system MM tasks and 98304 returned packets.

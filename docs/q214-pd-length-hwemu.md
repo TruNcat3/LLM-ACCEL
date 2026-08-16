@@ -38,7 +38,7 @@ operator calls, CPU RoPE/test-fixture packing, KV fixture migration, and CPU
 golden checks are outside the reported interval. The dense and attention
 arithmetic listed above executes in the FPGA kernels.
 
-| Phase | Context | Tokens | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | token/s |
+| Phase | Context | Active query tokens | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | P | 64 | 8 | 637,103 | 3.1855 | 194.174 | 94.812% | 2,511.37 |
 | P | 256 | 8 | 685,489 | 3.4274 | 182.304 | 89.016% | 2,334.10 |
@@ -55,11 +55,20 @@ costs approximately 7.7k cycles.  P remains efficient because eight query rows
 fill the 8x64 datapath.  D uses only one query row, so its shape-normalized work
 is valid but its physical utilization remains around 12%.
 
-`Tokens=8` denotes the active query block, not the prompt length. For P1024,
-the measured block contains positions 1016--1023 and reads a causal KV history
-of up to 1024 entries. A complete 1024-token prefill contains 128 such blocks
-and must be evaluated by summing their context-dependent costs; the P1024 row
-alone is the final-block cost.
+`Active query tokens = 8` means eight consecutive rows of one sequence, not an
+eight-sequence batch and not an eight-token prompt. For P1024, the measured
+block contains positions 1016--1023 and reads a causal KV history of up to 1024
+entries. A complete 1024-token prefill contains 128 such context-dependent
+blocks. Consequently, `target-block token/s` is a one-layer block throughput,
+not full-prompt or whole-model generation throughput.
+
+The FPGA executes RMSNorm, all projections, QK/PV with online softmax,
+residual operators, and the FFN. The host still performs operator sequencing,
+RoPE, boundary packing, deterministic KV-prefix preload, and projection-to-KV
+fixture migration. CPU golden computation is validation only and does not feed
+the accelerator result. The coarse-task resident runtime reported separately
+moves RoPE/KV ownership into the controller and removes intermediate hidden-
+state host copies.
 
 ## Precision and Protocol Coverage
 
