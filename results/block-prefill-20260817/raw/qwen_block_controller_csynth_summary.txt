@@ -1,0 +1,25 @@
+Vitis HLS 2022.2
+Top: control_cache_8x64_dual_core_nk
+Project: qwen_hls_control_cache_8x64_nk_prj_qwen_layer.resident_layer.t8.d2.ii2.r0.wr33.cw1.block_prefill_q214
+Target part: xcu50-fsvh2104-2-e
+Target period: 3.33 ns
+Estimated period: 3.746 ns
+
+Resource estimate:
+BRAM_18K 1204
+DSP 111
+FF 468715
+LUT 453747
+URAM 0
+
+Full-U50 utilization reported by HLS:
+BRAM_18K 44%
+DSP 1%
+FF 26%
+LUT 52%
+
+Single-SLR utilization reported by HLS:
+BRAM_18K 89%
+DSP 3%
+FF 53%
+LUT 104%

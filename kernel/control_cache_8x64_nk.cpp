@@ -7,7 +7,8 @@ static bool cc8_nk_mode_uses_mm(cu8_mode_t mode) {
         mode == CU8_MODE_MM_SCALE;
 }
 
-#if CC8_RESIDENT_LAYER_ONLY || defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
+#if (CC8_RESIDENT_LAYER_ONLY && !CC8_RESIDENT_DUAL_VECTOR_PORTS) || \
+    defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
 static void declare_cc8_nk_idle_vector_ports(
     hls::stream<cu_vec16_packet_t>& vector_input0_stream,
     hls::stream<cu_vec16_packet_t>& vector_input1_stream,
@@ -388,7 +389,7 @@ void control_cache_8x64_dual_core_nk(
         kv_cache_k,
         kv_cache_v
     );
-#if CC8_RESIDENT_LAYER_ONLY
+#if CC8_RESIDENT_LAYER_ONLY && !CC8_RESIDENT_DUAL_VECTOR_PORTS
     declare_cc8_nk_idle_vector_ports(
         typed_core1_vector_input0_stream,
         typed_core1_vector_input1_stream,

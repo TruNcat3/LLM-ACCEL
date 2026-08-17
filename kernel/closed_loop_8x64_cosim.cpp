@@ -200,6 +200,35 @@ static void seed_cc8_closed_loop_vector_results(
     }
 }
 
+static void seed_cc8_closed_loop_dual_vector_results(
+    hls::stream<cu_vec16_packet_t>& core0_result_stream,
+    hls::stream<cu_vec16_packet_t>& core1_result_stream,
+    unsigned int token_count,
+    unsigned int elem_count,
+    unsigned int operator_kind
+) {
+    const unsigned int core0_tokens =
+        token_count < CC8_TOKENS_PER_DATA_PORT ?
+        token_count : CC8_TOKENS_PER_DATA_PORT;
+    const unsigned int core1_tokens =
+        token_count > CC8_TOKENS_PER_DATA_PORT ?
+        token_count - CC8_TOKENS_PER_DATA_PORT : 0;
+    seed_cc8_closed_loop_vector_results(
+        core0_result_stream,
+        0,
+        core0_tokens,
+        elem_count,
+        operator_kind
+    );
+    seed_cc8_closed_loop_vector_results(
+        core1_result_stream,
+        CC8_TOKENS_PER_DATA_PORT,
+        core1_tokens,
+        elem_count,
+        operator_kind
+    );
+}
+
 static void seed_cc8_closed_loop_zero_mm_wave(
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
@@ -228,17 +257,22 @@ static void seed_cc8_closed_loop_zero_mm_wave(
 }
 
 static unsigned int cc8_resident_layer_mm_wave_slots(
-    unsigned int position
+    unsigned int position,
+    unsigned int token_count
 ) {
-    unsigned int context_len = position + 1;
-    unsigned int attention_tiles = ceildiv(context_len, CC8_ATTN_TILE);
     unsigned int attention_output_waves =
         ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
-    return
+    unsigned int slots =
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
         ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        attention_tiles * (1 + attention_output_waves) +
+        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE);
+    for (unsigned int token = 0; token < CC8_GBUF_TOKEN_ROWS; token++) {
+        if (token < token_count) {
+            slots += ceildiv(position + token + 1, CC8_ATTN_TILE) *
+                (1 + attention_output_waves);
+        }
+    }
+    return slots +
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
         ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
         ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
@@ -246,17 +280,21 @@ static unsigned int cc8_resident_layer_mm_wave_slots(
 }
 
 static unsigned int cc8_attention_sublayer_mm_wave_slots(
-    unsigned int position
+    unsigned int position,
+    unsigned int token_count
 ) {
-    const unsigned int attention_tiles =
-        ceildiv(position + 1, CC8_ATTN_TILE);
     const unsigned int attention_output_waves =
         ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
-    return
+    unsigned int slots =
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
-        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        attention_tiles * (1 + attention_output_waves) +
-        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE);
+    for (unsigned int token = 0; token < CC8_GBUF_TOKEN_ROWS; token++) {
+        if (token < token_count) {
+            slots += ceildiv(position + token + 1, CC8_ATTN_TILE) *
+                (1 + attention_output_waves);
+        }
+    }
+    return slots + ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
 }
 
 static unsigned int cc8_ffn_sublayer_mm_wave_slots() {
@@ -268,12 +306,13 @@ static unsigned int cc8_ffn_sublayer_mm_wave_slots() {
 static void seed_cc8_closed_loop_attention_sublayer_c_model(
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
-    unsigned int position
+    unsigned int position,
+    unsigned int token_count
 ) {
-    seed_cc8_closed_loop_vector_results(
+    seed_cc8_closed_loop_dual_vector_results(
         core0_result_stream,
-        0,
-        1,
+        core1_result_stream,
+        token_count,
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
@@ -288,7 +327,7 @@ static void seed_cc8_closed_loop_attention_sublayer_c_model(
          projection_idx++) {
         mm_projection_spec_t projection;
         get_mm_projection_spec(qkv[projection_idx], projection);
-        unsigned int waves =
+        const unsigned int waves =
             ceildiv(projection.out_dim, CC8_OUTPUTS_PER_WAVE);
         for (unsigned int wave = 0; wave < waves; wave++) {
             seed_cc8_closed_loop_zero_mm_wave(
@@ -300,30 +339,34 @@ static void seed_cc8_closed_loop_attention_sublayer_c_model(
         }
     }
 
-    unsigned int attention_output_waves =
+    const unsigned int attention_output_waves =
         ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
-    unsigned int attention_tiles =
-        ceildiv(position + 1, CC8_ATTN_TILE);
-    for (unsigned int tile = 0; tile < attention_tiles; tile++) {
-        seed_cc8_closed_loop_zero_mm_wave(
-            core0_result_stream,
-            core1_result_stream,
-            0,
-            true
-        );
-        for (unsigned int wave = 0;
-             wave < attention_output_waves;
-             wave++) {
-            seed_cc8_closed_loop_zero_mm_wave(
-                core0_result_stream,
-                core1_result_stream,
-                wave,
-                true
-            );
+    for (unsigned int token = 0; token < CC8_GBUF_TOKEN_ROWS; token++) {
+        if (token < token_count) {
+            const unsigned int attention_tiles =
+                ceildiv(position + token + 1, CC8_ATTN_TILE);
+            for (unsigned int tile = 0; tile < attention_tiles; tile++) {
+                seed_cc8_closed_loop_zero_mm_wave(
+                    core0_result_stream,
+                    core1_result_stream,
+                    0,
+                    true
+                );
+                for (unsigned int wave = 0;
+                     wave < attention_output_waves;
+                     wave++) {
+                    seed_cc8_closed_loop_zero_mm_wave(
+                        core0_result_stream,
+                        core1_result_stream,
+                        wave,
+                        true
+                    );
+                }
+            }
         }
     }
 
-    unsigned int hidden_waves =
+    const unsigned int hidden_waves =
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
     for (unsigned int wave = 0; wave < hidden_waves; wave++) {
         seed_cc8_closed_loop_zero_mm_wave(
@@ -333,10 +376,10 @@ static void seed_cc8_closed_loop_attention_sublayer_c_model(
             false
         );
     }
-    seed_cc8_closed_loop_vector_results(
+    seed_cc8_closed_loop_dual_vector_results(
         core0_result_stream,
-        0,
-        1,
+        core1_result_stream,
+        token_count,
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
@@ -344,19 +387,20 @@ static void seed_cc8_closed_loop_attention_sublayer_c_model(
 
 static void seed_cc8_closed_loop_ffn_sublayer_c_model(
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
-    hls::stream<cu_vec16_packet_t>& core1_result_stream
+    hls::stream<cu_vec16_packet_t>& core1_result_stream,
+    unsigned int token_count
 ) {
     const unsigned int hidden_waves =
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
-    seed_cc8_closed_loop_vector_results(
+    seed_cc8_closed_loop_dual_vector_results(
         core0_result_stream,
-        0,
-        1,
+        core1_result_stream,
+        token_count,
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
 
-    unsigned int intermediate_waves =
+    const unsigned int intermediate_waves =
         ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE);
     for (unsigned int projection = 0; projection < 2; projection++) {
         for (unsigned int wave = 0; wave < intermediate_waves; wave++) {
@@ -368,10 +412,10 @@ static void seed_cc8_closed_loop_ffn_sublayer_c_model(
             );
         }
     }
-    seed_cc8_closed_loop_vector_results(
+    seed_cc8_closed_loop_dual_vector_results(
         core0_result_stream,
-        0,
-        1,
+        core1_result_stream,
+        token_count,
         INTERMEDIATE_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
@@ -383,10 +427,10 @@ static void seed_cc8_closed_loop_ffn_sublayer_c_model(
             false
         );
     }
-    seed_cc8_closed_loop_vector_results(
+    seed_cc8_closed_loop_dual_vector_results(
         core0_result_stream,
-        0,
-        1,
+        core1_result_stream,
+        token_count,
         HIDDEN_SIZE,
         unsigned(CC8_OP_RMSNORM)
     );
@@ -395,16 +439,19 @@ static void seed_cc8_closed_loop_ffn_sublayer_c_model(
 static void seed_cc8_closed_loop_resident_layer_c_model(
     hls::stream<cu_vec16_packet_t>& core0_result_stream,
     hls::stream<cu_vec16_packet_t>& core1_result_stream,
-    unsigned int position
+    unsigned int position,
+    unsigned int token_count
 ) {
     seed_cc8_closed_loop_attention_sublayer_c_model(
         core0_result_stream,
         core1_result_stream,
-        position
+        position,
+        token_count
     );
     seed_cc8_closed_loop_ffn_sublayer_c_model(
         core0_result_stream,
-        core1_result_stream
+        core1_result_stream,
+        token_count
     );
 }
 
@@ -468,7 +515,8 @@ static void cc8_closed_loop_compute_core1(
     );
 }
 
-#if CC8_RESIDENT_LAYER_ONLY || defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
+#if (CC8_RESIDENT_LAYER_ONLY && !CC8_RESIDENT_DUAL_VECTOR_PORTS) || \
+    defined(CC8_PREFILL_BLOCK_SYNTH_ONLY)
 static void declare_cc8_closed_loop_idle_vector_ports(
     hls::stream<cu_vec16_packet_t>& vector_input0_stream,
     hls::stream<cu_vec16_packet_t>& vector_input1_stream,
@@ -641,49 +689,67 @@ void cc8_closed_loop_inner_cosim(
         );
     } else if (operator_kind == unsigned(CC8_OP_DECODER_LAYER)) {
         unsigned int wave_slots =
-            cc8_resident_layer_mm_wave_slots(position);
-        unsigned int vector_packets =
+            cc8_resident_layer_mm_wave_slots(position, token_count);
+        const unsigned int core0_tokens =
+            token_count < CC8_TOKENS_PER_DATA_PORT ?
+            token_count : CC8_TOKENS_PER_DATA_PORT;
+        const unsigned int core1_tokens = token_count - core0_tokens;
+        const unsigned int vector_packets_per_token =
             4 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
             ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES);
         c_model_core0_result_packets =
             wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
-            vector_packets;
+            core0_tokens * vector_packets_per_token;
         c_model_core1_result_packets =
-            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
+            core1_tokens * vector_packets_per_token;
         seed_cc8_closed_loop_resident_layer_c_model(
             core0_result_stream,
             core1_result_stream,
-            position
+            position,
+            token_count
         );
     } else if (operator_kind == unsigned(CC8_OP_ATTENTION_SUBLAYER)) {
         const unsigned int wave_slots =
-            cc8_attention_sublayer_mm_wave_slots(position);
-        const unsigned int vector_packets =
+            cc8_attention_sublayer_mm_wave_slots(position, token_count);
+        const unsigned int core0_tokens =
+            token_count < CC8_TOKENS_PER_DATA_PORT ?
+            token_count : CC8_TOKENS_PER_DATA_PORT;
+        const unsigned int core1_tokens = token_count - core0_tokens;
+        const unsigned int vector_packets_per_token =
             2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
         c_model_core0_result_packets =
             wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
-            vector_packets;
+            core0_tokens * vector_packets_per_token;
         c_model_core1_result_packets =
-            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
+            core1_tokens * vector_packets_per_token;
         seed_cc8_closed_loop_attention_sublayer_c_model(
             core0_result_stream,
             core1_result_stream,
-            position
+            position,
+            token_count
         );
     } else if (operator_kind == unsigned(CC8_OP_FFN_SUBLAYER)) {
         const unsigned int wave_slots =
             cc8_ffn_sublayer_mm_wave_slots();
-        const unsigned int vector_packets =
+        const unsigned int core0_tokens =
+            token_count < CC8_TOKENS_PER_DATA_PORT ?
+            token_count : CC8_TOKENS_PER_DATA_PORT;
+        const unsigned int core1_tokens = token_count - core0_tokens;
+        const unsigned int vector_packets_per_token =
             2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
             ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES);
         c_model_core0_result_packets =
             wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
-            vector_packets;
+            core0_tokens * vector_packets_per_token;
         c_model_core1_result_packets =
-            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK;
+            wave_slots * MM_STREAM_8X64_PACKETS_PER_BLOCK +
+            core1_tokens * vector_packets_per_token;
         seed_cc8_closed_loop_ffn_sublayer_c_model(
             core0_result_stream,
-            core1_result_stream
+            core1_result_stream,
+            token_count
         );
     } else if (vector_case) {
         unsigned int core0_tokens =
@@ -791,7 +857,7 @@ void cc8_closed_loop_inner_cosim(
         kv_cache_k,
         kv_cache_v
     );
-#if CC8_RESIDENT_LAYER_ONLY
+#if CC8_RESIDENT_LAYER_ONLY && !CC8_RESIDENT_DUAL_VECTOR_PORTS
     declare_cc8_closed_loop_idle_vector_ports(
         core1_vector_input0_stream,
         core1_vector_input1_stream,

@@ -1,0 +1,4 @@
+profile	design	instances	bram18	dsp	ff	lut	hls_estimated_period_ns	full_u50_bram_percent	full_u50_dsp_percent	full_u50_ff_percent	full_u50_lut_percent
+qwen-layer	block_prefill_controller	1	1204	111	468715	453747	3.746	44.79	1.86	26.89	52.05
+qwen-layer	exact_compute_cu	1	48	677	197555	117643	2.433	1.79	11.37	11.33	13.50
+qwen-layer	controller_plus_two_compute	1+2	1300	1465	863825	689033	NA	48.36	24.61	49.55	79.05

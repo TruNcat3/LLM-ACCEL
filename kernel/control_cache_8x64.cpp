@@ -5168,6 +5168,76 @@ static void extract_cc8_resident_query_group_from_gbuf(
 }
 
 template <typename SourceBufferT>
+static void extract_cc8_prefill_query_groups_from_gbuf(
+    cc8_prefill_query_block_t& query0,
+    cc8_prefill_query_block_t& query1,
+    const SourceBufferT& source,
+    unsigned int token_count
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=query0.block complete dim=2
+    #pragma HLS array_partition variable=query1.block complete dim=2
+    #pragma HLS array_partition variable=source.block complete dim=1
+
+    constexpr unsigned int kHeadBlocks = ceildiv(HEAD_DIM, MM_PE_IN);
+    for (unsigned int token = 0;
+         token < CC8_GBUF_TOKEN_ROWS;
+         token++) {
+        for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+            for (unsigned int block = 0; block < kHeadBlocks; block++) {
+                #pragma HLS pipeline II=1
+                query0.block[head][token][block] = token < token_count ?
+                    source.block[token][head * kHeadBlocks + block] :
+                    mm_input_block_t(0);
+                query1.block[head][token][block] = token < token_count ?
+                    source.block[token][
+                        (GQA_GROUP_SIZE + head) * kHeadBlocks + block
+                    ] :
+                    mm_input_block_t(0);
+            }
+        }
+    }
+}
+
+static void load_cc8_resident_query_from_prefill_block(
+    cc8_resident_query_buffer_t& query0,
+    cc8_resident_query_buffer_t& query1,
+    const cc8_prefill_query_block_t& block0,
+    const cc8_prefill_query_block_t& block1,
+    unsigned int token
+) {
+    #pragma HLS inline off
+    #pragma HLS array_partition variable=query0.value complete dim=1
+    #pragma HLS array_partition variable=query0.value complete dim=2
+    #pragma HLS array_partition variable=query1.value complete dim=1
+    #pragma HLS array_partition variable=query1.value complete dim=2
+    #pragma HLS array_partition variable=block0.block complete dim=2
+    #pragma HLS array_partition variable=block1.block complete dim=2
+
+    for (unsigned int head = 0; head < GQA_GROUP_SIZE; head++) {
+        for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
+            #pragma HLS pipeline II=1
+            query0.value[head][0][i] =
+                read_cc8_prefill_query_value(block0, head, token, i);
+            query0.value[head][1][i] = read_cc8_prefill_query_value(
+                block0,
+                head,
+                token,
+                CC8_ROPE_HALF_ELEMS + i
+            );
+            query1.value[head][0][i] =
+                read_cc8_prefill_query_value(block1, head, token, i);
+            query1.value[head][1][i] = read_cc8_prefill_query_value(
+                block1,
+                head,
+                token,
+                CC8_ROPE_HALF_ELEMS + i
+            );
+        }
+    }
+}
+
+template <typename SourceBufferT>
 static void extract_cc8_current_kv_from_gbuf(
     cc8_current_kv_words_t& current,
     const SourceBufferT& source,
@@ -5424,6 +5494,7 @@ static unsigned int run_cc8_resident_decode_attention(
     const cc8_resident_k_buffer_t& current_k,
     const cc8_current_kv_words_t& current_v_words,
     DestinationBufferT& destination,
+    unsigned int destination_token,
     unsigned int layer_id,
     unsigned int position,
     fm_word_t kv_cache_k[CC8_KV_CACHE_WORDS],
@@ -5654,14 +5725,14 @@ static unsigned int run_cc8_resident_decode_attention(
 
     store_cc8_flash_output_group_to_gbuf(
         destination,
-        0,
+        destination_token,
         0,
         acc0,
         online_sum0
     );
     store_cc8_flash_output_group_to_gbuf(
         destination,
-        0,
+        destination_token,
         GQA_GROUP_SIZE,
         acc1,
         online_sum1
@@ -5877,7 +5948,7 @@ void control_cache_8x64_dual_core(
     #pragma HLS array_partition variable=hidden1.block complete dim=1
 
     if (op == CC8_OP_FINAL_NORM) {
-        if (token_count != 1) {
+        if (token_count == 0 || token_count > CC8_GBUF_TOKEN_ROWS) {
             status.status = CC8_STATUS_BAD_TOKEN_COUNT;
             core0_task_stream.write(build_cc8_stop_task());
             core1_task_stream.write(build_cc8_stop_task());
@@ -5922,7 +5993,7 @@ void control_cache_8x64_dual_core(
             true
         );
         status.completed_output_packets =
-            ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+            token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
         store_cc8_gbuf_to_hbm(
             output_port0,
             output_port1,
@@ -5943,14 +6014,14 @@ void control_cache_8x64_dual_core(
         // HBM; a following FFN task reads that device-resident state through
         // a host-side buffer rebind, without a CPU copy.  All tensors inside
         // either sublayer remain in the local hidden/wide banks.
-        if (token_count != 1) {
+        if (token_count == 0 || token_count > CC8_GBUF_TOKEN_ROWS) {
             status.status = CC8_STATUS_BAD_TOKEN_COUNT;
             core0_task_stream.write(build_cc8_stop_task());
             core1_task_stream.write(build_cc8_stop_task());
             status_stream.write(status);
             return;
         }
-        if (position >= MAX_SEQ_LEN) {
+        if (position >= MAX_SEQ_LEN || position + token_count > MAX_SEQ_LEN) {
             status.status = CC8_STATUS_BAD_POSITION;
             core0_task_stream.write(build_cc8_stop_task());
             core1_task_stream.write(build_cc8_stop_task());
@@ -5960,17 +6031,21 @@ void control_cache_8x64_dual_core(
 
         cc8_resident_query_buffer_t query0;
         cc8_resident_query_buffer_t query1;
-        cc8_resident_k_buffer_t current_k;
+        cc8_prefill_query_block_t query_block0;
+        cc8_prefill_query_block_t query_block1;
+        cc8_resident_k_buffer_t current_k[CC8_GBUF_TOKEN_ROWS];
         cc8_current_kv_words_t current_v_words;
         #pragma HLS bind_storage variable=query0.value type=ram_2p impl=bram
         #pragma HLS bind_storage variable=query1.value type=ram_2p impl=bram
-        #pragma HLS bind_storage variable=current_k.value type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=query_block0.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=query_block1.block type=ram_2p impl=bram
+        #pragma HLS bind_storage variable=current_k type=ram_2p impl=bram
         #pragma HLS array_partition variable=query0.value complete dim=1
         #pragma HLS array_partition variable=query0.value complete dim=2
         #pragma HLS array_partition variable=query1.value complete dim=1
         #pragma HLS array_partition variable=query1.value complete dim=2
-        #pragma HLS array_partition variable=current_k.value complete dim=1
-        #pragma HLS array_partition variable=current_k.value complete dim=2
+        #pragma HLS array_partition variable=query_block0.block complete dim=2
+        #pragma HLS array_partition variable=query_block1.block complete dim=2
         #pragma HLS array_partition variable=current_v_words.word complete dim=0
 
         unsigned int total_mm_tasks = 0;
@@ -6063,7 +6138,8 @@ void control_cache_8x64_dual_core(
                 false
             );
         }
-        total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+        total_packets +=
+            token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
 
         // Stages 2-5 share one physical projection engine.  Keeping the
         // call at one syntactic site prevents HLS from cloning the complete
@@ -6096,20 +6172,44 @@ void control_cache_8x64_dual_core(
             if (projection_step <= 2) {
                 // Q/K/V consume the first normalized hidden state and reuse
                 // gbuf0 after each result is compacted into resident caches.
+                // V is the exception: all token rows remain in gbuf0 until
+                // the causal attention walk consumes and overwrites them.
                 clear_cc8_gbuf(gbuf0, projection_spec.out_dim);
             } else if (projection_step == 3) {
-                // Online-softmax/FlashAttention is controller resident.  It
-                // overwrites the V projection in gbuf0, then O writes gbuf1.
-                apply_cc8_rope_from_aux(
-                    query0,
-                    query1,
-                    current_k,
-                    aux_port1,
-                    position
-                );
-                clear_cc8_gbuf(gbuf0, HIDDEN_SIZE);
-                unsigned int attention_tasks =
-                    run_cc8_resident_decode_attention(
+                // One coarse prefill task holds all Q rows and K rows on chip.
+                // V remains in gbuf0.  For each query token, append K/V to the
+                // controller-owned cache, execute causal online attention,
+                // and overwrite only that token's V row with its context.
+                // The compute array still uses all eight rows: here rows map
+                // to the eight GQA heads, while projections/FFN map them to
+                // consecutive query tokens.
+                unsigned int attention_tasks = 0;
+                for (unsigned int token = 0;
+                     token < CC8_GBUF_TOKEN_ROWS;
+                     token++) {
+                    #pragma HLS loop_tripcount min=1 max=LINEAR_TOKEN_TILE_ACTIVE
+                    if (token < token_count) {
+                        load_cc8_resident_query_from_prefill_block(
+                            query0,
+                            query1,
+                            query_block0,
+                            query_block1,
+                            token
+                        );
+                        extract_cc8_current_kv_from_gbuf(
+                            current_v_words,
+                            gbuf0,
+                            token
+                        );
+                        apply_cc8_rope_from_aux(
+                            query0,
+                            query1,
+                            current_k[token],
+                            aux_port1,
+                            position + token
+                        );
+                        attention_tasks +=
+                            run_cc8_resident_decode_attention(
                         core0_task_stream,
                         core0_activation_stream,
                         core0_weight_stream0,
@@ -6126,14 +6226,17 @@ void control_cache_8x64_dual_core(
                         core1_result_stream,
                         query0,
                         query1,
-                        current_k,
+                        current_k[token],
                         current_v_words,
                         gbuf0,
+                        token,
                         layer_id,
-                        position,
+                        position + token,
                         kv_cache_k,
                         kv_cache_v
                     );
+                    }
+                }
                 total_mm_tasks += attention_tasks;
                 total_packets +=
                     attention_tasks * MM_STREAM_8X64_PACKETS_PER_BLOCK;
@@ -6202,30 +6305,28 @@ void control_cache_8x64_dual_core(
                 MM_STREAM_8X64_PACKETS_PER_BLOCK;
 
             if (projection_step == 0) {
-                extract_cc8_resident_query_group_from_gbuf(
-                    query0,
+                extract_cc8_prefill_query_groups_from_gbuf(
+                    query_block0,
+                    query_block1,
                     gbuf0,
-                    0,
-                    0
-                );
-                extract_cc8_resident_query_group_from_gbuf(
-                    query1,
-                    gbuf0,
-                    0,
-                    GQA_GROUP_SIZE
+                    token_count
                 );
             } else if (projection_step == 1) {
-                extract_cc8_resident_k_from_gbuf(
-                    current_k,
-                    gbuf0,
-                    0
-                );
+                for (unsigned int token = 0;
+                     token < CC8_GBUF_TOKEN_ROWS;
+                     token++) {
+                    #pragma HLS loop_tripcount min=1 max=LINEAR_TOKEN_TILE_ACTIVE
+                    if (token < token_count) {
+                        extract_cc8_resident_k_from_gbuf(
+                            current_k[token],
+                            gbuf0,
+                            token
+                        );
+                    }
+                }
             } else if (projection_step == 2) {
-                extract_cc8_current_kv_from_gbuf(
-                    current_v_words,
-                    gbuf0,
-                    0
-                );
+                // Preserve every V row in gbuf0.  Stage 3 consumes each row
+                // immediately before replacing it with the attention output.
             } else if (projection_step == 3) {
                 // O result + original hidden -> first residual, followed by
                 // the second RMSNorm.  gbuf1 is reused for the norm weights.
@@ -6249,7 +6350,8 @@ void control_cache_8x64_dual_core(
                     token_count,
                     op == CC8_OP_ATTENTION_SUBLAYER
                 );
-                total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+                total_packets +=
+                    token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
 
                 if (op != CC8_OP_ATTENTION_SUBLAYER) {
                     load_cc8_feature_gbuf(
@@ -6281,7 +6383,8 @@ void control_cache_8x64_dual_core(
                         1,
                         false
                     );
-                    total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+                    total_packets +=
+                        token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
                 }
             } else if (projection_step == 5) {
                 // Gate may be overwritten once both Gate and Up packets have
@@ -6304,6 +6407,7 @@ void control_cache_8x64_dual_core(
                         false
                     );
                 total_packets +=
+                    token_count *
                     ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES);
             } else if (projection_step == 6) {
                 // Down + first residual completes the layer and terminates
@@ -6325,7 +6429,8 @@ void control_cache_8x64_dual_core(
                         HIDDEN_SIZE,
                         true
                     );
-                total_packets += ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
+                total_packets +=
+                    token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES);
             }
         }
         if (op == CC8_OP_ATTENTION_SUBLAYER) {

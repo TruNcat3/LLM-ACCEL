@@ -73,6 +73,34 @@ static void clear_data_ports() {
     }
 }
 
+static void initialize_persistent_resident_aux() {
+    for (unsigned int row = 0; row < CC8_LAYER_NORM_ROWS; row++) {
+        for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+            set_fm_word_lane(
+                aux_port0[
+                    row * CC8_LAYER_NORM_WORDS +
+                    elem / FM_BLOCK_SIZE
+                ],
+                elem % FM_BLOCK_SIZE,
+                fm_t(1)
+            );
+        }
+    }
+    for (unsigned int position = 0; position < MAX_SEQ_LEN; position++) {
+        const unsigned int row = position * CC8_ROPE_POSITION_WORDS;
+        for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
+            set_fm_word_lane(
+                aux_port1[
+                    row + CC8_ROPE_COS_WORD_OFFSET +
+                    i / FM_BLOCK_SIZE
+                ],
+                i % FM_BLOCK_SIZE,
+                fm_t(1)
+            );
+        }
+    }
+}
+
 static void set_feature_value(
     fm_word_t port0[CC8_DATA_PORT_WORDS],
     fm_word_t port1[CC8_DATA_PORT_WORDS],
@@ -2652,6 +2680,7 @@ static int run_attention_argument_validation_cases() {
 
 static int run_resident_decoder_layer_route_case() {
     clear_data_ports();
+    initialize_persistent_resident_aux();
     for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
         set_feature_value(
             input_port0,
@@ -2659,25 +2688,6 @@ static int run_resident_decoder_layer_route_case() {
             0,
             elem,
             input_value(0, elem)
-        );
-        set_fm_word_lane(
-            aux_port0[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
-        set_fm_word_lane(
-            aux_port1[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
-    }
-    for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
-        set_fm_word_lane(
-            aux_port0[
-                CC8_ROPE_COS_WORD_OFFSET + i / FM_BLOCK_SIZE
-            ],
-            i % FM_BLOCK_SIZE,
-            fm_t(1)
         );
     }
 
@@ -2965,6 +2975,7 @@ static int check_resident_sublayer_route(
 
 static int run_attention_sublayer_route_case() {
     clear_data_ports();
+    initialize_persistent_resident_aux();
     for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
         set_feature_value(
             input_port0,
@@ -2972,18 +2983,6 @@ static int run_attention_sublayer_route_case() {
             0,
             elem,
             input_value(0, elem)
-        );
-        set_fm_word_lane(
-            aux_port0[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
-    }
-    for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
-        set_fm_word_lane(
-            aux_port0[CC8_ROPE_COS_WORD_OFFSET + i / FM_BLOCK_SIZE],
-            i % FM_BLOCK_SIZE,
-            fm_t(1)
         );
     }
 
@@ -3036,7 +3035,7 @@ static int run_attention_sublayer_route_case() {
     }
     preload_vector_results(streams.core0_result, 0, 1, HIDDEN_SIZE);
 
-    call_control_cache(streams, CC8_OP_ATTENTION_SUBLAYER, 1, 0, 0);
+    call_control_cache(streams, CC8_OP_ATTENTION_SUBLAYER, 1, 1, 0);
     const unsigned int expected_waves =
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
         2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
@@ -3054,6 +3053,7 @@ static int run_attention_sublayer_route_case() {
 
 static int run_ffn_sublayer_route_case() {
     clear_data_ports();
+    initialize_persistent_resident_aux();
     for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
         set_feature_value(
             input_port0,
@@ -3061,11 +3061,6 @@ static int run_ffn_sublayer_route_case() {
             0,
             elem,
             input_value(0, elem)
-        );
-        set_fm_word_lane(
-            aux_port1[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
         );
     }
 
@@ -3119,6 +3114,7 @@ static int run_ffn_sublayer_route_case() {
 
 static int run_final_norm_route_case() {
     clear_data_ports();
+    initialize_persistent_resident_aux();
     for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
         set_feature_value(
             input_port0,
@@ -3126,11 +3122,6 @@ static int run_final_norm_route_case() {
             0,
             elem,
             input_value(0, elem)
-        );
-        set_fm_word_lane(
-            aux_port0[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
         );
     }
     cc8_test_streams_t streams;

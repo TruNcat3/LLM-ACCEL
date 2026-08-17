@@ -1,0 +1,9 @@
+COARSE_TASK_PREFILL_BLOCK layers=2 tasks=5 position_begin=0 query_tokens=8 position_end=7 event_timing_domain=hw_emu_host_wall_proxy attention_controller_ms=178022 ffn_controller_ms=52007.2 final_norm_controller_ms=13002 kernel_active_ms=243031 input_migration_ms=66.085 auxiliary_migration_ms=0 status_kernel_ms=10001.4 status_migration_ms=111.057 output_migration_ms=43.3336 profiled_sequence_ms=253253 host_elapsed_ms=253300 intermediate_host_copy=0 kv_cache_owner=controller
+position=0 token=0 hidden_checksum=0x4720e89a9b023b6a
+position=7 token=7 hidden_checksum=0x71c886bb6b8e0096
+COARSE_TASK_PREFILL_BLOCK layers=2 tasks=5 position_begin=8 query_tokens=3 position_end=10 event_timing_domain=hw_emu_host_wall_proxy attention_controller_ms=91011.2 ffn_controller_ms=47005.4 final_norm_controller_ms=12001.5 kernel_active_ms=150018 input_migration_ms=67.82 auxiliary_migration_ms=0 status_kernel_ms=11001.4 status_migration_ms=110.611 output_migration_ms=42.4655 profiled_sequence_ms=161240 host_elapsed_ms=162244 intermediate_host_copy=0 kv_cache_owner=controller
+position=8 token=8 hidden_checksum=0x5cdad59e5f11a6b8
+position=10 token=10 hidden_checksum=0x778bf63d4f90d709
+generated[0]=10
+QWEN_8X64_E2E_PROFILE prompt_tokens=11 generated_tokens=1 prompt_forward_passes=2 generated_forward_passes=0 prefill_mode=coarse_block prefill_block_size=8 prompt_forward_ms=415544 prefill_token_s=0.0264713 time_to_first_token_ms=415545 generated_forward_ms=0 mean_inter_token_ms=0 decode_token_s=0 lm_head_host_ms=0.045053 total_host_elapsed_ms=415545 intermediate_host_copy=0 kv_cache_owner=controller PASS
+QWEN_8X64_HOST PASS elapsed_seconds=415.545 sequence=0,1,2,3,4,5,6,7,8,9,10,10

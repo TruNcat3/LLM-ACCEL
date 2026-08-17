@@ -5,9 +5,9 @@ cd "$(dirname "$0")/.."
 
 phase="${1:-all}"
 case "${phase}" in
-    control-xo|status-xo|link|host|all|run|run-composed|run-stack|run-generate) ;;
+    compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-stack|run-generate) ;;
     *)
-        echo "usage: $0 [control-xo|status-xo|link|host|all|run|run-composed|run-stack|run-generate]" >&2
+        echo "usage: $0 [compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-stack|run-generate]" >&2
         exit 2
         ;;
 esac
@@ -21,6 +21,7 @@ load_ii="${CC8_WEIGHT_TILE_LOAD_II:-2}"
 wave_repeat="${CC8_ENABLE_MM_WAVE_REPEAT:-0}"
 wave_result_depth="${CC8_MM_WAVE_RESULT_FIFO_DEPTH:-33}"
 cross_wave_dataflow="${CC8_ENABLE_MM_CROSS_WAVE_DATAFLOW:-1}"
+resident_token_rows="${CC8_RESIDENT_TOKEN_ROWS:-8}"
 frequency="${FREQUENCY:-200}"
 threads="${THREADS:-16}"
 device="${DEVICE:-xilinx_u50_gen3x16_xdma_5_202210_1}"
@@ -29,9 +30,11 @@ timeout_seconds="${VITIS_8X64_HW_EMU_TIMEOUT:-43200}"
 seed="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 debug_build="${VITIS_8X64_HWEMU_DEBUG:-0}"
 variant_tag="${VITIS_8X64_RESIDENT_VARIANT_TAG:-persistent_aux}"
+build_exact_compute_xo="${VITIS_8X64_BUILD_EXACT_COMPUTE_XO:-0}"
 e2e_tokens="${VITIS_8X64_E2E_TOKENS:-0,1}"
 e2e_max_new_tokens="${VITIS_8X64_E2E_MAX_NEW_TOKENS:-3}"
 e2e_layers="${VITIS_8X64_E2E_LAYERS:-0}"
+e2e_prefill_block_size="${VITIS_8X64_E2E_PREFILL_BLOCK_SIZE:-${resident_token_rows}}"
 
 case "${profile}" in
     qwen-layer|qwen2.5-3b|small) ;;
@@ -40,6 +43,24 @@ case "${profile}" in
         exit 2
         ;;
 esac
+
+if [ "${resident_token_rows}" -lt 1 ] || [ "${resident_token_rows}" -gt 8 ]; then
+    echo "CC8_RESIDENT_TOKEN_ROWS must be in 1..8" >&2
+    exit 2
+fi
+if [ "${resident_token_rows}" -gt 4 ]; then
+    resident_dual_vector_ports=1
+else
+    resident_dual_vector_ports=0
+fi
+if [ "${e2e_prefill_block_size}" -lt 1 ] || [ "${e2e_prefill_block_size}" -gt "${resident_token_rows}" ]; then
+    echo "VITIS_8X64_E2E_PREFILL_BLOCK_SIZE must be in 1..CC8_RESIDENT_TOKEN_ROWS" >&2
+    exit 2
+fi
+if [ "${build_exact_compute_xo}" != "0" ] && [ "${build_exact_compute_xo}" != "1" ]; then
+    echo "VITIS_8X64_BUILD_EXACT_COMPUTE_XO must be 0 or 1" >&2
+    exit 2
+fi
 
 if [ -n "${VITIS_8X64_CONN_CFG:-}" ]; then
     conn_cfg="${VITIS_8X64_CONN_CFG}"
@@ -53,7 +74,7 @@ profile_tag="${profile//./_}"
 profile_tag="${profile_tag//-/_}"
 variant_tag="${variant_tag//./_}"
 variant_tag="${variant_tag//-/_}"
-tag="${profile_tag}.resident_layer.d${fifo_depth}.ii${load_ii}.r${wave_repeat}.wr${wave_result_depth}.cw${cross_wave_dataflow}.${variant_tag}"
+tag="${profile_tag}.resident_layer.t${resident_token_rows}.d${fifo_depth}.ii${load_ii}.r${wave_repeat}.wr${wave_result_depth}.cw${cross_wave_dataflow}.${variant_tag}"
 
 if [ "${profile}" = "small" ]; then
     default_compute_dir="vitis_8x64/xo"
@@ -64,8 +85,12 @@ else
     fi
 fi
 
-compute_xo_dir="${VITIS_8X64_BASE_COMPUTE_XO_DIR:-${default_compute_dir}}"
 xo_dir="${VITIS_8X64_RESIDENT_XO_DIR:-vitis_8x64/xo.${tag}}"
+if [ "${build_exact_compute_xo}" = "1" ]; then
+    compute_xo_dir="${xo_dir}"
+else
+    compute_xo_dir="${VITIS_8X64_BASE_COMPUTE_XO_DIR:-${default_compute_dir}}"
+fi
 build_dir="${VITIS_8X64_BUILD_DIR:-vitis_8x64/build.${tag}.hw_emu.${device}}"
 temp_dir="${VITIS_8X64_TEMP_DIR:-vitis_8x64/_x.${tag}.hw_emu.${device}}"
 report_dir="${VITIS_8X64_REPORT_DIR:-reports/vitis_8x64/${tag}/hw_emu.${device}}"
@@ -92,16 +117,32 @@ echo "load_ii=${load_ii}"
 echo "wave_repeat=${wave_repeat}"
 echo "wave_result_fifo_depth=${wave_result_depth}"
 echo "cross_wave_dataflow=${cross_wave_dataflow}"
+echo "resident_token_rows=${resident_token_rows}"
+echo "resident_dual_vector_ports=${resident_dual_vector_ports}"
 echo "frequency=${frequency}"
 echo "debug_build=${debug_build}"
+echo "build_exact_compute_xo=${build_exact_compute_xo}"
 echo "control_xo=${control_xo}"
 echo "compute_xo=${compute_xo}"
 echo "status_xo=${status_xo}"
 echo "xclbin=${xclbin}"
 
+build_compute_xo() {
+    mkdir -p "${compute_xo_dir}"
+    LLM_FPGA_MODEL_PROFILE="${profile}" \
+    LLM_FPGA_XO_DIR="$(realpath "${compute_xo_dir}")" \
+    LLM_FPGA_HLS_PROJECT_NAME="qwen_hls_compute_core_8x64_nk_prj_${tag}" \
+    CC8_WEIGHT_TILE_FIFO_DEPTH="${fifo_depth}" \
+    CC8_WEIGHT_TILE_LOAD_II="${load_ii}" \
+    CC8_ENABLE_MM_WAVE_REPEAT="${wave_repeat}" \
+    CC8_MM_WAVE_RESULT_FIFO_DEPTH="${wave_result_depth}" \
+    CC8_ENABLE_MM_CROSS_WAVE_DATAFLOW="${cross_wave_dataflow}" \
+        scripts/run_vitis_hls.sh tcl/build_compute_core_8x64_nk_xo.tcl
+}
+
 build_control_xo() {
     mkdir -p "${xo_dir}"
-    local extra_cflags="${HLS_EXTRA_CFLAGS:-} -DCC8_RESIDENT_LAYER_ONLY=1"
+    local extra_cflags="${HLS_EXTRA_CFLAGS:-} -DCC8_RESIDENT_LAYER_ONLY=1 -DCC8_RESIDENT_TOKEN_ROWS=${resident_token_rows} -DCC8_RESIDENT_DUAL_VECTOR_PORTS=${resident_dual_vector_ports}"
     LLM_FPGA_MODEL_PROFILE="${profile}" \
     LLM_FPGA_XO_DIR="$(realpath "${xo_dir}")" \
     LLM_FPGA_HLS_PROJECT_NAME="qwen_hls_control_cache_8x64_nk_prj_${tag}" \
@@ -157,6 +198,11 @@ build_host() {
 
 run_hwemu() {
     local mode="${1:-verify-resident-layer}"
+    local extra_args=()
+    if [ "${mode}" = "verify-composed-prefill-block" ] ||
+       [ "${mode}" = "verify-composed-prefill-stack" ]; then
+        extra_args+=(--prefill-block-size "${resident_token_rows}")
+    fi
     for input in "${xclbin}" "${host_exe}" "${emconfig}"; do
         if [ ! -s "${input}" ]; then
             echo "Missing or empty resident-layer hw_emu input: ${input}" >&2
@@ -173,7 +219,8 @@ run_hwemu() {
             --profile "${profile}" \
             --random-model \
             --seed "${seed}" \
-            --position 0
+            --position 0 \
+            "${extra_args[@]}"
     )
 }
 
@@ -196,21 +243,28 @@ run_generate_hwemu() {
             --seed "${seed}" \
             --tokens "${e2e_tokens}" \
             --max-new-tokens "${e2e_max_new_tokens}" \
+            --prefill-block-size "${e2e_prefill_block_size}" \
             --layers "${e2e_layers}" \
             --coarse-tasks
     )
 }
 
 case "${phase}" in
+    compute-xo) build_compute_xo ;;
     control-xo) build_control_xo ;;
     status-xo) build_status_xo ;;
     link) link_hwemu ;;
     host) build_host ;;
     run) run_hwemu verify-resident-layer ;;
     run-composed) run_hwemu verify-composed-layer ;;
+    run-block) run_hwemu verify-composed-prefill-block ;;
+    run-block-stack) run_hwemu verify-composed-prefill-stack ;;
     run-stack) run_hwemu verify-composed-stack ;;
     run-generate) run_generate_hwemu ;;
     all)
+        if [ "${build_exact_compute_xo}" = "1" ]; then
+            build_compute_xo
+        fi
         build_control_xo
         build_status_xo
         link_hwemu

@@ -33,6 +33,9 @@ build directories are intentionally excluded.
 - **Online attention.** QK, running maximum, normalization sum, and PV
   accumulation are processed tile by tile; the full score matrix is never
   materialized off chip.
+- **Controller-resident block prefill.** The same Task-18/19/20 contract accepts
+  one to eight consecutive query rows, applies causal RoPE/KV/online attention
+  per row, and keeps the block resident across decoder layers.
 - **Shape-aware evaluation.** Decode reports both physical-array utilization
   and utilization normalized to its single active token row. Prefill evaluates
   how an 8-token block fills the complete 8-row datapath.
@@ -127,15 +130,22 @@ and Task 20 owns final RMSNorm. Hidden state remains in HBM across tasks and
 layers; Norm/RoPE tables are initialized once as persistent model state, and
 the host reads status records until the final output migration.
 
-The two-layer small-profile HW-Emu contract test runs five tasks and passes all
-64 final-hidden values exactly with `intermediate_host_copy=0`. Closed-loop RTL
-CoSim also passes all three task types in 7,983 cycles with deadlock detection
-enabled. A prompt/decode composition test also passes four complete forwards
-and 20 coarse tasks with controller-owned KV and no intermediate host copy.
-These are small-shape residency/protocol results; standard Qwen-layer
-performance is reported in the dedicated
-[coarse-task runtime](docs/coarse-task-runtime.md) artifact after its HW-Emu
-gate completes.
+The original two-layer small-profile HW-Emu contract runs five tasks and
+passes all 64 final-hidden values exactly with `intermediate_host_copy=0`.
+The block extension passes an 8-row Task-18/19/20 HW-Emu check over 512 values
+(maximum raw error 10 within tolerance 32) and a two-layer P8+G2 composition
+with controller-owned KV and no intermediate host copy. Closed-loop block RTL
+CoSim passes in 25,411 cycles with deadlock detection enabled. These are
+small-shape protocol results; standard Qwen-layer performance is kept
+separate in the [block-prefill artifact](results/block-prefill-20260817/).
+The stronger two-layer P8 stack gate also passes 512 values (maximum raw error
+10 within tolerance 64) across five coarse tasks with no intermediate Host
+copy. Its run-local CU interval is 55,696.5 XSim cycles.
+An additional P16/G1 HW-Emu protocol run passes as two consecutive 8-row
+blocks, covering controller KV residency/progress across the block boundary;
+it is not reported as a cross-block CPU-golden result. A P11/G1 run also
+passes as an 8-row block plus a 3-row tail block, confirming that the runtime
+accepts partial blocks rather than treating eight as a fixed batch size.
 
 ## Decoder schedule
 
@@ -186,12 +196,19 @@ scripts/run_hls_resident_layer_cosim.sh
 make hls_csim_closed_loop_8x64_composed_layer
 make hls_cosim_closed_loop_8x64_composed_layer
 
+# Exact 8-row controller-resident block with finite-FIFO deadlock checking.
+make hls_csim_closed_loop_8x64_resident_prefill_block
+make hls_cosim_closed_loop_8x64_resident_prefill_block
+
 # Build and run the resource-pruned resident-layer hardware emulation.
 scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run
 
 # Host-composed Attention+FFN or full profile stack plus final norm.
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
 
 # Build the long-context Q2.14 profile and run the P/D length sweep.
@@ -231,6 +248,8 @@ prefill evaluation, expected outputs, and artifact locations.
   precision gates, measurement boundary, and raw-data provenance.
 - [Coarse-task runtime](docs/coarse-task-runtime.md): Task 18/19/20 contract,
   HBM-resident composition, CoSim/HW-Emu evidence, and resource cost.
+- [Block-prefill evidence](results/block-prefill-20260817/): exact 8-row CSim,
+  RTL CoSim, HW-Emu profiles, and HLS resource summaries.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
   4-PC weight multi-bank, ~50 token/s decode (csynth). See
@@ -240,9 +259,10 @@ prefill evaluation, expected outputs, and artifact locations.
 
 The standard performance artifact remains a single-layer fixed-point research
 prototype. Its Q2.14 P/D numbers are kernel-only, host-orchestrated diagnostic
-profiles. The coarse-task runtime now executes controller-resident subgraphs
-and proves cross-task/cross-layer hidden residency, but it does not yet claim
-checkpoint-level 36-layer inference, LM-head/sampling performance,
+profiles. The coarse-task runtime executes controller-resident subgraphs and
+now supports multi-row block prefill plus one-row decode while proving
+cross-task/cross-layer hidden and KV residency. It does not yet claim
+checkpoint-level 36-layer accuracy, accelerator-side LM-head/sampling,
 PCIe-inclusive physical latency, or physical-board performance.
 
 ## Citation

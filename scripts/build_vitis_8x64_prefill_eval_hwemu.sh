@@ -135,7 +135,7 @@ build_host() {
     make vitis_8x64_qwen_host vitis_8x64_emconfig \
         TARGET=hw_emu DEVICE="${device}" \
         VITIS_8X64_MODEL_PROFILE="${profile}" \
-        BUILD_DIR="${build_dir}"
+        VITIS_8X64_BUILD_DIR="${build_dir}"
 }
 
 run_hwemu() {

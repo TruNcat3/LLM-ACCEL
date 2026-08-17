@@ -1,0 +1,2 @@
+RANDOM task_composed_prefill_stack PASS values=512 max_raw_error=10 tolerance=64
+TASK_COMPOSED_PREFILL_STACK_VERIFY seed=20260718 position=0 query_tokens=8 layers=2 tasks=5 expected_tasks=5 tolerance=64 protocol_pass=1 intermediate_host_copy=0 kv_cache_owner=controller event_timing_domain=hw_emu_host_wall_proxy kernel_active_ms=279033 profiled_sequence_ms=289260 host_elapsed_ms=291307 PASS

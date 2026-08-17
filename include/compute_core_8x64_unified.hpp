@@ -13,9 +13,17 @@ constexpr unsigned int CU8_ATTN_TASKS_PER_TILE =
     (1 + ceildiv_size(HEAD_DIM, MM_STREAM_8X64_OUTPUTS));
 constexpr unsigned int CU8_MAX_ATTN_TASKS_PER_LAUNCH =
     ATTENTION_NUM_TILES * CU8_ATTN_TASKS_PER_TILE;
+// A compatibility full-layer Task can also dispatch all Q/K/V/O and FFN
+// projection/vector waves in the same compute session.  Reserve 256
+// descriptors beyond the worst-case attention walk so an 8-token resident
+// block cannot make the CU stop before the final residual task.  The normal
+// coarse runtime uses separate Attention and FFN tasks, but both contracts
+// share this statically bounded service loop.
+constexpr unsigned int CU8_MAX_COARSE_TASKS_PER_LAUNCH =
+    CU8_MAX_ATTN_TASKS_PER_LAUNCH + 256;
 constexpr unsigned int CU8_MAX_TASKS_PER_LAUNCH =
-    CU8_MAX_ATTN_TASKS_PER_LAUNCH > 256 ?
-    CU8_MAX_ATTN_TASKS_PER_LAUNCH : 256;
+    CU8_MAX_COARSE_TASKS_PER_LAUNCH > 256 ?
+    CU8_MAX_COARSE_TASKS_PER_LAUNCH : 256;
 constexpr unsigned int CU8_MAX_MM_REPEATS = 256;
 
 enum cu8_mode_t {

@@ -115,28 +115,53 @@ VITIS_8X64_MODEL_PROFILE=small \
 VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
 
-# Two prompt tokens, three sampled tokens, two decoder layers.
+# Eight-token block prefill, then one decode forward for two sampled tokens.
 VITIS_8X64_MODEL_PROFILE=small \
-VITIS_8X64_E2E_TOKENS=0,1 \
-VITIS_8X64_E2E_MAX_NEW_TOKENS=3 \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_E2E_TOKENS=0,1,2,3,4,5,6,7 \
+VITIS_8X64_E2E_MAX_NEW_TOKENS=2 \
 VITIS_8X64_E2E_LAYERS=2 \
+VITIS_8X64_E2E_PREFILL_BLOCK_SIZE=8 \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-generate
+
+# Verify one exact 8-row Task-18/19/20 block against the CPU fixed-point model.
+VITIS_8X64_MODEL_PROFILE=small \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+VITIS_8X64_MODEL_PROFILE=small \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
+
+# Verify the same 8-row block through both Small-profile layers (five tasks).
+VITIS_8X64_MODEL_PROFILE=small \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block-stack
 ```
 
-The corresponding host modes are `verify-composed-layer` and
+The corresponding host modes are `verify-composed-layer`,
+`verify-composed-prefill-block`, `verify-composed-prefill-stack`, and
 `verify-composed-stack`. A passing stack reports `2 * layers + 1` tasks,
 `intermediate_host_copy=0`, and a passing CPU fixed-point final-hidden check.
 The normal `run` and `generate` paths select the same runtime with
 `--coarse-tasks`. In the generate path, embedding and LM-head/sampling remain
 on the host; decoder layers, final RMSNorm, intermediate hidden state, and KV
-updates use the accelerator task sequence. Prompt traversal is serial-token in
-the current release.
+updates use the accelerator task sequence. With `--coarse-tasks`, the host
+chunks a prompt into blocks of at most `--prefill-block-size` rows (1--8);
+decode remains a one-row task.
 
 The closed-loop finite-FIFO checks are:
 
 ```bash
 make hls_csim_closed_loop_8x64_composed_layer
 make hls_cosim_closed_loop_8x64_composed_layer
+make hls_csim_closed_loop_8x64_resident_prefill_block
+make hls_cosim_closed_loop_8x64_resident_prefill_block
 ```
 
 The CoSim flow keeps deadlock detection enabled and rejects source changes

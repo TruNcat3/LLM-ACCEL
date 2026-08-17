@@ -128,7 +128,8 @@ duplicates controller state and exceeds the target resource budget.
 
 The implemented coarse-task runtime uses static resident subgraphs:
 
-1. the host submits Task 18 for an attention sublayer;
+1. the host submits Task 18 for an attention sublayer and supplies one to
+   eight consecutive query rows;
 2. the controller executes RMSNorm through attention residual while Q/K/V/O
    intermediates remain resident and the KV cache is updated in HBM;
 3. the Task-18 residual is materialized in HBM pair A and the host submits
@@ -175,9 +176,11 @@ The selected target keeps intermediate tensors and KV state in HBM/on-chip
 buffers while allowing the host to combine several task types into complete
 prefill and decode inference. End-to-end reporting must include both the
 controller-active intervals and the host-observed task-sequence latency.
-The current generate path realizes this boundary for serial-token prompt and
-decode traversal; blockwise coarse-task prefill remains the next schedule
-extension.
+The current generate path realizes this boundary for blockwise prompt and
+single-token decode traversal. The block-prefill extension groups each prompt into
+one-to-eight-row coarse-task blocks while leaving decode at one row. The next
+runtime step is to reduce host task-issue overhead further without turning the
+controller into a dynamic whole-model interpreter.
 
 ## 11. Evaluation principles
 

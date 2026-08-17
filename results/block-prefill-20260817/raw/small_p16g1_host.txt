@@ -1,0 +1,12 @@
+phase=run-generate
+target=hw_emu
+profile=small
+resident_token_rows=8
+resident_dual_vector_ports=1
+frequency=200
+build_exact_compute_xo=1
+COARSE_TASK_PREFILL_BLOCK layers=2 tasks=5 position_begin=0 query_tokens=8 position_end=7 auxiliary_migration_ms=0 intermediate_host_copy=0 kv_cache_owner=controller
+COARSE_TASK_PREFILL_BLOCK layers=2 tasks=5 position_begin=8 query_tokens=8 position_end=15 auxiliary_migration_ms=0 intermediate_host_copy=0 kv_cache_owner=controller
+generated[0]=15
+QWEN_8X64_E2E_PROFILE prompt_tokens=16 generated_tokens=1 prompt_forward_passes=2 generated_forward_passes=0 prefill_mode=coarse_block prefill_block_size=8 intermediate_host_copy=0 kv_cache_owner=controller PASS
+QWEN_8X64_HOST PASS sequence=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,15

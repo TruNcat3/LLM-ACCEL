@@ -9,6 +9,17 @@
 #define CC8_RESIDENT_LAYER_ONLY 0
 #endif
 
+#ifndef CC8_RESIDENT_TOKEN_ROWS
+#define CC8_RESIDENT_TOKEN_ROWS LINEAR_TOKEN_TILE_ACTIVE
+#endif
+
+// HLS dataflow topology must know whether the resident scheduler can drive
+// vector traffic to the second CU.  Build wrappers set this alongside the
+// resident-row hyperparameter; the production default uses all eight rows.
+#ifndef CC8_RESIDENT_DUAL_VECTOR_PORTS
+#define CC8_RESIDENT_DUAL_VECTOR_PORTS 1
+#endif
+
 constexpr unsigned int CC8_MM_CORE_COUNT = 2;
 constexpr unsigned int CC8_OUTPUTS_PER_WAVE =
     CC8_MM_CORE_COUNT * MM_STREAM_8X64_OUTPUTS;
@@ -51,12 +62,13 @@ constexpr unsigned int CC8_DATA_PORT_WORDS =
 constexpr unsigned int CC8_GBUF_BLOCKS = MAX_LINEAR_IN_BLOCKS;
 constexpr unsigned int CC8_HIDDEN_GBUF_BLOCKS =
     ceildiv(HIDDEN_SIZE, MM_PE_IN);
-// The resident-only image accepts exactly one decode token per launch.  Keep
-// the external HBM/AXI ABI sized for the general 8-token path, but do not
-// replicate every internal feature bank eight times in that production
-// image.  Diagnostic/non-resident builds retain all token rows.
+// Coarse resident tasks accept one decode token or a complete prefill block.
+// The row count is a synthesis hyperparameter so resource studies can retain
+// the one-token implementation while the production block-prefill image maps
+// all physical 8x64 array rows to consecutive tokens.
 constexpr unsigned int CC8_GBUF_TOKEN_ROWS =
-    CC8_RESIDENT_LAYER_ONLY ? 1u : LINEAR_TOKEN_TILE_ACTIVE;
+    CC8_RESIDENT_LAYER_ONLY ?
+        CC8_RESIDENT_TOKEN_ROWS : LINEAR_TOKEN_TILE_ACTIVE;
 constexpr unsigned int CC8_ATTN_TILE = CU_SOFTMAX_ELEMS;
 constexpr unsigned int CC8_HEAD_WORDS =
     ceildiv(HEAD_DIM, FM_BLOCK_SIZE);
@@ -113,7 +125,7 @@ constexpr unsigned int CC8_RESIDENT_LAYER_MM_WAVE_SLOTS_MAX =
     4 * ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
     2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
     2 * ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
-    ATTENTION_NUM_TILES *
+    CC8_GBUF_TOKEN_ROWS * ATTENTION_NUM_TILES *
         (1 + ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS));
 constexpr unsigned int CC8_RESIDENT_LAYER_VECTOR_TASKS = 5;
 constexpr unsigned int CC8_RESIDENT_LAYER_CORE0_TASKS_MAX =
@@ -121,6 +133,17 @@ constexpr unsigned int CC8_RESIDENT_LAYER_CORE0_TASKS_MAX =
     CC8_RESIDENT_LAYER_VECTOR_TASKS;
 
 static_assert(CC8_MM_CORE_COUNT == 2, "v1 control/cache core drives two MM cores");
+static_assert(CC8_GBUF_TOKEN_ROWS >= 1, "resident token rows must be positive");
+static_assert(
+    CC8_GBUF_TOKEN_ROWS <= LINEAR_TOKEN_TILE_ACTIVE,
+    "resident token rows cannot exceed the physical array height"
+);
+static_assert(
+    !CC8_RESIDENT_LAYER_ONLY ||
+        ((CC8_RESIDENT_DUAL_VECTOR_PORTS != 0) ==
+         (CC8_GBUF_TOKEN_ROWS > CC8_TOKENS_PER_DATA_PORT)),
+    "resident dual-vector topology must match the configured token rows"
+);
 static_assert(CC8_OUTPUTS_PER_WAVE == 128, "two 8x64 cores produce one 8x128 wave");
 static_assert(FM_BLOCK_SIZE == 2 * CU_VEC_LANES, "one 512-bit word holds two vec16 packets");
 static_assert(NUM_KEY_VALUE_HEADS == CC8_MM_CORE_COUNT, "two unified cores map the two Qwen KV groups");

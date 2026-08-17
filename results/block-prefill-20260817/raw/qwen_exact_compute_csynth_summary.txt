@@ -1,0 +1,13 @@
+Vitis HLS 2022.2
+Top: compute_core_8x64_unified_nk
+Project: qwen_hls_compute_core_8x64_nk_prj_qwen_layer.resident_layer.t8.d2.ii2.r0.wr33.cw1.block_prefill_q214
+Target part: xcu50-fsvh2104-2-e
+Target period: 3.33 ns
+Estimated period: 2.433 ns
+
+Resource estimate for one CU:
+BRAM_18K 48
+DSP 677
+FF 197555
+LUT 117643
+URAM 0

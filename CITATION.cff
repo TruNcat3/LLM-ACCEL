@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use LLM-ACCEL in academic work, please cite this repository."
 title: "LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution"
 type: software
-version: 0.4.0
-date-released: 2026-08-16
+version: 0.5.0
+date-released: 2026-08-17
 authors:
   - family-names: "TruNcat3"
     alias: "TruNcat3"
@@ -13,9 +13,9 @@ abstract: >-
   LLM-ACCEL is a synthesizable HLS and RTL hardware-emulation research
   prototype that separates model-aware decoder scheduling and memory state
   from two regular stream-only 8x64 compute arrays. It explores block-level
-  streaming, host-composed controller-resident subgraphs, online attention,
-  resident KV-cache management, and cross-wave load/compute/collect overlap
-  for Qwen-style decoder layers.
+  streaming, host-composed controller-resident subgraphs, 1--8-row block
+  prefill, online attention, resident KV-cache management, and cross-wave
+  load/compute/collect overlap for Qwen-style decoder layers.
 keywords:
   - FPGA
   - large language model

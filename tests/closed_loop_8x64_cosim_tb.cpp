@@ -490,60 +490,93 @@ static int check_vector_status(
 #endif
 
 #if defined(CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM) || \
-    defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM)
+    defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM) || \
+    defined(CC8_CLOSED_LOOP_BLOCK_COMPOSED_LAYER_COSIM)
 static void initialize_resident_layer_aux() {
-    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
-        set_fm_word_lane(
-            aux_port0[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
-        set_fm_word_lane(
-            aux_port1[elem / FM_BLOCK_SIZE],
-            elem % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
+    for (unsigned int row = 0; row < CC8_LAYER_NORM_ROWS; row++) {
+        for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+            set_fm_word_lane(
+                aux_port0[
+                    row * CC8_LAYER_NORM_WORDS +
+                    elem / FM_BLOCK_SIZE
+                ],
+                elem % FM_BLOCK_SIZE,
+                fm_t(1)
+            );
+        }
     }
-    for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
-        set_fm_word_lane(
-            aux_port0[
-                CC8_ROPE_COS_WORD_OFFSET + i / FM_BLOCK_SIZE
-            ],
-            i % FM_BLOCK_SIZE,
-            fm_t(1)
-        );
+    for (unsigned int position = 0; position < MAX_SEQ_LEN; position++) {
+        const unsigned int row = position * CC8_ROPE_POSITION_WORDS;
+        for (unsigned int i = 0; i < CC8_ROPE_HALF_ELEMS; i++) {
+            set_fm_word_lane(
+                aux_port1[
+                    row + CC8_ROPE_COS_WORD_OFFSET +
+                    i / FM_BLOCK_SIZE
+                ],
+                i % FM_BLOCK_SIZE,
+                fm_t(1)
+            );
+        }
     }
 }
 
-static unsigned int resident_layer_wave_slots(unsigned int position) {
-    const unsigned int attention_tiles =
-        ceildiv(position + 1, CC8_ATTN_TILE);
+static unsigned int resident_attention_wave_slots(
+    unsigned int position,
+    unsigned int token_count
+) {
     const unsigned int attention_waves =
         ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS);
+    unsigned int slots =
+        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
+        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE);
+    for (unsigned int token = 0; token < token_count; token++) {
+        slots += ceildiv(position + token + 1, CC8_ATTN_TILE) *
+            (1 + attention_waves);
+    }
+    return slots + ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+}
+
+static unsigned int resident_layer_wave_slots(
+    unsigned int position,
+    unsigned int token_count
+) {
     return
-        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
-        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        attention_tiles * (1 + attention_waves) +
-        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
+        resident_attention_wave_slots(position, token_count) +
         ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
         ceildiv(INTERMEDIATE_SIZE, CC8_OUTPUTS_PER_WAVE) +
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
 }
 
-static int check_resident_layer_result(unsigned int position) {
+static int check_resident_layer_result(
+    unsigned int position,
+    unsigned int expected_token_count
+) {
     int errors = 0;
-    for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
-        const unsigned int word = elem / FM_BLOCK_SIZE;
-        const unsigned int lane = elem % FM_BLOCK_SIZE;
-        if (unpack_fm_word_lane(output_port0[word], lane) != fm_t(0)) {
-            if (errors < 8) {
-                std::printf(
-                    "CLOSED LOOP resident output mismatch elem=%u\n",
-                    elem
-                );
+    for (unsigned int token = 0;
+         token < expected_token_count;
+         token++) {
+        const unsigned int port =
+            token / CC8_TOKENS_PER_DATA_PORT;
+        const unsigned int local_token =
+            token % CC8_TOKENS_PER_DATA_PORT;
+        for (unsigned int elem = 0; elem < HIDDEN_SIZE; elem++) {
+            const unsigned int word =
+                local_token * CC8_FEATURE_WORDS_PER_TOKEN +
+                elem / FM_BLOCK_SIZE;
+            const unsigned int lane = elem % FM_BLOCK_SIZE;
+            const fm_word_t packed =
+                port == 0 ? output_port0[word] : output_port1[word];
+            if (unpack_fm_word_lane(packed, lane) != fm_t(0)) {
+                if (errors < 8) {
+                    std::printf(
+                        "CLOSED LOOP resident output mismatch token=%u elem=%u\n",
+                        token,
+                        elem
+                    );
+                }
+                errors++;
             }
-            errors++;
         }
     }
 
@@ -556,18 +589,22 @@ static int check_resident_layer_result(unsigned int position) {
     const unsigned int vector_tasks = word.range(191, 160).to_uint();
     const unsigned int packets = word.range(223, 192).to_uint();
     const bool last_task = word[224];
-    const unsigned int expected_waves = resident_layer_wave_slots(position);
+    const unsigned int expected_waves =
+        resident_layer_wave_slots(position, expected_token_count);
     const unsigned int expected_packets =
         expected_waves * CC8_MM_CORE_COUNT *
             MM_STREAM_8X64_PACKETS_PER_BLOCK +
-        4 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
-        ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES);
+        expected_token_count *
+            (4 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
+             ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES));
+    const unsigned int expected_vector_tasks =
+        5 * ceildiv(expected_token_count, CC8_TOKENS_PER_DATA_PORT);
     if (op != unsigned(CC8_OP_DECODER_LAYER) ||
         status != unsigned(CC8_STATUS_OK) ||
-        token_count != 1 ||
+        token_count != expected_token_count ||
         waves != expected_waves ||
         mm_tasks != expected_waves * CC8_MM_CORE_COUNT ||
-        vector_tasks != 5 ||
+        vector_tasks != expected_vector_tasks ||
         packets != expected_packets ||
         !last_task) {
         std::printf(
@@ -590,6 +627,7 @@ static int check_resident_layer_result(unsigned int position) {
 
 static int check_composed_task_status(
     cc8_operator_t expected_op,
+    unsigned int expected_token_count,
     unsigned int expected_waves,
     unsigned int expected_vector_tasks,
     unsigned int expected_vector_packets,
@@ -603,7 +641,7 @@ static int check_composed_task_status(
     int errors = 0;
     if (word.range(31, 0).to_uint() != unsigned(expected_op) ||
         word.range(63, 32).to_uint() != unsigned(CC8_STATUS_OK) ||
-        word.range(95, 64).to_uint() != 1 ||
+        word.range(95, 64).to_uint() != expected_token_count ||
         word.range(127, 96).to_uint() != expected_waves ||
         word.range(159, 128).to_uint() !=
             expected_waves * CC8_MM_CORE_COUNT ||
@@ -611,10 +649,12 @@ static int check_composed_task_status(
         word.range(223, 192).to_uint() != expected_packets ||
         !word[224]) {
         std::printf(
-            "CLOSED LOOP %s status mismatch op=%u status=%u waves=%u/%u mm=%u vec=%u/%u packets=%u/%u last=%u\n",
+            "CLOSED LOOP %s status mismatch op=%u status=%u tokens=%u/%u waves=%u/%u mm=%u vec=%u/%u packets=%u/%u last=%u\n",
             label,
             word.range(31, 0).to_uint(),
             word.range(63, 32).to_uint(),
+            word.range(95, 64).to_uint(),
+            expected_token_count,
             word.range(127, 96).to_uint(),
             expected_waves,
             word.range(159, 128).to_uint(),
@@ -625,6 +665,63 @@ static int check_composed_task_status(
             unsigned(word[224])
         );
         errors++;
+    }
+    return errors;
+}
+
+static void initialize_resident_block_kv_sentinels(
+    unsigned int position,
+    unsigned int token_count
+) {
+    const fm_word_t sentinel = ~fm_word_t(0);
+    for (unsigned int token = 0; token < token_count; token++) {
+        for (unsigned int kv_head = 0;
+             kv_head < NUM_KEY_VALUE_HEADS;
+             kv_head++) {
+            for (unsigned int word = 0; word < CC8_HEAD_WORDS; word++) {
+                const unsigned int index = test_kv_cache_word_index(
+                    0,
+                    position + token,
+                    kv_head,
+                    word
+                );
+                kv_cache_k[index] = sentinel;
+                kv_cache_v[index] = sentinel;
+            }
+        }
+    }
+}
+
+static int check_resident_block_kv_appends(
+    unsigned int position,
+    unsigned int token_count
+) {
+    int errors = 0;
+    for (unsigned int token = 0; token < token_count; token++) {
+        for (unsigned int kv_head = 0;
+             kv_head < NUM_KEY_VALUE_HEADS;
+             kv_head++) {
+            for (unsigned int word = 0; word < CC8_HEAD_WORDS; word++) {
+                const unsigned int index = test_kv_cache_word_index(
+                    0,
+                    position + token,
+                    kv_head,
+                    word
+                );
+                if (kv_cache_k[index] != fm_word_t(0) ||
+                    kv_cache_v[index] != fm_word_t(0)) {
+                    if (errors < 8) {
+                        std::printf(
+                            "CLOSED LOOP block KV append mismatch token=%u head=%u word=%u\n",
+                            token,
+                            kv_head,
+                            word
+                        );
+                    }
+                    errors++;
+                }
+            }
+        }
     }
     return errors;
 }
@@ -686,10 +783,23 @@ int main() {
         ceildiv(query_begin + token_count, CC8_ATTN_TILE)
     );
     return errors == 0 ? 0 : 1;
-#elif defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM)
+#elif defined(CC8_CLOSED_LOOP_COMPOSED_LAYER_COSIM) || \
+    defined(CC8_CLOSED_LOOP_BLOCK_COMPOSED_LAYER_COSIM)
     clear_test_data();
     initialize_resident_layer_aux();
-    constexpr unsigned int position = 0;
+    // A nonzero position proves that the controller indexes the persistent
+    // RoPE table instead of accidentally reusing row zero.
+    constexpr unsigned int position = 1;
+#ifdef CC8_CLOSED_LOOP_BLOCK_COMPOSED_LAYER_COSIM
+    constexpr unsigned int token_count = MM_STREAM_8X64_TOKENS;
+#else
+    constexpr unsigned int token_count = 1;
+#endif
+    static_assert(
+        token_count <= CC8_GBUF_TOKEN_ROWS,
+        "composed-layer test needs one resident row per query token"
+    );
+    initialize_resident_block_kv_sentinels(position, token_count);
 
     // Task A writes the attention residual to output_port*.  Task B swaps
     // the HBM bindings: it reads those same buffers as inputs and writes the
@@ -697,22 +807,22 @@ int main() {
     // XRT host's device-resident ping-pong without a CPU tensor copy.
     call_closed_loop(
         CC8_OP_ATTENTION_SUBLAYER,
-        1,
+        token_count,
         position
     );
     const unsigned int attention_waves =
-        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE) +
-        2 * ceildiv(KV_CHANNELS, CC8_OUTPUTS_PER_WAVE) +
-        ceildiv(position + 1, CC8_ATTN_TILE) *
-            (1 + ceildiv(HEAD_DIM, MM_STREAM_8X64_OUTPUTS)) +
-        ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
+        resident_attention_wave_slots(position, token_count);
+    const unsigned int vector_task_fanout =
+        ceildiv(token_count, CC8_TOKENS_PER_DATA_PORT);
     int errors = check_composed_task_status(
         CC8_OP_ATTENTION_SUBLAYER,
+        token_count,
         attention_waves,
-        2,
-        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        2 * vector_task_fanout,
+        2 * token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
         "attention sublayer"
     );
+    errors += check_resident_block_kv_appends(position, token_count);
 
     call_closed_loop_raw_ports(
         input_port0,
@@ -720,7 +830,7 @@ int main() {
         output_port0,
         output_port1,
         CC8_OP_FFN_SUBLAYER,
-        1,
+        token_count,
         position,
         0
     );
@@ -729,37 +839,52 @@ int main() {
         ceildiv(HIDDEN_SIZE, CC8_OUTPUTS_PER_WAVE);
     errors += check_composed_task_status(
         CC8_OP_FFN_SUBLAYER,
+        token_count,
         ffn_waves,
-        3,
-        2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
-            ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES),
+        3 * vector_task_fanout,
+        token_count *
+            (2 * ceildiv(HIDDEN_SIZE, CU_VEC_LANES) +
+             ceildiv(INTERMEDIATE_SIZE, CU_VEC_LANES)),
         "ffn sublayer"
     );
 
-    call_closed_loop(CC8_OP_FINAL_NORM, 1, position);
+    call_closed_loop(CC8_OP_FINAL_NORM, token_count, position);
     errors += check_composed_task_status(
         CC8_OP_FINAL_NORM,
+        token_count,
         0,
-        1,
-        ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
+        vector_task_fanout,
+        token_count * ceildiv(HIDDEN_SIZE, CU_VEC_LANES),
         "final norm"
     );
-    for (unsigned int word = 0;
-         word < ceildiv(HIDDEN_SIZE, FM_BLOCK_SIZE);
-         word++) {
-        if (output_port0[word] != fm_word_t(0)) {
-            if (errors < 8) {
-                std::printf(
-                    "CLOSED LOOP composed output mismatch word=%u\n",
-                    word
-                );
+    for (unsigned int token = 0; token < token_count; token++) {
+        const unsigned int port =
+            token / CC8_TOKENS_PER_DATA_PORT;
+        const unsigned int local_token =
+            token % CC8_TOKENS_PER_DATA_PORT;
+        for (unsigned int word = 0;
+             word < ceildiv(HIDDEN_SIZE, FM_BLOCK_SIZE);
+             word++) {
+            const unsigned int port_word =
+                local_token * CC8_FEATURE_WORDS_PER_TOKEN + word;
+            const fm_word_t got = port == 0 ?
+                output_port0[port_word] : output_port1[port_word];
+            if (got != fm_word_t(0)) {
+                if (errors < 8) {
+                    std::printf(
+                        "CLOSED LOOP composed output mismatch token=%u word=%u\n",
+                        token,
+                        word
+                    );
+                }
+                errors++;
             }
-            errors++;
         }
     }
     std::printf(
-        "CLOSED LOOP 8X64 COMPOSED LAYER RTL COSIM %s tasks=3 intermediate_host_copy=0\n",
-        errors == 0 ? "PASS" : "FAIL"
+        "CLOSED LOOP 8X64 COMPOSED LAYER RTL COSIM %s tasks=3 tokens=%u intermediate_host_copy=0\n",
+        errors == 0 ? "PASS" : "FAIL",
+        token_count
     );
     return errors == 0 ? 0 : 1;
 #elif defined(CC8_CLOSED_LOOP_RESIDENT_LAYER_COSIM)
@@ -767,7 +892,7 @@ int main() {
     initialize_resident_layer_aux();
     constexpr unsigned int position = 0;
     call_closed_loop(CC8_OP_DECODER_LAYER, 1, position);
-    int errors = check_resident_layer_result(position);
+    int errors = check_resident_layer_result(position, 1);
     std::printf(
         "CLOSED LOOP 8X64 RESIDENT LAYER RTL COSIM %s\n",
         errors == 0 ? "PASS" : "FAIL"

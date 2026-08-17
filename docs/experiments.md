@@ -40,6 +40,10 @@ No result in this document is a physical-board measurement.
 | Q2.14 P/D length sweep | Final 8-token P block and next-token D at contexts 64/256/512/1024 | 8/8 PASS |
 | Coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 7,983 cycles |
 | Coarse-task stack HW Emu | Two layers, five tasks, final norm, no intermediate host copy | PASS, 64 outputs exact |
+| 8-row coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 25,411 cycles |
+| 8-row coarse-task HW Emu | Small one-layer block plus final norm | PASS, 512 values, max raw error 10/32 |
+| Two-layer 8-row stack HW Emu | Small P8 through five Task-18/19/20 commands | PASS, 512 values, max raw error 10/64 |
+| Block prompt/decode HW Emu | Small two-layer P8 + G2 task composition | PASS, two forwards/ten tasks |
 
 The 8-token run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -217,6 +221,11 @@ throughput:
 | Attention+FFN layer | 1 | 2 | 14,300 | 71.498 us |
 | Stack plus final norm | 2 | 5 | 28,743 | 143.714 us |
 | Serial prompt/decode composition | 2 | 20 across 4 forwards | 109,574 | 547.872 us |
+| 8-row block plus final norm | 1 | 3 | 31,453 | 157.265 us |
+| Two-layer 8-row stack plus final norm | 2 | 5 | 55,697 | 278.483 us |
+| Block prompt P8 plus G2 | 2 | 10 across 2 forwards | 77,551 | 387.755 us |
+| Multi-block prompt P16 plus G1 | 2 | 10 across 2 forwards | 109,226 | 546.131 us |
+| Tail-block prompt P11 plus G1 (8+3) | 2 | 10 across 2 forwards | 89,087 | 445.434 us |
 
 Cycles use the generated 300-MHz XSim clock and are projected to the 200-MHz
 physical target. Host/OpenCL event durations under HW Emu are simulator
@@ -224,12 +233,30 @@ wall-time proxies. Standard-dimension data and raw profiles are maintained in
 [`results/coarse-task-20260816/`](../results/coarse-task-20260816/); see the
 [runtime report](coarse-task-runtime.md) for the task and measurement boundary.
 
-The composition case uses two prompt tokens and three sampled tokens. Its four
+The serial composition case uses two prompt tokens and three sampled tokens. Its four
 forwards comprise two prompt forwards and two generated-token forwards; the
 last sampled token is returned without a redundant decoder pass. It validates
 cross-position KV state and the real host task-composition path, but its small
 shape and serial-token prompt traversal are not a full-model performance
 proxy.
+
+The block composition case replaces eight serial prompt forwards with one
+8-row forward. It then performs one one-row decode forward to produce two
+sampled tokens. The controller owns per-row RoPE, causal KV append/read, online
+softmax, and all intermediate hidden states. Embedding, LM-head argmax, and
+coarse-task issue remain host responsibilities.
+
+A second Small-profile run processes a 16-token prompt as blocks 0--7 and
+8--15. Both blocks complete five tasks over two layers with
+`intermediate_host_copy=0` and controller-owned KV. This directly validates
+KV residency and progress across block boundaries; it is not a cross-block
+CPU-golden comparison. Its single sampled token needs no additional decode
+forward.
+
+The tail-block gate processes an 11-token prompt as rows 0--7 and 8--10. The
+second controller invocation reports `query_tokens=3` and completes the same
+two-layer task sequence without a host KV migration. This explicitly tests
+the partial-block path that a non-multiple-of-eight prompt requires.
 
 ## 10. Interpretation
 
@@ -239,14 +266,17 @@ The combined results support three conclusions:
    block reaches 94.78% useful-MAC efficiency.
 2. **Decode is shape limited.** Its one active row reaches 88.09% of the
    row-normalized reference while only using 11.01% of the physical array.
-3. **Resource specialization is now the prefill bottleneck.** The diagnostic
-   schedule is fast and correct but must be compiled into the pruned resident
-   controller before physical implementation.
+3. **The resident block specialization closes the functional architecture but
+   raises the physical resource risk.** Its controller plus two exact compute
+   CUs estimates 1,300 BRAM18, 1,465 DSP, 863,825 FF, and 689,033 LUT (about
+   48%, 25%, 50%, and 79% of the full U50). The controller alone exceeds one
+   SLR's LUT estimate, so place-and-route remains a required gate.
 
 ## 11. Current experimental boundaries
 
-- Prefill now covers a final 8-token block through a 1024-entry context, but a
-  complete prompt is not replayed block by block in hardware emulation.
+- The coarse-task runtime now replays a prompt in blocks of up to eight
+  consecutive query rows. A small two-layer prompt/decode HW-Emu contract is
+  complete; standard-shape multi-block and checkpoint-level runs remain open.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
@@ -260,12 +290,12 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Complete the standard Qwen-layer Task-18/19/20 HW-Emu correctness and cycle
-   gate using the persistent auxiliary-state image.
-2. Exercise the multi-layer host composition path with the full model shape,
+1. Complete the standard Qwen-layer 8-row Task-18/19/20 HW-Emu correctness and
+   cycle gate using the exact block-prefill image.
+2. Exercise the multi-layer block-composition path with the full model shape,
    recording both kernel-active cycles and host-observed sequence latency.
-3. Extend the same coarse-task contract from serial-token prompt traversal to
-   blockwise prefill while preserving controller-owned KV update.
+3. Reduce repeated host task issue by packaging reusable task programs while
+   preserving the explicit Task-18/19/20 boundary and controller-owned state.
 4. Add accelerator-side vocabulary projection or quantify the host LM-head
    boundary separately from the decoder-stack measurement.
 5. After functional closure, evaluate multi-request row batching for M=1

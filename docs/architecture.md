@@ -190,8 +190,11 @@ hidden tensor is migrated once after Task 20.
 The current model host composes these tasks across prompt and generated-token
 forwards. Embedding and LM-head/sampling remain software boundaries, while all
 selected decoder layers, final RMSNorm, intermediate hidden tensors, and KV
-updates stay on the accelerator. Prompt traversal in this path is currently
-serial-token; blockwise prefill is the next task-level schedule extension.
+updates stay on the accelerator. Prefill is chunked into consecutive blocks of
+one to eight query-token rows; a full block fills the 8-row datapath and a
+remainder block carries only its valid row count. Decode uses one row. The
+controller applies causal RoPE/KV/online-attention semantics independently for
+each row before the block proceeds through Task 19 and the following layer.
 
 ## 8. Online attention and KV-cache ownership
 

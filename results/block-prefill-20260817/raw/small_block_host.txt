@@ -1,0 +1,9 @@
+phase=run-block
+target=hw_emu
+profile=small
+resident_token_rows=8
+resident_dual_vector_ports=1
+frequency=200
+build_exact_compute_xo=1
+RANDOM task_composed_prefill_block PASS values=512 max_raw_error=10 tolerance=32
+TASK_COMPOSED_PREFILL_BLOCK_VERIFY seed=20260718 position=0 query_tokens=8 layers=1 tasks=3 attention_op=18 ffn_op=19 final_norm_op=20 protocol_pass=1 intermediate_host_copy=0 kv_cache_owner=controller PASS

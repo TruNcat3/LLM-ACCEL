@@ -71,6 +71,7 @@ endif
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
 .PHONY: hls_csim_nk hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
 .PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
+.PHONY: hls_csim_closed_loop_8x64_resident_prefill_block hls_cosim_closed_loop_8x64_resident_prefill_block
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
 .PHONY: hls_csynth_status_xo hls_csynth_xo
 .PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts vitis_8x64_host vitis_8x64_qwen_host vitis_8x64_emconfig
@@ -89,7 +90,10 @@ help:
 	@echo "  make hls_cosim_closed_loop_8x64_resident_layer"
 	@echo "  make hls_csim_closed_loop_8x64_composed_layer"
 	@echo "  make hls_cosim_closed_loop_8x64_composed_layer"
+	@echo "  make hls_csim_closed_loop_8x64_resident_prefill_block"
+	@echo "  make hls_cosim_closed_loop_8x64_resident_prefill_block"
 	@echo "  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed"
+	@echo "  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block"
 	@echo "  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack"
 	@echo "  make vitis_8x64_xo"
 	@echo "  make vitis_8x64_link TARGET=sw_emu|hw_emu|hw"
@@ -132,6 +136,12 @@ hls_csim_closed_loop_8x64_composed_layer:
 
 hls_cosim_closed_loop_8x64_composed_layer:
 	scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_composed_layer.tcl
+
+hls_csim_closed_loop_8x64_resident_prefill_block:
+	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_prefill_block.tcl
+
+hls_cosim_closed_loop_8x64_resident_prefill_block:
+	scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_prefill_block.tcl
 
 $(COMPUTE_XO): \
 	kernel/mm_stream_8x64_fused_mac.cpp \
@@ -231,6 +241,7 @@ clean:
 		qwen_hls_cosim_control_cache_8x64_dual_core_csim_prj \
 		qwen_hls_compute_core_8x64_nk_csim_prj \
 		qwen_hls_control_cache_8x64_nk_csim_prj \
+		qwen_hls_closed_loop_resident_prefill_block_cosim_prj* \
 		qwen_hls_compute_core_8x64_nk_prj \
 		qwen_hls_control_cache_8x64_nk_prj \
 		qwen_hls_cc8_status_sink_nk_prj \
