@@ -186,7 +186,9 @@ The first new token is sampled from the prompt forward. Therefore G2 is the
 smallest generation request that contains one actual decode forward; G1 is a
 prefill/TTFT-only gate. The Host emits one `COARSE_TASK_PROGRESS` line after
 each completed Task 18/19/20. Under RTL HW Emu, CPU wall time is simulator
-runtime and must not be reported as accelerator latency.
+runtime and must not be reported as accelerator latency. New launcher logs
+also freeze SHA-256 identities for the Host executable, xclbin, and emulation
+configuration so a performance row can be tied to the exact generated inputs.
 
 After a successful run, derive the modeled cycle/performance row from the
 run-local CU profile and simultaneously verify the Host contract:

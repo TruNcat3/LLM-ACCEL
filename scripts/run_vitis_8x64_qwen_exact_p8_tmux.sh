@@ -24,6 +24,10 @@ if [ "${1:-}" = "--worker" ]; then
     echo "started_at=$(date -Is)"
     echo "gate=standard_qwen_exact_p8"
     echo "session_owner=tmux"
+    worker_build_dir="${VITIS_8X64_BUILD_DIR:?missing VITIS_8X64_BUILD_DIR}"
+    echo "host_exe_sha256=$(sha256sum "${worker_build_dir}/host_qwen_8x64.exe" | awk '{print $1}')"
+    echo "xclbin_sha256=$(sha256sum "${worker_build_dir}/qwen_8x64_dual.xclbin" | awk '{print $1}')"
+    echo "emconfig_sha256=$(sha256sum "${worker_build_dir}/emconfig.json" | awk '{print $1}')"
     set +e
     scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
     status="$?"
