@@ -92,7 +92,7 @@ measurements. The standard layer shape is
 `hidden=2048`, `intermediate=11008`, 16 query heads, 2 KV heads, and
 head dimension 128.
 
-| Phase | KV context | Query tokens / block | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| Phase | KV context | Active query rows / block | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Prefill | 64 | 8 | 637,103 | 3.186 ms | 194.17 | 94.81% |
 | Prefill | 256 | 8 | 685,489 | 3.427 ms | 182.30 | 89.02% |
@@ -103,7 +103,7 @@ head dimension 128.
 | Decode | 512 | 1 | 622,231 | 3.111 ms | 25.45 | 12.43% |
 | Decode | 1024 | 1 | 683,754 | 3.419 ms | 23.77 | 11.61% |
 
-`Query tokens / block = 8` means one full 8-row prefill block, not an eight-token
+`Active query rows / block = 8` means one full 8-row prefill block, not an eight-token
 prompt. P1024 measures positions 1016--1023 against a causal history of up to
 1024 KV entries. A full 1024-token prefill requires 128 context-dependent
 blocks and is not represented by the P1024 latency alone.
@@ -141,11 +141,12 @@ separate in the [block-prefill artifact](results/block-prefill-20260817/).
 The stronger two-layer P8 stack gate also passes 512 values (maximum raw error
 10 within tolerance 64) across five coarse tasks with no intermediate Host
 copy. Its run-local CU interval is 55,696.5 XSim cycles.
-An additional P16/G1 HW-Emu protocol run passes as two consecutive 8-row
-blocks, covering controller KV residency/progress across the block boundary;
-it is not reported as a cross-block CPU-golden result. A P11/G1 run also
-passes as an 8-row block plus a 3-row tail block, confirming that the runtime
-accepts partial blocks rather than treating eight as a fixed batch size.
+An exact P16 HW-Emu gate passes two consecutive 8-row blocks through both
+layers, releases the first block without Task 20 or D2H, materializes only the
+second block, and passes all 512 tail values against the cross-block CPU golden
+(maximum raw error 10 within tolerance 64). A separate P16/G1 generation run
+and a P11/G1 tail-block run also pass, confirming controller-owned KV progress
+and that eight is a maximum query-block height rather than a fixed batch size.
 
 ## Decoder schedule
 
@@ -218,6 +219,10 @@ VITIS_8X64_MODEL_PROFILE=qwen-layer-long \
 scripts/launch_vitis_8x64_pd_sweep_tmux.sh \
   --build-dir <generated-hw_emu-build> \
   --profile qwen-layer-long --seed 20260722
+
+# Build and launch the full Qwen2.5-3B-shape P8/G2/L36 coarse-task gate.
+scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
+scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 ```
 
 The main pipeline parameters can be swept without editing source:

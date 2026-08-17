@@ -5,9 +5,9 @@ cd "$(dirname "$0")/.."
 
 phase="${1:-all}"
 case "${phase}" in
-    compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-stack|run-generate) ;;
+    compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-block-sequence|run-stack|run-generate) ;;
     *)
-        echo "usage: $0 [compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-stack|run-generate]" >&2
+        echo "usage: $0 [compute-xo|control-xo|status-xo|link|host|all|run|run-composed|run-block|run-block-stack|run-block-sequence|run-stack|run-generate]" >&2
         exit 2
         ;;
 esac
@@ -35,6 +35,7 @@ e2e_tokens="${VITIS_8X64_E2E_TOKENS:-0,1}"
 e2e_max_new_tokens="${VITIS_8X64_E2E_MAX_NEW_TOKENS:-3}"
 e2e_layers="${VITIS_8X64_E2E_LAYERS:-0}"
 e2e_prefill_block_size="${VITIS_8X64_E2E_PREFILL_BLOCK_SIZE:-${resident_token_rows}}"
+verify_sequence_tokens="${VITIS_8X64_VERIFY_SEQUENCE_TOKENS:-16}"
 
 case "${profile}" in
     qwen-layer|qwen2.5-3b|small) ;;
@@ -94,6 +95,7 @@ fi
 build_dir="${VITIS_8X64_BUILD_DIR:-vitis_8x64/build.${tag}.hw_emu.${device}}"
 temp_dir="${VITIS_8X64_TEMP_DIR:-vitis_8x64/_x.${tag}.hw_emu.${device}}"
 report_dir="${VITIS_8X64_REPORT_DIR:-reports/vitis_8x64/${tag}/hw_emu.${device}}"
+hls_project_root="${VITIS_8X64_HLS_PROJECT_ROOT:-$PWD}"
 
 if [ ! -r "${env_script}" ]; then
     echo "Missing Vitis 2022.2 environment script: ${env_script}" >&2
@@ -122,15 +124,18 @@ echo "resident_dual_vector_ports=${resident_dual_vector_ports}"
 echo "frequency=${frequency}"
 echo "debug_build=${debug_build}"
 echo "build_exact_compute_xo=${build_exact_compute_xo}"
+echo "verify_sequence_tokens=${verify_sequence_tokens}"
 echo "control_xo=${control_xo}"
 echo "compute_xo=${compute_xo}"
 echo "status_xo=${status_xo}"
 echo "xclbin=${xclbin}"
+echo "hls_project_root=${hls_project_root}"
 
 build_compute_xo() {
-    mkdir -p "${compute_xo_dir}"
+    mkdir -p "${compute_xo_dir}" "${hls_project_root}"
     LLM_FPGA_MODEL_PROFILE="${profile}" \
     LLM_FPGA_XO_DIR="$(realpath "${compute_xo_dir}")" \
+    LLM_FPGA_HLS_PROJECT_ROOT="$(realpath "${hls_project_root}")" \
     LLM_FPGA_HLS_PROJECT_NAME="qwen_hls_compute_core_8x64_nk_prj_${tag}" \
     CC8_WEIGHT_TILE_FIFO_DEPTH="${fifo_depth}" \
     CC8_WEIGHT_TILE_LOAD_II="${load_ii}" \
@@ -141,10 +146,11 @@ build_compute_xo() {
 }
 
 build_control_xo() {
-    mkdir -p "${xo_dir}"
+    mkdir -p "${xo_dir}" "${hls_project_root}"
     local extra_cflags="${HLS_EXTRA_CFLAGS:-} -DCC8_RESIDENT_LAYER_ONLY=1 -DCC8_RESIDENT_TOKEN_ROWS=${resident_token_rows} -DCC8_RESIDENT_DUAL_VECTOR_PORTS=${resident_dual_vector_ports}"
     LLM_FPGA_MODEL_PROFILE="${profile}" \
     LLM_FPGA_XO_DIR="$(realpath "${xo_dir}")" \
+    LLM_FPGA_HLS_PROJECT_ROOT="$(realpath "${hls_project_root}")" \
     LLM_FPGA_HLS_PROJECT_NAME="qwen_hls_control_cache_8x64_nk_prj_${tag}" \
     HLS_EXTRA_CFLAGS="${extra_cflags}" \
     CC8_WEIGHT_TILE_FIFO_DEPTH="${fifo_depth}" \
@@ -156,9 +162,10 @@ build_control_xo() {
 }
 
 build_status_xo() {
-    mkdir -p "${xo_dir}"
+    mkdir -p "${xo_dir}" "${hls_project_root}"
     LLM_FPGA_MODEL_PROFILE="${profile}" \
     LLM_FPGA_XO_DIR="$(realpath "${xo_dir}")" \
+    LLM_FPGA_HLS_PROJECT_ROOT="$(realpath "${hls_project_root}")" \
     LLM_FPGA_HLS_PROJECT_NAME="qwen_hls_cc8_status_sink_nk_prj_${tag}" \
         scripts/run_vitis_hls.sh tcl/build_cc8_status_sink_nk_xo.tcl
 }
@@ -200,8 +207,12 @@ run_hwemu() {
     local mode="${1:-verify-resident-layer}"
     local extra_args=()
     if [ "${mode}" = "verify-composed-prefill-block" ] ||
-       [ "${mode}" = "verify-composed-prefill-stack" ]; then
+       [ "${mode}" = "verify-composed-prefill-stack" ] ||
+       [ "${mode}" = "verify-composed-prefill-sequence" ]; then
         extra_args+=(--prefill-block-size "${resident_token_rows}")
+    fi
+    if [ "${mode}" = "verify-composed-prefill-sequence" ]; then
+        extra_args+=(--prefill-len "${verify_sequence_tokens}")
     fi
     for input in "${xclbin}" "${host_exe}" "${emconfig}"; do
         if [ ! -s "${input}" ]; then
@@ -259,6 +270,7 @@ case "${phase}" in
     run-composed) run_hwemu verify-composed-layer ;;
     run-block) run_hwemu verify-composed-prefill-block ;;
     run-block-stack) run_hwemu verify-composed-prefill-stack ;;
+    run-block-sequence) run_hwemu verify-composed-prefill-sequence ;;
     run-stack) run_hwemu verify-composed-stack ;;
     run-generate) run_generate_hwemu ;;
     all)

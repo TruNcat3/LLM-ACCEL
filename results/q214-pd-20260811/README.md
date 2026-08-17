@@ -14,8 +14,8 @@ This directory freezes the data behind the Q2.14 hardware-emulation table in
 | Arithmetic | Fix16 features/weights and Q2.14 attention probabilities |
 | Seed | 20260722 |
 
-Prefill rows measure the final 8-token query block at each context. Decode rows
-measure one new query token. The cycle count is the sum of hardware controller
+Prefill rows measure the final 8-row query block at each context. Decode rows
+measure one active query row. The cycle count is the sum of hardware controller
 active intervals for the operator calls composing the layer; it excludes host
 scheduling, transfer gaps, CPU test-fixture work, and golden checks.
 

@@ -142,10 +142,17 @@ CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
 VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block-stack
+
+# Verify a 16-token sequence as two P8 blocks. The first block is released
+# after KV update; only the second block is materialized and CPU-golden checked.
+VITIS_8X64_VERIFY_SEQUENCE_TOKENS=16 \
+VITIS_8X64_VERIFY_BLOCK_SIZE=8 \
+  scripts/run_vitis_8x64_prefill_sequence_verify_nohup.sh
 ```
 
 The corresponding host modes are `verify-composed-layer`,
-`verify-composed-prefill-block`, `verify-composed-prefill-stack`, and
+`verify-composed-prefill-block`, `verify-composed-prefill-stack`,
+`verify-composed-prefill-sequence`, and
 `verify-composed-stack`. A passing stack reports `2 * layers + 1` tasks,
 `intermediate_host_copy=0`, and a passing CPU fixed-point final-hidden check.
 The normal `run` and `generate` paths select the same runtime with
@@ -154,6 +161,50 @@ on the host; decoder layers, final RMSNorm, intermediate hidden state, and KV
 updates use the accelerator task sequence. With `--coarse-tasks`, the host
 chunks a prompt into blocks of at most `--prefill-block-size` rows (1--8);
 decode remains a one-row task.
+
+### Build and run the full Qwen2.5-3B shape
+
+The full-shape wrapper keeps large temporary HLS/Vitis products outside the
+repository and owns long jobs with `tmux`:
+
+```bash
+# Reuse the exact compute XO, synthesize the qwen2.5-3b controller/status
+# kernels, link the four-CU HW-Emu image, and compile the matching Host.
+scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
+
+# Default gate: P8 prompt, two sampled tokens, one real decode forward,
+# 36 layers, random deterministic Fix16 weights, and 146 coarse tasks.
+scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+
+# A real packed checkpoint can replace the deterministic random model.
+VITIS_8X64_E2E_MODEL_SOURCE=checkpoint \
+VITIS_8X64_E2E_DATA_DIR=/path/to/packed/qwen2.5-3b \
+  scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+```
+
+The first new token is sampled from the prompt forward. Therefore G2 is the
+smallest generation request that contains one actual decode forward; G1 is a
+prefill/TTFT-only gate. The Host emits one `COARSE_TASK_PROGRESS` line after
+each completed Task 18/19/20. Under RTL HW Emu, CPU wall time is simulator
+runtime and must not be reported as accelerator latency.
+
+After a successful run, derive the modeled cycle/performance row from the
+run-local CU profile and simultaneously verify the Host contract:
+
+```bash
+scripts/report_vitis_8x64_e2e_trace.sh \
+  /path/to/profile_kernels.csv qwen2.5-3b 8 2 36 8 200 300 1 \
+  /path/to/qwen3b_e2e_host.log
+```
+
+The report rejects a missing final Host PASS, setup/weight-preload evidence,
+incorrect task count, Host-managed KV, intermediate Host copies, or an
+unexpected timing domain. Standard-dimension single-block numerical closure
+can be rerun independently with:
+
+```bash
+scripts/run_vitis_8x64_qwen_exact_p8_tmux.sh
+```
 
 The closed-loop finite-FIFO checks are:
 

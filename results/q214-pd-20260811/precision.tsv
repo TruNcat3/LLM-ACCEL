@@ -1,4 +1,4 @@
-phase	context_len	tokens	q214_checks	q214_failures	q214_max_raw_error	reference_checks	reference_failures	reference_max_raw_error
+phase	context_len	active_query_rows_per_block	q214_checks	q214_failures	q214_max_raw_error	reference_checks	reference_failures	reference_max_raw_error
 p	64	8	16	0	1	16	0	3
 d	64	1	2	0	1	2	0	2
 p	256	8	16	0	1	16	0	5

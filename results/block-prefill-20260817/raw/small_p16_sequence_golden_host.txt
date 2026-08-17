@@ -1,0 +1,2 @@
+RANDOM task_composed_prefill_sequence_tail PASS values=512 max_raw_error=10 tolerance=64
+TASK_COMPOSED_PREFILL_SEQUENCE_VERIFY seed=20260718 sequence_tokens=16 block_size=8 blocks=2 layers=2 tasks=9 expected_tasks=9 released_blocks=1 output_materializations=1 tolerance=64 protocol_pass=1 intermediate_host_copy=0 kv_cache_owner=controller PASS

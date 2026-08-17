@@ -46,15 +46,22 @@ if [ -z "$project_name" ]; then
     )"
 fi
 
-if [ -n "$project_name" ] && [ -d "$project_name/solution1" ]; then
+project_root="${LLM_FPGA_HLS_PROJECT_ROOT:-}"
+if [ -n "$project_root" ] && [ -n "$project_name" ]; then
+    project_path="$project_root/$project_name"
+else
+    project_path="$project_name"
+fi
+
+if [ -n "$project_path" ] && [ -d "$project_path/solution1" ]; then
     archive_needed=false
     for rel_path in solution1/syn/report solution1/sim/report; do
-        if [ -d "$project_name/$rel_path" ] && find "$project_name/$rel_path" -type f -print -quit | grep -q .; then
+        if [ -d "$project_path/$rel_path" ] && find "$project_path/$rel_path" -type f -print -quit | grep -q .; then
             archive_needed=true
         fi
     done
     for rel_path in solution1/solution1.log solution1/.autopilot/db/autopilot.flow.log; do
-        if [ -s "$project_name/$rel_path" ]; then
+        if [ -s "$project_path/$rel_path" ]; then
             archive_needed=true
         fi
     done
@@ -66,20 +73,21 @@ if [ -n "$project_name" ] && [ -d "$project_name/solution1" ]; then
         mkdir -p "$archive_dir"
 
         for rel_path in solution1/syn/report solution1/sim/report; do
-            if [ -d "$project_name/$rel_path" ] && find "$project_name/$rel_path" -type f -print -quit | grep -q .; then
+            if [ -d "$project_path/$rel_path" ] && find "$project_path/$rel_path" -type f -print -quit | grep -q .; then
                 mkdir -p "$archive_dir/$(dirname "$rel_path")"
-                cp -a "$project_name/$rel_path" "$archive_dir/$rel_path"
+                cp -a "$project_path/$rel_path" "$archive_dir/$rel_path"
             fi
         done
         for rel_path in solution1/solution1.log solution1/.autopilot/db/autopilot.flow.log; do
-            if [ -s "$project_name/$rel_path" ]; then
+            if [ -s "$project_path/$rel_path" ]; then
                 mkdir -p "$archive_dir/$(dirname "$rel_path")"
-                cp -a "$project_name/$rel_path" "$archive_dir/$rel_path"
+                cp -a "$project_path/$rel_path" "$archive_dir/$rel_path"
             fi
         done
 
         {
             printf "project=%s\n" "$project_name"
+            printf "project_path=%s\n" "$project_path"
             printf "tcl=%s\n" "$tcl_script"
             printf "archived_at=%s\n" "$(date -Iseconds)"
             printf "reason=pre-open_project-reset snapshot\n"

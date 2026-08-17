@@ -160,9 +160,9 @@ For comparison, the resource-pruned resident `.cw1` controller estimates
 
 The Q2.14 implementation was exercised with deterministic non-zero weights,
 activations, and KV fixtures at four context lengths. Prefill measures the
-final 8-token query block; Decode measures one new token.
+final 8-row query block; Decode measures one new query row.
 
-| Phase | Context | Query tokens / block | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
+| Phase | Context | Active query rows / block | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P | 64 | 8 | 637,103 | 3.1855 ms | 194.174 | 94.812% |
 | P | 256 | 8 | 685,489 | 3.4274 ms | 182.304 | 89.016% |
@@ -177,7 +177,7 @@ Every Q2.14 bit-accurate comparison passed. The maximum raw error was 1;
 comparisons against the higher-precision attention reference also passed with
 a maximum raw error of 5. Task and result-packet counts matched in all cases.
 
-The `Query tokens / block` column is the query-block height, not total prompt
+The `Active query rows / block` column is the query-block height, not total prompt
 length or request batch size.
 P1024 covers positions 1016--1023; it is the final-block cost and not the sum
 of all 128 blocks in a complete 1024-token prefill.
@@ -225,6 +225,7 @@ throughput:
 | Two-layer 8-row stack plus final norm | 2 | 5 | 55,697 | 278.483 us |
 | Block prompt P8 plus G2 | 2 | 10 across 2 forwards | 77,551 | 387.755 us |
 | Multi-block prompt P16 plus G1 | 2 | 10 across 2 forwards | 109,226 | 546.131 us |
+| Exact multi-block P16 final-tail golden | 2 | 9 across 2 blocks | 107,178 | 535.889 us |
 | Tail-block prompt P11 plus G1 (8+3) | 2 | 10 across 2 forwards | 89,087 | 445.434 us |
 
 Cycles use the generated 300-MHz XSim clock and are projected to the 200-MHz
@@ -247,11 +248,10 @@ softmax, and all intermediate hidden states. Embedding, LM-head argmax, and
 coarse-task issue remain host responsibilities.
 
 A second Small-profile run processes a 16-token prompt as blocks 0--7 and
-8--15. Both blocks complete five tasks over two layers with
-`intermediate_host_copy=0` and controller-owned KV. This directly validates
-KV residency and progress across block boundaries; it is not a cross-block
-CPU-golden comparison. Its single sampled token needs no additional decode
-forward.
+8--15. The exact sequence gate omits Task 20 and D2H for the first block,
+executes nine tasks total, retains controller-owned KV, and compares the final
+512-value tail against a CPU fixed-point golden across both blocks. It passes
+with maximum raw error 10 within tolerance 64.
 
 The tail-block gate processes an 11-token prompt as rows 0--7 and 8--10. The
 second controller invocation reports `query_tokens=3` and completes the same

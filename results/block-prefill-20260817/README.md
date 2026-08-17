@@ -27,7 +27,7 @@ The evidence classes are intentionally separate:
 
 - `validation.tsv` records CSim, finite-FIFO RTL CoSim, and HW-Emu correctness;
 - `performance.tsv` contains only run-local HW-Emu CU intervals. Its
-  `evidence_source`, `timed_scope`, and `query_tokens_per_block` columns make
+  `evidence_source`, `timed_scope`, and `active_query_rows_per_block` columns make
   the simulator source, Host-exclusion boundary, and block height explicit.
   Cycles are derived from the generated 300-MHz XSim clock and projected to a
   200-MHz implementation target;
@@ -58,6 +58,14 @@ protocol check rather than a cross-block CPU-golden comparison. The final
 sampled token in P16/G1 needs no additional decode forward. P11/G1 executes
 an 8-row full block followed by a 3-row tail block, proving that `8` is the
 configured maximum block height rather than a fixed token count.
+
+The stronger P16 sequence gate performs a cross-block CPU-golden comparison,
+not only a protocol check. It executes nine tasks: Task 18/19 for both layers
+of the first block, Task 18/19 for both layers of the second block, and one
+final Task 20. The first block is released after its KV updates with no D2H;
+only the final 512-value tail is materialized. All values pass with maximum raw
+error 10 within tolerance 64. The 357.259-us CU interval corresponds to
+107,177.7 XSim cycles and 535.889 us when projected to 200 MHz.
 
 Embedding and LM-head argmax/sampling remain Host operations in generation
 mode. CPU fixed-point golden arithmetic is validation-only and is excluded

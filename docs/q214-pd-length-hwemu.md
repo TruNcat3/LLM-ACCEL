@@ -7,7 +7,7 @@ complete Qwen2.5-3B decoder layer at four context lengths: 64, 256, 512, and
 1024.  The Vitis 2022.2 hardware-emulation build runs at a modeled 200 MHz and
 contains one controller, two 8x64 compute CUs, and one status sink.
 
-- Prefill (`P`) evaluates the final 8-token block ending at the stated context
+- Prefill (`P`) evaluates the final 8-row query block ending at the stated context
   length.  For example, P1024 processes query positions 1016 through 1023
   against up to 1024 KV entries.
 - Decode (`D`) evaluates one new token after the stated cached context.  For
@@ -38,7 +38,7 @@ operator calls, CPU RoPE/test-fixture packing, KV fixture migration, and CPU
 golden checks are outside the reported interval. The dense and attention
 arithmetic listed above executes in the FPGA kernels.
 
-| Phase | Context | Query tokens / block | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
+| Phase | Context | Active query rows / block | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | P | 64 | 8 | 637,103 | 3.1855 | 194.174 | 94.812% | 2,511.37 |
 | P | 256 | 8 | 685,489 | 3.4274 | 182.304 | 89.016% | 2,334.10 |
@@ -55,7 +55,7 @@ costs approximately 7.7k cycles.  P remains efficient because eight query rows
 fill the 8x64 datapath.  D uses only one query row, so its shape-normalized work
 is valid but its physical utilization remains around 12%.
 
-`Query tokens / block = 8` means eight consecutive rows of one sequence, not an
+`Active query rows / block = 8` means eight consecutive rows of one sequence, not an
 eight-sequence batch and not an eight-token prompt. For P1024, the measured
 block contains positions 1016--1023 and reads a causal KV history of up to 1024
 entries. A complete 1024-token prefill contains 128 such context-dependent

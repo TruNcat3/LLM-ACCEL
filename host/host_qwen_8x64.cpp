@@ -1174,7 +1174,8 @@ public:
         unsigned int layer_begin,
         unsigned int layer_count,
         unsigned int position,
-        bool include_final_norm
+        bool include_final_norm,
+        bool materialize_output = true
     ) {
         if (
             hidden.rows == 0 ||
@@ -1200,6 +1201,7 @@ public:
         result.layer_count = layer_count;
         result.task_count =
             2 * layer_count + (include_final_norm ? 1u : 0u);
+        unsigned int completed_tasks = 0;
         const auto host_begin = std::chrono::steady_clock::now();
         std::vector<cl::Memory> initial_inputs = {
             data_buffers_[2],
@@ -1250,6 +1252,18 @@ public:
                     kOpAttentionSublayer,
                     result.attention_status
                 );
+                completed_tasks++;
+                std::cout
+                    << "COARSE_TASK_PROGRESS"
+                    << " completed=" << completed_tasks
+                    << " total=" << result.task_count
+                    << " op=" << unsigned(kOpAttentionSublayer)
+                    << " phase=attention"
+                    << " layer=" << layer
+                    << " position=" << position
+                    << " query_tokens=" << hidden.rows
+                    << " controller_ms=" << last_controller_ms_
+                    << std::endl;
 
                 // Task B consumes pair 0/1 directly and writes pair 2/3.
                 // The completed hidden state therefore remains in the same
@@ -1271,6 +1285,18 @@ public:
                     last_status_migration_ms_
                 );
                 check_status(kOpFfnSublayer, result.ffn_status);
+                completed_tasks++;
+                std::cout
+                    << "COARSE_TASK_PROGRESS"
+                    << " completed=" << completed_tasks
+                    << " total=" << result.task_count
+                    << " op=" << unsigned(kOpFfnSublayer)
+                    << " phase=ffn"
+                    << " layer=" << layer
+                    << " position=" << position
+                    << " query_tokens=" << hidden.rows
+                    << " controller_ms=" << last_controller_ms_
+                    << std::endl;
             }
 
             unsigned int final_output0 = 2;
@@ -1293,30 +1319,44 @@ public:
                     last_status_migration_ms_
                 );
                 check_status(kOpFinalNorm, result.final_norm_status);
+                completed_tasks++;
+                std::cout
+                    << "COARSE_TASK_PROGRESS"
+                    << " completed=" << completed_tasks
+                    << " total=" << result.task_count
+                    << " op=" << unsigned(kOpFinalNorm)
+                    << " phase=final_norm"
+                    << " layer=0"
+                    << " position=" << position
+                    << " query_tokens=" << hidden.rows
+                    << " controller_ms=" << last_controller_ms_
+                    << std::endl;
                 final_output0 = 0;
                 final_output1 = 1;
             }
 
-            std::vector<cl::Memory> final_outputs = {
-                data_buffers_[final_output0],
-                data_buffers_[final_output1]
-            };
-            cl::Event final_output_event;
-            check_cl(
-                transfer_queue_.enqueueMigrateMemObjects(
-                    final_outputs,
-                    CL_MIGRATE_MEM_OBJECT_HOST,
-                    nullptr,
-                    &final_output_event
-                ),
-                "migrate composed stack outputs"
-            );
-            check_cl(
-                transfer_queue_.finish(),
-                "finish composed stack output migration"
-            );
-            result.output_migration_ms =
-                event_milliseconds(final_output_event);
+            if (materialize_output) {
+                std::vector<cl::Memory> final_outputs = {
+                    data_buffers_[final_output0],
+                    data_buffers_[final_output1]
+                };
+                cl::Event final_output_event;
+                check_cl(
+                    transfer_queue_.enqueueMigrateMemObjects(
+                        final_outputs,
+                        CL_MIGRATE_MEM_OBJECT_HOST,
+                        nullptr,
+                        &final_output_event
+                    ),
+                    "migrate composed stack outputs"
+                );
+                check_cl(
+                    transfer_queue_.finish(),
+                    "finish composed stack output migration"
+                );
+                result.output_migration_ms =
+                    event_milliseconds(final_output_event);
+            }
         } catch (...) {
             bind_controller_data_ports(0, 1, 2, 3);
             throw;
@@ -1353,14 +1393,16 @@ public:
             std::chrono::duration<double, std::milli>(
                 host_end - host_begin
             ).count();
-        const unsigned int host_output0 = include_final_norm ? 0 : 2;
-        const unsigned int host_output1 = include_final_norm ? 1 : 3;
-        result.output = unpack_feature(
-            data_words_[host_output0],
-            data_words_[host_output1],
-            hidden.rows,
-            shape_.hidden_size
-        );
+        if (materialize_output) {
+            const unsigned int host_output0 = include_final_norm ? 0 : 2;
+            const unsigned int host_output1 = include_final_norm ? 1 : 3;
+            result.output = unpack_feature(
+                data_words_[host_output0],
+                data_words_[host_output1],
+                hidden.rows,
+                shape_.hidden_size
+            );
+        }
         return result;
     }
 
@@ -4651,7 +4693,7 @@ void profile_apply_rope(
     }
 }
 
-tensor_t golden_prefill_decoder_layer_block(
+tensor_t golden_prefill_decoder_layer_sequence(
     const model_shape_t& shape,
     const model_data_t& model,
     const tensor_t& hidden,
@@ -4660,13 +4702,13 @@ tensor_t golden_prefill_decoder_layer_block(
 ) {
     if (
         hidden.rows == 0 ||
-        hidden.rows > kMaxTokensPerLaunch ||
+        hidden.rows > shape.max_seq_len ||
         hidden.cols != shape.hidden_size ||
         layer >= shape.num_layers ||
         position != 0
     ) {
         throw std::runtime_error(
-            "prefill block golden currently requires 1..8 tokens at position 0"
+            "prefill sequence golden requires 1..max_seq_len tokens at position 0"
         );
     }
 
@@ -4789,7 +4831,7 @@ bool run_composed_prefill_block_verification(
             position,
             true
         );
-    const tensor_t layer_expected = golden_prefill_decoder_layer_block(
+    const tensor_t layer_expected = golden_prefill_decoder_layer_sequence(
         shape,
         model,
         hidden,
@@ -4883,7 +4925,7 @@ bool run_composed_prefill_stack_verification(
 
     tensor_t expected = hidden;
     for (unsigned int layer = 0; layer < shape.num_layers; layer++) {
-        expected = golden_prefill_decoder_layer_block(
+        expected = golden_prefill_decoder_layer_sequence(
             shape,
             model,
             expected,
@@ -4930,6 +4972,141 @@ bool run_composed_prefill_stack_verification(
         << " kernel_active_ms=" << actual.kernel_active_ms
         << " profiled_sequence_ms=" << actual.profiled_sequence_ms
         << " host_elapsed_ms=" << actual.host_elapsed_ms
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
+}
+
+bool run_composed_prefill_sequence_verification(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    accelerator_t& accelerator,
+    uint32_t seed,
+    unsigned int sequence_length,
+    unsigned int block_size
+) {
+    if (
+        sequence_length == 0 ||
+        sequence_length > shape.max_seq_len ||
+        block_size == 0 ||
+        block_size > kMaxTokensPerLaunch
+    ) {
+        throw std::runtime_error(
+            "composed prefill-sequence verification requires a valid sequence and 1..8 block size"
+        );
+    }
+
+    const tensor_t hidden = make_random_tensor(
+        sequence_length,
+        shape.hidden_size,
+        seed ^ 0x73657175u,
+        -48,
+        48
+    );
+    tensor_t actual_tail;
+    unsigned int actual_tasks = 0;
+    unsigned int block_count = 0;
+    unsigned int released_blocks = 0;
+    bool protocol_pass = true;
+    unsigned int final_block_begin = 0;
+    unsigned int final_block_rows = 0;
+
+    for (unsigned int block_begin = 0;
+         block_begin < sequence_length;
+         block_begin += block_size) {
+        const unsigned int block_rows = std::min(
+            block_size,
+            sequence_length - block_begin
+        );
+        const bool final_block =
+            block_begin + block_rows == sequence_length;
+        const tensor_t block_hidden = tensor_rows(
+            hidden,
+            block_begin,
+            block_rows
+        );
+        const composed_layer_result_t result =
+            accelerator.run_composed_decoder_stack(
+                block_hidden,
+                0,
+                shape.num_layers,
+                block_begin,
+                final_block,
+                final_block
+            );
+
+        const unsigned int expected_block_tasks =
+            2 * shape.num_layers + (final_block ? 1u : 0u);
+        protocol_pass = protocol_pass &&
+            result.layer_count == shape.num_layers &&
+            result.task_count == expected_block_tasks &&
+            result.attention_status.op == unsigned(kOpAttentionSublayer) &&
+            result.attention_status.code == 0 &&
+            result.attention_status.token_count == block_rows &&
+            result.ffn_status.op == unsigned(kOpFfnSublayer) &&
+            result.ffn_status.code == 0 &&
+            result.ffn_status.token_count == block_rows;
+        if (final_block) {
+            protocol_pass = protocol_pass &&
+                result.final_norm_status.op == unsigned(kOpFinalNorm) &&
+                result.final_norm_status.code == 0 &&
+                result.final_norm_status.token_count == block_rows;
+            actual_tail = result.output;
+            final_block_begin = block_begin;
+            final_block_rows = block_rows;
+        } else {
+            protocol_pass = protocol_pass && result.output.values.empty();
+            released_blocks++;
+        }
+        actual_tasks += result.task_count;
+        block_count++;
+    }
+
+    tensor_t expected = hidden;
+    for (unsigned int layer = 0; layer < shape.num_layers; layer++) {
+        expected = golden_prefill_decoder_layer_sequence(
+            shape,
+            model,
+            expected,
+            layer,
+            0
+        );
+    }
+    expected = golden_rmsnorm(expected, model.final_norm_row());
+    const tensor_t expected_tail = tensor_rows(
+        expected,
+        final_block_begin,
+        final_block_rows
+    );
+
+    const unsigned int expected_tasks =
+        block_count * 2 * shape.num_layers + 1;
+    protocol_pass = protocol_pass &&
+        actual_tasks == expected_tasks &&
+        released_blocks + 1 == block_count;
+    const int tolerance = 32 * int(shape.num_layers);
+    const bool data_pass = compare_tensors(
+        "task_composed_prefill_sequence_tail",
+        actual_tail,
+        expected_tail,
+        tolerance
+    );
+    const bool pass = protocol_pass && data_pass;
+    std::cout
+        << "TASK_COMPOSED_PREFILL_SEQUENCE_VERIFY"
+        << " seed=" << seed
+        << " sequence_tokens=" << sequence_length
+        << " block_size=" << block_size
+        << " blocks=" << block_count
+        << " layers=" << shape.num_layers
+        << " tasks=" << actual_tasks
+        << " expected_tasks=" << expected_tasks
+        << " released_blocks=" << released_blocks
+        << " output_materializations=1"
+        << " tolerance=" << tolerance
+        << " protocol_pass=" << (protocol_pass ? 1 : 0)
+        << " intermediate_host_copy=0"
+        << " kv_cache_owner=controller"
         << " " << (pass ? "PASS" : "FAIL")
         << "\n";
     return pass;
@@ -7016,7 +7193,17 @@ public:
               layer_count
           ),
           resident_layer_(resident_layer),
-          coarse_tasks_(coarse_tasks) {
+          coarse_tasks_(coarse_tasks),
+          coarse_task_count_(0),
+          output_materialization_count_(0),
+          released_prompt_block_count_(0),
+          coarse_kernel_active_ms_(0.0),
+          coarse_profiled_sequence_ms_(0.0),
+          coarse_host_api_elapsed_ms_(0.0),
+          coarse_input_migration_ms_(0.0),
+          coarse_status_kernel_ms_(0.0),
+          coarse_status_migration_ms_(0.0),
+          coarse_output_migration_ms_(0.0) {
         if (layer_count_ > shape.num_layers) {
             throw std::runtime_error("--layers exceeds the selected profile");
         }
@@ -7059,6 +7246,9 @@ public:
                     position,
                     true
                 );
+            coarse_task_count_ += result.task_count;
+            output_materialization_count_++;
+            accumulate_coarse_result(result);
             hidden = result.output;
             std::cout
                 << "COARSE_TASK_STACK layers=" << result.layer_count
@@ -7218,7 +7408,8 @@ public:
 
     tensor_t run_prompt_block(
         const std::vector<unsigned int>& token_ids,
-        unsigned int position
+        unsigned int position,
+        bool materialize_output = true
     ) {
         if (!coarse_tasks_) {
             throw std::runtime_error(
@@ -7250,8 +7441,16 @@ public:
                 0,
                 layer_count_,
                 position,
-                true
+                materialize_output,
+                materialize_output
             );
+        coarse_task_count_ += result.task_count;
+        accumulate_coarse_result(result);
+        if (materialize_output) {
+            output_materialization_count_++;
+        } else {
+            released_prompt_block_count_++;
+        }
         std::cout
             << "COARSE_TASK_PREFILL_BLOCK"
             << " layers=" << result.layer_count
@@ -7274,12 +7473,84 @@ public:
             << " output_migration_ms=" << result.output_migration_ms
             << " profiled_sequence_ms=" << result.profiled_sequence_ms
             << " host_elapsed_ms=" << result.host_elapsed_ms
+            << " output_materialized=" << (materialize_output ? 1 : 0)
             << " intermediate_host_copy=0"
             << " kv_cache_owner=controller\n";
         return result.output;
     }
 
+    unsigned long long coarse_task_count() const {
+        return coarse_task_count_;
+    }
+
+    unsigned int output_materialization_count() const {
+        return output_materialization_count_;
+    }
+
+    unsigned int released_prompt_block_count() const {
+        return released_prompt_block_count_;
+    }
+
+    double coarse_kernel_active_ms() const {
+        return coarse_kernel_active_ms_;
+    }
+
+    double coarse_profiled_sequence_ms() const {
+        return coarse_profiled_sequence_ms_;
+    }
+
+    double coarse_host_api_elapsed_ms() const {
+        return coarse_host_api_elapsed_ms_;
+    }
+
+    double coarse_input_migration_ms() const {
+        return coarse_input_migration_ms_;
+    }
+
+    double coarse_status_kernel_ms() const {
+        return coarse_status_kernel_ms_;
+    }
+
+    double coarse_status_migration_ms() const {
+        return coarse_status_migration_ms_;
+    }
+
+    double coarse_output_migration_ms() const {
+        return coarse_output_migration_ms_;
+    }
+
 private:
+    void accumulate_coarse_result(const composed_layer_result_t& result) {
+        coarse_kernel_active_ms_ = add_profiled_milliseconds(
+            coarse_kernel_active_ms_,
+            result.kernel_active_ms
+        );
+        coarse_profiled_sequence_ms_ = add_profiled_milliseconds(
+            coarse_profiled_sequence_ms_,
+            result.profiled_sequence_ms
+        );
+        coarse_host_api_elapsed_ms_ = add_profiled_milliseconds(
+            coarse_host_api_elapsed_ms_,
+            result.host_elapsed_ms
+        );
+        coarse_input_migration_ms_ = add_profiled_milliseconds(
+            coarse_input_migration_ms_,
+            result.input_migration_ms
+        );
+        coarse_status_kernel_ms_ = add_profiled_milliseconds(
+            coarse_status_kernel_ms_,
+            result.status_kernel_ms
+        );
+        coarse_status_migration_ms_ = add_profiled_milliseconds(
+            coarse_status_migration_ms_,
+            result.status_migration_ms
+        );
+        coarse_output_migration_ms_ = add_profiled_milliseconds(
+            coarse_output_migration_ms_,
+            result.output_migration_ms
+        );
+    }
+
     void apply_rope(
         tensor_t& q,
         tensor_t& k,
@@ -7446,6 +7717,16 @@ private:
     unsigned int layer_count_;
     bool resident_layer_;
     bool coarse_tasks_;
+    unsigned long long coarse_task_count_;
+    unsigned int output_materialization_count_;
+    unsigned int released_prompt_block_count_;
+    double coarse_kernel_active_ms_;
+    double coarse_profiled_sequence_ms_;
+    double coarse_host_api_elapsed_ms_;
+    double coarse_input_migration_ms_;
+    double coarse_status_kernel_ms_;
+    double coarse_status_migration_ms_;
+    double coarse_output_migration_ms_;
 };
 
 bool get_option(
@@ -7660,7 +7941,7 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable << " [options]\n"
-        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
+        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-prefill-sequence|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
         << "  --prefill-start N   First P-stage position (resume support)\n"
         << "  --profile small|medium|qwen-layer|qwen-layer-long|qwen2.5-3b\n"
         << "  --xclbin <file>          Required for run/generate\n"
@@ -7755,7 +8036,10 @@ void print_execution_plan(const model_shape_t& shape) {
         << " -> online-softmax + PV -> O -> residual\n"
         << "  repeat layer Task 19: RMS -> Gate/Up"
         << " -> SiLU-Mul -> Down -> residual\n"
-        << "  Task 20: final RMS -> one final hidden D2H\n"
+        << "  non-final prompt blocks release hidden after KV update"
+        << " without Task 20 or D2H\n"
+        << "  final prompt/decode forward: Task 20 final RMS"
+        << " -> one hidden D2H\n"
         << "  dedicated or explicitly tied LM head(host)\n"
         << "hardware contract:\n"
         << "  one controller invocation launches cc8_ctrl + cc8_cu0"
@@ -7862,6 +8146,7 @@ int main(int argc, const char* argv[]) {
             command.mode != "verify-composed-layer" &&
             command.mode != "verify-composed-prefill-block" &&
             command.mode != "verify-composed-prefill-stack" &&
+            command.mode != "verify-composed-prefill-sequence" &&
             command.mode != "verify-composed-stack" &&
             command.mode != "verify-nop" &&
             command.mode != "verify-nop-ctrl-only" &&
@@ -7936,6 +8221,8 @@ int main(int argc, const char* argv[]) {
                 << "for diagnostic smoke\n";
         }
 
+        const auto model_initialization_begin =
+            std::chrono::steady_clock::now();
         model_data_t model(shape, thin_smoke_buffers);
         if (command.zero_model && command.random_model) {
             throw std::runtime_error(
@@ -7951,6 +8238,7 @@ int main(int argc, const char* argv[]) {
                 command.mode == "verify-composed-layer" ||
                 command.mode == "verify-composed-prefill-block" ||
                 command.mode == "verify-composed-prefill-stack" ||
+                command.mode == "verify-composed-prefill-sequence" ||
                 command.mode == "verify-composed-stack" ||
                 command.mode == "verify-nop" ||
                 command.mode == "verify-nop-ctrl-only" ||
@@ -7976,6 +8264,8 @@ int main(int argc, const char* argv[]) {
                 command.mode == "generate"
             );
         }
+        const auto model_initialization_end =
+            std::chrono::steady_clock::now();
         if (command.mode == "diagnose-prefill-softmax") {
             return run_prefill_softmax_diagnostic(
                 shape,
@@ -7985,6 +8275,8 @@ int main(int argc, const char* argv[]) {
                 command.random_seed
             ) ? 0 : 1;
         }
+        const auto accelerator_initialization_begin =
+            std::chrono::steady_clock::now();
         accelerator_t accelerator(
             shape,
             model,
@@ -7992,6 +8284,28 @@ int main(int argc, const char* argv[]) {
             command.verbose_ops,
             command.skip_weight_preload
         );
+        const auto accelerator_initialization_end =
+            std::chrono::steady_clock::now();
+        const double model_initialization_ms =
+            std::chrono::duration<double, std::milli>(
+                model_initialization_end - model_initialization_begin
+            ).count();
+        const double accelerator_initialization_ms =
+            std::chrono::duration<double, std::milli>(
+                accelerator_initialization_end -
+                accelerator_initialization_begin
+            ).count();
+        std::cout
+            << "QWEN_8X64_SETUP_PROFILE"
+            << " timing_domain=host_wall"
+            << " model_initialization_ms=" << model_initialization_ms
+            << " accelerator_initialization_ms="
+            << accelerator_initialization_ms
+            << " total_setup_ms="
+            << model_initialization_ms + accelerator_initialization_ms
+            << " weight_preload="
+            << (command.skip_weight_preload ? 0 : 1)
+            << "\n";
         if (command.load_only) {
             std::cout << "QWEN_8X64_LOAD_ONLY PASS\n";
             return 0;
@@ -8046,6 +8360,16 @@ int main(int argc, const char* argv[]) {
                 accelerator,
                 command.random_seed,
                 command.attention_position,
+                command.prefill_block_size
+            ) ? 0 : 1;
+        }
+        if (command.mode == "verify-composed-prefill-sequence") {
+            return run_composed_prefill_sequence_verification(
+                shape,
+                model,
+                accelerator,
+                command.random_seed,
+                command.attention_prefill_len,
                 command.prefill_block_size
             ) ? 0 : 1;
         }
@@ -8212,30 +8536,41 @@ int main(int argc, const char* argv[]) {
                     command.tokens.begin() + block_begin + block_count
                 );
                 const auto block_start = std::chrono::steady_clock::now();
-                const tensor_t block_hidden =
-                    executor.run_prompt_block(token_block, block_begin);
+                const bool materialize_output =
+                    block_begin + block_count == command.tokens.size();
+                const tensor_t block_hidden = executor.run_prompt_block(
+                    token_block,
+                    block_begin,
+                    materialize_output
+                );
                 const auto block_end = std::chrono::steady_clock::now();
                 prompt_forward_ms +=
                     std::chrono::duration<double, std::milli>(
                         block_end - block_start
                     ).count();
                 prompt_forward_passes++;
-                for (unsigned int row = 0; row < block_count; row++) {
-                    const tensor_t row_hidden = tensor_rows(
+                if (materialize_output) {
+                    for (unsigned int row = 0; row < block_count; row++) {
+                        const tensor_t row_hidden = tensor_rows(
+                            block_hidden,
+                            row,
+                            1
+                        );
+                        std::cout
+                            << "position=" << block_begin + row
+                            << " token=" << token_block[row]
+                            << " hidden_checksum=0x"
+                            << std::hex
+                            << tensor_checksum(row_hidden)
+                            << std::dec
+                            << "\n";
+                    }
+                    hidden = tensor_rows(
                         block_hidden,
-                        row,
+                        block_count - 1,
                         1
                     );
-                    std::cout
-                        << "position=" << block_begin + row
-                        << " token=" << token_block[row]
-                        << " hidden_checksum=0x"
-                        << std::hex
-                        << tensor_checksum(row_hidden)
-                        << std::dec
-                        << "\n";
                 }
-                hidden = tensor_rows(block_hidden, block_count - 1, 1);
             }
         } else {
             for (unsigned int position = 0;
@@ -8341,6 +8676,26 @@ int main(int argc, const char* argv[]) {
                 << " decode_token_s=" << decode_token_s
                 << " lm_head_host_ms=" << lm_head_host_ms
                 << " total_host_elapsed_ms=" << total_elapsed_ms
+                << " event_timing_domain=" << event_timing_domain()
+                << " coarse_task_count=" << executor.coarse_task_count()
+                << " coarse_kernel_active_ms="
+                << executor.coarse_kernel_active_ms()
+                << " coarse_profiled_sequence_ms="
+                << executor.coarse_profiled_sequence_ms()
+                << " coarse_host_api_elapsed_ms="
+                << executor.coarse_host_api_elapsed_ms()
+                << " coarse_input_migration_ms="
+                << executor.coarse_input_migration_ms()
+                << " coarse_status_kernel_ms="
+                << executor.coarse_status_kernel_ms()
+                << " coarse_status_migration_ms="
+                << executor.coarse_status_migration_ms()
+                << " coarse_output_migration_ms="
+                << executor.coarse_output_migration_ms()
+                << " output_materializations="
+                << executor.output_materialization_count()
+                << " released_prompt_blocks="
+                << executor.released_prompt_block_count()
                 << " intermediate_host_copy=0"
                 << " kv_cache_owner=controller"
                 << " PASS\n";

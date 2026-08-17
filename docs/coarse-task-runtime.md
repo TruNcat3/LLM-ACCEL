@@ -148,6 +148,7 @@ mixing old RTL with a new testbench.
 | Small two-layer 8-row stack HW Emu | PASS, 512 values, max raw error 10 within tolerance 64, five tasks, no intermediate Host copy |
 | Small block-prompt/decode composition HW Emu | PASS, P8 + G2, 2 forwards/10 tasks, controller-owned KV |
 | Small multi-block prompt composition HW Emu | PASS, P16 as blocks 0--7 and 8--15, 10 tasks, controller-owned KV |
+| Small exact multi-block sequence HW Emu | PASS, P16 as two P8 blocks, nine tasks, 512-value final-tail CPU golden, max raw error 10/64 |
 | Small tail-block prompt composition HW Emu | PASS, P11 as blocks 0--7 and 8--10, 10 tasks, controller-owned KV |
 | Standard Qwen2.5-3B layer-shape 8-row HW Emu | Running; published only after its numeric/cycle gate closes |
 
@@ -181,6 +182,7 @@ copy. A separate one-layer Task-18/19 run passed the same checks.
 | Two-layer 8-row stack plus final norm | 2 | 5 | 185.655 us | 55,697 | 278.483 us |
 | Block prompt P8 plus G2 | 2 | 10 across 2 forwards | 258.503 us | 77,551 | 387.755 us |
 | Multi-block prompt P16 plus G1 | 2 | 10 across 2 forwards | 364.087 us | 109,226 | 546.131 us |
+| Exact multi-block P16 final-tail golden | 2 | 9 across 2 blocks | 357.259 us | 107,178 | 535.889 us |
 | Tail-block prompt P11 plus G1 (8+3) | 2 | 10 across 2 forwards | 296.956 us | 89,087 | 445.434 us |
 
 The U50 HW-Emu image generates a 300-MHz XSim kernel clock (3.333 ns), even
@@ -198,12 +200,12 @@ tokens in one forward and performs one decode forward to produce two sampled
 tokens; each forward runs two layers plus final norm, for ten tasks. Both are
 protocol/residency tests rather than Qwen2.5-3B throughput claims.
 
-The P16/G1 case exercises two consecutive prefill blocks at positions 0--7
-and 8--15. It is the cross-block KV-residency/progress gate: the second Task 18
-reads the first block's controller-managed cache without a host KV migration.
-It does not claim a bit-accurate CPU golden across both blocks. One sample is
-produced directly from the final prompt hidden state, so no decode forward is
-charged.
+The P16/G1 generation case exercises two consecutive prefill blocks at
+positions 0--7 and 8--15 as a KV-residency/progress contract. A separate exact
+P16 sequence run now closes the numerical gate: the second Task 18 reads the
+first block's controller-managed cache, the first block omits Task 20 and D2H,
+and the final 512 values pass the cross-block CPU fixed-point golden with
+maximum raw error 10 within tolerance 64.
 
 The P11/G1 tail-block gate uses positions 0--7 and 8--10. Its second Task 18
 advertises `query_tokens=3`, so it covers valid-row propagation, causal KV
