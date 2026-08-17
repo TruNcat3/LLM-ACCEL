@@ -189,6 +189,8 @@ each completed Task 18/19/20. Under RTL HW Emu, CPU wall time is simulator
 runtime and must not be reported as accelerator latency. New launcher logs
 also freeze SHA-256 identities for the Host executable, xclbin, and emulation
 configuration so a performance row can be tied to the exact generated inputs.
+The reporter validates the three identities as an all-or-none set and carries
+them into its tab-separated output.
 
 After a successful run, derive the modeled cycle/performance row from the
 run-local CU profile and simultaneously verify the Host contract:

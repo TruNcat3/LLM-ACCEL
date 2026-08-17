@@ -66,6 +66,10 @@ if [ "${release_nonfinal}" != "0" ] && [ "${release_nonfinal}" != "1" ]; then
 fi
 
 host_validation="not_supplied"
+artifact_identity="not_recorded"
+host_exe_sha256="NA"
+xclbin_sha256="NA"
+emconfig_sha256="NA"
 if [ -n "${host_log}" ]; then
     if [ ! -s "${host_log}" ]; then
         echo "Missing or empty end-to-end Host log: ${host_log}" >&2
@@ -213,6 +217,43 @@ if [ -n "${host_log}" ]; then
         echo "Host setup evidence does not prove a full weight preload" >&2
         exit 65
     fi
+    artifact_sha() {
+        local name="$1"
+        awk -F= -v name="${name}" '
+            $1 == name { value = $2 }
+            END { print value }
+        ' "${host_log}"
+    }
+    host_exe_sha256="$(artifact_sha host_exe_sha256)"
+    xclbin_sha256="$(artifact_sha xclbin_sha256)"
+    emconfig_sha256="$(artifact_sha emconfig_sha256)"
+    recorded_artifacts=0
+    for digest in \
+        "${host_exe_sha256}" "${xclbin_sha256}" "${emconfig_sha256}"
+    do
+        if [ -n "${digest}" ]; then
+            recorded_artifacts=$((recorded_artifacts + 1))
+        fi
+    done
+    if [ "${recorded_artifacts}" -ne 0 ]; then
+        if [ "${recorded_artifacts}" -ne 3 ]; then
+            echo "Host log contains an incomplete generated-artifact identity set" >&2
+            exit 65
+        fi
+        for digest in \
+            "${host_exe_sha256}" "${xclbin_sha256}" "${emconfig_sha256}"
+        do
+            if ! [[ "${digest}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                echo "Host log contains a malformed SHA-256 identity: ${digest}" >&2
+                exit 65
+            fi
+        done
+        artifact_identity="PASS"
+    else
+        host_exe_sha256="NA"
+        xclbin_sha256="NA"
+        emconfig_sha256="NA"
+    fi
     host_validation="PASS"
 fi
 
@@ -237,7 +278,11 @@ awk \
     -v heads="${heads}" \
     -v head_dim="${head_dim}" \
     -v release_nonfinal="${release_nonfinal}" \
-    -v host_validation="${host_validation}" '
+    -v host_validation="${host_validation}" \
+    -v artifact_identity="${artifact_identity}" \
+    -v host_exe_sha256="${host_exe_sha256}" \
+    -v xclbin_sha256="${xclbin_sha256}" \
+    -v emconfig_sha256="${emconfig_sha256}" '
 BEGIN {
     OFS="\t"
     decode_forwards = generated > 0 ? generated - 1 : 0
@@ -266,15 +311,18 @@ BEGIN {
     query_row_s = query_rows * target_mhz * 1000000.0 / cycles
     generated_token_s = generated > 0 ? \
         generated * target_mhz * 1000000.0 / cycles : 0
-    print "evidence_source", "timed_scope", "host_validation", "profile", "prompt_tokens", \
+    print "evidence_source", "timed_scope", "host_validation", \
+          "artifact_identity", "host_exe_sha256", "xclbin_sha256", \
+          "emconfig_sha256", "profile", "prompt_tokens", \
           "generated_tokens", "decode_forwards", "layers", "block_size", \
           "release_nonfinal_blocks", "expected_coarse_tasks", \
           "xsim_active_us", "xsim_clock_mhz", "xsim_cycles", \
           "target_clock_mhz", "projected_target_us", "useful_mac", \
           "useful_gmac_s", "physical_efficiency_percent", \
           "query_row_s", "generated_token_s"
-    printf "HW_Emu_CU_trace\tkernel_active_only\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f\t%.3f\t%.1f\t%.3f\t%.4f\t%.0f\t%.6f\t%.6f\t%.3f\t%.3f\n", \
-        host_validation, profile, prompt, generated, decode_forwards, layers, block, \
+    printf "HW_Emu_CU_trace\tkernel_active_only\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f\t%.3f\t%.1f\t%.3f\t%.4f\t%.0f\t%.6f\t%.6f\t%.3f\t%.3f\n", \
+        host_validation, artifact_identity, host_exe_sha256, xclbin_sha256, \
+        emconfig_sha256, profile, prompt, generated, decode_forwards, layers, block, \
         release_nonfinal, tasks, active_us, xsim_mhz, cycles, target_mhz, \
         target_us, useful_mac, throughput, efficiency, query_row_s, \
         generated_token_s
