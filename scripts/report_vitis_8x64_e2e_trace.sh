@@ -99,6 +99,90 @@ if [ -n "${host_log}" ]; then
     else
         expected_tasks=$((prompt_blocks * (2 * layers + 1) + decode_forwards * (2 * layers + 1)))
     fi
+    expected_groups=$((prompt_blocks + decode_forwards))
+    expected_attention_tasks=$((expected_groups * layers))
+    expected_ffn_tasks=$((expected_groups * layers))
+    expected_query_layer_rows=$(((prompt_tokens + decode_forwards) * layers))
+    final_prompt_rows=$((prompt_tokens - (prompt_blocks - 1) * block_size))
+    if [ "${release_nonfinal}" = "1" ]; then
+        expected_final_norm_tasks=$((1 + decode_forwards))
+        expected_final_norm_rows=$((final_prompt_rows + decode_forwards))
+        expected_output_materializations=$((1 + decode_forwards))
+        expected_released_prompt_blocks=$((prompt_blocks - 1))
+    else
+        expected_final_norm_tasks=$((prompt_blocks + decode_forwards))
+        expected_final_norm_rows=$((prompt_tokens + decode_forwards))
+        expected_output_materializations=$((prompt_blocks + decode_forwards))
+        expected_released_prompt_blocks=0
+    fi
+
+    progress_summary="$(awk \
+        -v layers="${layers}" \
+        -v block_size="${block_size}" '
+        /^COARSE_TASK_PROGRESS / {
+            count++
+            completed = total = op = query = -1
+            phase = ""
+            layer = -1
+            controller_ms = -1
+            for (i = 2; i <= NF; i++) {
+                split($i, pair, "=")
+                if (pair[1] == "completed") completed = pair[2] + 0
+                else if (pair[1] == "total") total = pair[2] + 0
+                else if (pair[1] == "op") op = pair[2] + 0
+                else if (pair[1] == "phase") phase = pair[2]
+                else if (pair[1] == "layer") layer = pair[2] + 0
+                else if (pair[1] == "query_tokens") query = pair[2] + 0
+                else if (pair[1] == "controller_ms") controller_ms = pair[2] + 0
+            }
+            if (completed == 1) group_starts++
+            if (completed == total) group_ends++
+            if (completed < 1 || completed > total ||
+                (total != 2 * layers && total != 2 * layers + 1) ||
+                query < 1 || query > block_size ||
+                controller_ms <= 0) {
+                bad++
+            }
+            if (phase == "attention") {
+                attention++
+                attention_rows += query
+                if (op != 18 || layer < 0 || layer >= layers) bad++
+            } else if (phase == "ffn") {
+                ffn++
+                ffn_rows += query
+                if (op != 19 || layer < 0 || layer >= layers) bad++
+            } else if (phase == "final_norm") {
+                final_norm++
+                final_norm_rows += query
+                if (op != 20 || layer != 0) bad++
+            } else {
+                bad++
+            }
+        }
+        END {
+            print count + 0, attention + 0, ffn + 0, final_norm + 0, \
+                  attention_rows + 0, ffn_rows + 0, final_norm_rows + 0, \
+                  group_starts + 0, group_ends + 0, bad + 0
+        }
+    ' "${host_log}")"
+    read -r \
+        progress_count attention_count ffn_count final_norm_count \
+        attention_rows ffn_rows final_norm_rows \
+        group_starts group_ends malformed_progress \
+        <<<"${progress_summary}"
+    if [ "${progress_count}" -ne "${expected_tasks}" ] ||
+       [ "${attention_count}" -ne "${expected_attention_tasks}" ] ||
+       [ "${ffn_count}" -ne "${expected_ffn_tasks}" ] ||
+       [ "${final_norm_count}" -ne "${expected_final_norm_tasks}" ] ||
+       [ "${attention_rows}" -ne "${expected_query_layer_rows}" ] ||
+       [ "${ffn_rows}" -ne "${expected_query_layer_rows}" ] ||
+       [ "${final_norm_rows}" -ne "${expected_final_norm_rows}" ] ||
+       [ "${group_starts}" -ne "${expected_groups}" ] ||
+       [ "${group_ends}" -ne "${expected_groups}" ] ||
+       [ "${malformed_progress}" -ne 0 ]; then
+        echo "Host progress contract mismatch: got '${progress_summary}', expected tasks=${expected_tasks} attention=${expected_attention_tasks} ffn=${expected_ffn_tasks} final_norm=${expected_final_norm_tasks} query_layer_rows=${expected_query_layer_rows} final_norm_rows=${expected_final_norm_rows} groups=${expected_groups} malformed=0" >&2
+        exit 65
+    fi
     declare -A expected_fields=(
         [prompt_tokens]="${prompt_tokens}"
         [generated_tokens]="${generated_tokens}"
@@ -107,6 +191,8 @@ if [ -n "${host_log}" ]; then
         [prefill_mode]="coarse_block"
         [prefill_block_size]="${block_size}"
         [coarse_task_count]="${expected_tasks}"
+        [output_materializations]="${expected_output_materializations}"
+        [released_prompt_blocks]="${expected_released_prompt_blocks}"
         [intermediate_host_copy]="0"
         [kv_cache_owner]="controller"
         [event_timing_domain]="hw_emu_host_wall_proxy"

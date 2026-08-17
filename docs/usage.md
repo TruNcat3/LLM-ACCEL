@@ -197,10 +197,13 @@ scripts/report_vitis_8x64_e2e_trace.sh \
   /path/to/qwen3b_e2e_host.log
 ```
 
-The report rejects a missing final Host PASS, setup/weight-preload evidence,
-incorrect task count, Host-managed KV, intermediate Host copies, or an
-unexpected timing domain. Standard-dimension single-block numerical closure
-can be rerun independently with:
+The report audits every `COARSE_TASK_PROGRESS` event: Task-18/19/20 opcode and
+phase, layer bounds, active query rows, group start/end, controller duration,
+output materialization, and non-final prompt-block release. It also rejects a
+missing final Host PASS, setup/weight-preload evidence, incorrect task count,
+Host-managed KV, intermediate Host copies, or an unexpected timing domain.
+Standard-dimension single-block numerical closure can be rerun independently
+with:
 
 ```bash
 scripts/run_vitis_8x64_qwen_exact_p8_tmux.sh

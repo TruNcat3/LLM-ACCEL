@@ -81,6 +81,29 @@ flowchart LR
 See [Architecture](docs/architecture.md) for the execution model and
 [Design Space](docs/design-space.md) for alternatives and trade-offs.
 
+## Measurement vocabulary and execution boundary
+
+`Active query rows / block` is the number of consecutive positions from one
+sequence that occupy the 8-row compute datapath in one controller invocation.
+It is not batch size and it is not the total request length. Prefill uses up to
+eight active rows per block, so a 1024-token prompt contains 128 P8 blocks;
+autoregressive decode has one active query row per forward. Workload labels such
+as `P8+P8` describe the complete sequence of blocks included in that measured
+case.
+
+Unless explicitly labeled CSim, RTL CoSim, or HLS synthesis, cycle and
+efficiency results in this repository come from Vitis 2022.2 HW Emu CU traces.
+They exclude simulator wall time, CPU golden-reference work, and Host scheduling
+gaps, and they are not physical-board measurements.
+
+In the current generation runtime, the Host prepares the input embedding,
+submits coarse Task-18/19/20 commands, and performs the final LM-head
+argmax/sampling. Transformer decoder arithmetic, final normalization,
+intermediate hidden-state residency, RoPE, online attention, and KV-cache
+updates execute through the controller and compute CUs. CPU fixed-point
+arithmetic is used only as an out-of-band correctness oracle and is never
+counted as accelerator work.
+
 ## Key results
 
 ### Operator-level Q2.14 diagnostic
