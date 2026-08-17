@@ -192,6 +192,19 @@ configuration so a performance row can be tied to the exact generated inputs.
 The reporter validates the three identities as an all-or-none set and carries
 them into its tab-separated output.
 
+After a long run finishes, freeze its raw log, run-local CU profile, generated
+artifact identities, performance row, manifest, and checksums atomically:
+
+```bash
+scripts/archive_vitis_8x64_e2e_run.sh \
+  logs/qwen3b_e2e_hwemu_p8_g2_l36_<timestamp>.log \
+  /tmp/llm_fpga_qwen3b_e2e/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
+  results/qwen3b-e2e-<date>
+```
+
+The archiver refuses incomplete/non-PASS runs and never overwrites an existing
+archive directory.
+
 After a successful run, derive the modeled cycle/performance row from the
 run-local CU profile and simultaneously verify the Host contract:
 
