@@ -41,6 +41,10 @@ report="$(
     scripts/report_vitis_8x64_e2e_trace.sh \
         "${profile_csv}" small 8 2 2 8 200 300 1
 )"
+standard_report="$(
+    scripts/report_vitis_8x64_e2e_trace.sh \
+        "${profile_csv}" qwen2.5-3b 8 2 2 8 200 300 1
+)"
 
 value() {
     local column="$1"
@@ -70,12 +74,29 @@ throughput="$(value useful_gmac_s)"
 efficiency="$(value modeled_interval_efficiency_percent)"
 query_row_s="$(value query_row_s)"
 output_token_s="$(value request_output_token_s)"
+standard_useful_mac="$(
+    awk -F '\t' '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "useful_mac") column_index = i
+            }
+            next
+        }
+        NR == 2 && column_index { print $column_index; exit }
+    ' <<<"${standard_report}"
+)"
+standard_numeric_tolerance=$((32 * 2))
 
 if [ "${sequence_batch}" != 1 ] || [ "${prompt}" != 8 ] ||
    [ "${sampled}" != 2 ] || [ "${decode_forwards}" != 1 ] ||
    [ "${prefill_blocks}" != 1 ] || [ "${layers}" != 2 ] ||
    [ "${block_rows}" != 8 ] || [ "${tasks}" != 10 ]; then
     echo "P8/G2/L2 workload semantics regressed" >&2
+    exit 1
+fi
+if [ "${standard_useful_mac}" != 1387634688 ] ||
+   [ "${standard_numeric_tolerance}" != 64 ]; then
+    echo "Standard-shape P8/G2/L2 accounting regressed" >&2
     exit 1
 fi
 
@@ -134,5 +155,7 @@ if ! awk \
 fi
 
 printf 'E2E PERFORMANCE SEMANTICS PASS '
-printf 'P8/G2/L2 query_rows=9 decode_forwards=1 tasks=10 useful_mac=%s\n' \
-    "${useful_mac}"
+printf 'P8/G2/L2 query_rows=9 decode_forwards=1 tasks=10 '
+printf 'small_useful_mac=%s standard_useful_mac=%s tolerance=%s\n' \
+    "${useful_mac}" "${standard_useful_mac}" \
+    "${standard_numeric_tolerance}"
