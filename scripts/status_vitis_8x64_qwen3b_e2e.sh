@@ -97,6 +97,29 @@ host_pid=""
 if [[ "${simulation_dir}" =~ \.run/([0-9]+)/hw_em/ ]]; then
     host_pid="${BASH_REMATCH[1]}"
 fi
+# XRT prints the simulation-directory banner only after Host-side model setup.
+# During that potentially long window, recover the Host from the launcher's
+# process tree instead of reporting a healthy run as stopped.
+if [ -z "${host_pid}" ] && process_exists "${worker_pid}"; then
+    while read -r candidate; do
+        [ -n "${candidate}" ] || continue
+        ancestor="${candidate}"
+        while process_exists "${ancestor}"; do
+            if [ "${ancestor}" = "${worker_pid}" ]; then
+                host_pid="${candidate}"
+                break 2
+            fi
+            ancestor="$(
+                awk '/^PPid:/ { print $2 }' "/proc/${ancestor}/status" \
+                    2>/dev/null || true
+            )"
+            [ "${ancestor}" != "0" ] || break
+        done
+    done < <(
+        pgrep -f '[h]ost_qwen_8x64(\.exe)? .*--profile qwen2\.5-3b' \
+            2>/dev/null || true
+    )
+fi
 
 xsim_pid=""
 if [ -n "${simulation_dir}" ]; then
