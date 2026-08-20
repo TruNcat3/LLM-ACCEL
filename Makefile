@@ -34,7 +34,10 @@ PROFILE_TAG := $(subst .,_,$(subst -,_,$(VITIS_8X64_MODEL_PROFILE)))
 PROFILE_SUFFIX := $(if $(filter small,$(VITIS_8X64_MODEL_PROFILE)),,.$(PROFILE_TAG))
 HLS_PROJECT_SUFFIX := $(if $(filter small,$(VITIS_8X64_MODEL_PROFILE)),,_$(PROFILE_TAG))
 XO_DIR := vitis_8x64/xo$(PROFILE_SUFFIX)
-BUILD_DIR ?= vitis_8x64/build$(PROFILE_SUFFIX).$(TARGET).$(XDEVICE)
+# The specialized resident-layer build harness predates this publication
+# Makefile and passes VITIS_8X64_BUILD_DIR.  Keep that interface as a fallback
+# while allowing an explicit BUILD_DIR to remain the canonical override.
+BUILD_DIR ?= $(if $(strip $(VITIS_8X64_BUILD_DIR)),$(VITIS_8X64_BUILD_DIR),vitis_8x64/build$(PROFILE_SUFFIX).$(TARGET).$(XDEVICE))
 TEMP_DIR := vitis_8x64/_x$(PROFILE_SUFFIX).$(TARGET).$(XDEVICE)
 REPORT_DIR := reports/vitis_8x64/$(PROFILE_TAG)/$(TARGET).$(XDEVICE)
 
@@ -69,7 +72,7 @@ endif
 .PHONY: help
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
-.PHONY: hls_csim_nk test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csim_nk test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan test_qwen3b_e2e_launcher_contract test_coarse_task_residency_contract test_e2e_progress_contract test_e2e_performance_semantics test_result_installer_contract test_qwen3b_source_snapshot test_publication_tree test_publication_release verify_result_checksums regenerate_root_checksums verify_q214_pd_release verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
 .PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
 .PHONY: hls_csim_closed_loop_8x64_resident_prefill_block hls_cosim_closed_loop_8x64_resident_prefill_block
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
@@ -90,6 +93,17 @@ help:
 	@echo "  make test_resident_attention_q214"
 	@echo "  make test_q214_payload_golden"
 	@echo "  make test_qwen3b_e2e_plan"
+	@echo "  make test_qwen3b_e2e_launcher_contract"
+	@echo "  make test_coarse_task_residency_contract"
+	@echo "  make test_e2e_progress_contract"
+	@echo "  make test_e2e_performance_semantics"
+	@echo "  make test_result_installer_contract"
+	@echo "  make test_qwen3b_source_snapshot"
+	@echo "  make test_publication_tree"
+	@echo "  make test_publication_release  # all non-simulator release gates"
+	@echo "  make verify_result_checksums"
+	@echo "  make regenerate_root_checksums  # after git add -A"
+	@echo "  make verify_q214_pd_release"
 	@echo "  make verify_q214_resident_release"
 	@echo "  make hls_cosim_closed_loop_8x64_resident_layer"
 	@echo "  make hls_csim_closed_loop_8x64_composed_layer"
@@ -141,6 +155,48 @@ test_q214_payload_golden:
 
 test_qwen3b_e2e_plan:
 	scripts/test_qwen3b_e2e_plan.sh
+
+test_qwen3b_e2e_launcher_contract:
+	tests/test_qwen3b_e2e_launcher_contract.sh
+
+test_coarse_task_residency_contract:
+	tests/test_coarse_task_residency_contract.sh
+
+test_e2e_progress_contract:
+	tests/test_e2e_progress_contract.sh
+
+test_e2e_performance_semantics:
+	tests/test_e2e_performance_semantics.sh
+
+test_result_installer_contract:
+	tests/test_result_installer_contract.sh
+
+test_qwen3b_source_snapshot:
+	tests/test_qwen3b_source_snapshot.sh
+
+test_publication_tree:
+	tests/test_publication_tree.sh
+
+test_publication_release: test_qwen3b_e2e_plan \
+		test_qwen3b_e2e_launcher_contract \
+		test_coarse_task_residency_contract \
+		test_e2e_progress_contract \
+		test_e2e_performance_semantics \
+		test_result_installer_contract \
+		test_qwen3b_source_snapshot \
+		verify_q214_pd_release \
+		verify_q214_resident_release \
+		test_publication_tree
+	@echo "PUBLICATION RELEASE GATES PASS"
+
+verify_result_checksums:
+	scripts/verify_result_checksums.sh
+
+regenerate_root_checksums:
+	scripts/regenerate_root_checksums.sh
+
+verify_q214_pd_release:
+	scripts/verify_q214_pd_release.sh
 
 verify_q214_resident_release:
 	scripts/verify_q214_resident_release.sh

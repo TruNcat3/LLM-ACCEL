@@ -201,6 +201,19 @@ remainder block carries only its valid row count. Decode uses one row. The
 controller applies causal RoPE/KV/online-attention semantics independently for
 each row before the block proceeds through Task 19 and the following layer.
 
+For a prompt of `P` tokens, block height `B`, `G` sampled tokens, and `L`
+layers, this composition issues
+`ceil(P/B) * 2L + 1 + max(G-1, 0) * (2L+1)` coarse tasks. Thus the bounded
+`P8/G2/L1` end-to-end contract contains six tasks, whereas its complete
+36-layer expansion contains 146. The task count changes, but tensor and KV
+ownership do not: only final hidden rows needed by the Host vocabulary head
+cross back to software.
+
+The bounded standard-shape `P8/G2/L1` contract has completed Vitis 2022.2 HW
+Emu with all six tasks, one real D1 forward, and 4,096/4,096 fixed-point values
+exact. Its 1,190,693-cycle common four-CU interval is evidence for this
+one-layer composition only; standard-shape L2 and L36 remain separate gates.
+
 ## 8. Online attention and KV-cache ownership
 
 The KV cache belongs to the controller and resides in external accelerator

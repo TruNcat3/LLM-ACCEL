@@ -13,6 +13,10 @@ LLM-ACCEL separates evidence into four classes:
 
 No result in this document is a physical-board measurement.
 
+`P8` denotes one sequence with eight active prefill query rows in one block,
+not eight sequences and not eight generated tokens. Current generation tests
+use sequence batch one; decode remains one active row per forward (`D1`).
+
 ## 2. Reference configuration
 
 | Parameter | Value |
@@ -45,6 +49,7 @@ No result in this document is a physical-board measurement.
 | Two-layer 8-row stack HW Emu | Small P8 through five Task-18/19/20 commands | PASS, 512 values, max raw error 10/64 |
 | Block prompt/decode HW Emu | Small two-layer P8 + G2 task composition | PASS, two forwards/ten tasks |
 | Standard Qwen-layer coarse-task HW Emu | P8 Task 18 -> 19 -> 20, controller-owned KV and hidden state | PASS, 16,384 values exact, 651,621 cycles |
+| Standard-shape generation-path HW Emu | Qwen2.5-3B P8/G2/L1, one prefill plus one real D1 forward | PASS, six tasks, two CPU-golden steps, 4,096 values exact |
 
 The 8-row block run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -169,7 +174,7 @@ The Q2.14 implementation was exercised with deterministic non-zero weights,
 activations, and KV fixtures at four context lengths. Prefill measures the
 final 8-row query block; Decode measures one new query row.
 
-| Phase | Context | Active query rows / block | Cycles | Latency at 200 MHz | Useful GMAC/s | Physical efficiency |
+| Phase | Context | Active query rows / block | Cycles | Latency at 200 MHz | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P | 64 | 8 | 637,103 | 3.1855 ms | 194.174 | 94.812% |
 | P | 256 | 8 | 685,489 | 3.4274 ms | 182.304 | 89.016% |
@@ -200,6 +205,9 @@ host operations and transfer gaps are not timed.
 
 Accordingly, these numbers measure accelerator datapath efficiency and
 context scaling; they are not PCIe-inclusive end-to-end inference latency.
+The efficiency column divides shape-counted useful MACs by the measured cycles
+and the two-CU peak of 1,024 MAC/cycle. It is a model-based utilization metric,
+not post-route physical utilization.
 The raw `profile_kernels.csv` files and validation logs are published under
 [`results/q214-pd-20260811/`](../results/q214-pd-20260811/), with the complete
 interpretation in [Q2.14 P/D sweep](q214-pd-length-hwemu.md).
@@ -220,20 +228,40 @@ status is returned until the final hidden migration.
 | Small two-layer/five-task HW Emu | PASS, 64/64 exact, no intermediate host copy |
 | Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV |
 | Standard Qwen-layer P8 Task-18/19/20 HW Emu | PASS, 16,384/16,384 exact, no intermediate Host copy |
+| Standard-shape Qwen2.5-3B P8/G2/L1 HW Emu | PASS, six tasks, two forwards, 4,096/4,096 exact, controller-owned KV |
+
+The bounded standard-shape generation path is distinct from the one-forward
+P8 layer gate:
+
+| Evidence source | Timed boundary | Workload | Sequence batch | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
+
+`P8` is eight consecutive query rows from one sequence, not batch eight or
+eight generated tokens. The prompt forward supplies the first sampled token;
+the second comes from the D1 forward. Deterministic random Fix16 weights and
+tied embeddings pass two post-inference CPU-golden steps with 4,096 checked
+values, maximum raw error zero at tolerance 32, and an identical sampled-token
+sequence. The controller owns online attention, KV, and intermediate hidden
+state. Host embedding and LM-head/argmax are functionally part of the request
+but excluded from the CU interval. Request output throughput is 335.939
+tokens/s including prefill, so it is not a steady-state decode rate. Complete
+evidence is archived under
+[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/).
 
 The standard-dimension release gate is distinct from the small residency tests:
 
-| Scope | Active query rows | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Task 18 -> 19 -> 20 | 8 | 1 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
+| Evidence source | Timed boundary | Scope | Active query rows / block | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | Task 18 -> 19 -> 20 | 8 | 1 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
 
-The linked 200-MHz HW-Emu image reports a common \`3258.106 us\` active interval
-for all four CUs. The deterministic random-weight oracle checks 16,384 output
+The linked 200-MHz HW-Emu image reports a common profiler running time of
+`3258.106 us` for all four CUs. The deterministic random-weight oracle checks 16,384 output
 values with maximum raw error zero at tolerance 32. The controller owns the KV
 cache, and hidden state is not copied to the Host between the three tasks.
-Useful throughput uses 616,710,144 MAC and the two-CU physical peak of
+Useful throughput uses 616,710,144 MAC and the nominal two-CU peak of
 1,024 MAC/cycle. The raw log and trace are archived under
-[\`results/q214-resident-fix-20260818/\`](../results/q214-resident-fix-20260818/).
+[`results/q214-resident-fix-20260818/`](../results/q214-resident-fix-20260818/).
 
 The small profile validates cross-layer HBM residency rather than Qwen-layer
 throughput:
@@ -287,20 +315,24 @@ The combined results support three conclusions:
 1. **The compute datapath is not intrinsically underutilized.** An 8-row
    block reaches 94.78% useful-MAC efficiency.
 2. **Decode is shape limited.** Its one active row reaches 88.09% of the
-   row-normalized reference while only using 11.01% of the physical array.
+   row-normalized reference while reaching only 11.01% full-array modeled
+   utilization.
 3. **The resident block specialization closes the functional architecture but
-   raises the physical resource risk.** Its controller plus two exact compute
-   CUs plus the status sink estimates 1,308 BRAM18, 1,477 DSP, 868,458 FF, and
-   697,305 LUT (about 49%, 25%, 50%, and 80% of the full U50). The controller
-   alone exceeds one SLR's LUT estimate, so place-and-route remains a required
-   gate.
+   raises the physical resource risk.** The current profile-matched
+   Qwen2.5-3B controller plus two compute CUs and status sink estimates 1,308
+   BRAM18, 1,480 DSP, 829,923 FF, and 697,267 LUT (48.661%, 24.866%, 47.605%,
+   and 79.991% of the full U50). The controller alone exceeds one SLR's LUT
+   estimate, so place-and-route remains a required gate. The earlier
+   1,477-DSP/868,458-FF/697,305-LUT values remain preserved in the 2026-08-18
+   historical release artifact rather than being rewritten in place.
 
 ## 11. Current experimental boundaries
 
 - The coarse-task runtime now replays a prompt in blocks of up to eight
   consecutive query rows. A small two-layer prompt/decode HW-Emu contract is
-  complete, and the standard-shape single-layer P8 gate is complete;
-  standard-shape multi-block and checkpoint-level runs remain open.
+  complete, and both the standard-shape single-forward P8 gate and bounded
+  P8/G2/L1 generation-path gate are complete; standard-shape multi-layer,
+  multi-block, and checkpoint-level runs remain open.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
@@ -314,9 +346,10 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Exercise the multi-layer block-composition path with the full model shape,
-   recording both kernel-active cycles and host-observed sequence latency.
-2. Add an explicit numerical oracle for the prompt-plus-decode generation path,
+1. Extend the verified standard-shape P8/G2 gate from one to two decoder
+   layers, preserving the post-inference oracle and recording the common
+   four-CU interval before attempting the 36-layer run.
+2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
 3. Reduce repeated Host task issue by packaging reusable task programs while
    preserving the explicit Task-18/19/20 boundary and controller-owned state.

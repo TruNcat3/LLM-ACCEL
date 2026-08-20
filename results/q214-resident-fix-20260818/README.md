@@ -22,8 +22,9 @@ The evidence classes are intentionally separate:
 - `resource.tsv` contains local HLS estimates. Its system row is an arithmetic
   sum and is not a placed-and-routed utilization report;
 - `performance.tsv` contains only run-local Vitis 2022.2 HW-Emu CU intervals.
-  Simulator wall time, Host scheduling gaps, CPU golden-reference work, and
-  initial model migration are excluded;
+  Host computation, simulator wall time, CPU golden-reference work, and
+  initial model migration are excluded; the common four-CU field does not
+  separately resolve inter-task issue gaps;
 - `artifact_manifest.tsv` binds the HLS exports, linked XCLBIN, Host executable,
   and emulation configuration by SHA-256;
 - `source_manifest.tsv` binds the release-critical source files;
@@ -101,14 +102,16 @@ tasks in order, intermediate hidden state remained in HBM
 (`intermediate_host_copy=0`), and the controller retained ownership of the KV
 cache.
 
-| Scope | Active query rows | Tasks | HW-Emu CU interval | Cycles at 200 MHz | Useful GMAC/s | Two-CU physical efficiency |
+| Scope | Active query rows | Tasks | HW-Emu CU interval | Cycles at 200 MHz | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Task 18 -> 19 -> 20 | 8 | 3 | 3,258.106 us | 651,621 | 189.285 | 92.424% |
 
 The interval is the common run-local Vitis 2022.2 HW-Emu interval reported for
-the controller, both compute CUs, and the status sink. It excludes simulator
-wall time, Host scheduling gaps, setup/migration, and CPU golden-reference
-work. The 616,710,144 useful-MAC numerator covers the standard Qwen layer-shape
-dense work in the three-task sequence; efficiency is measured against the
-two-CU peak of 1,024 MAC/cycle. These are modeled RTL cycles, not physical-board
-measurements.
+the controller, both compute CUs, and the status sink. The identical top-level
+and per-function rows do not resolve separable CU occupancy or inter-task issue
+gaps, so the interval is not labeled as pure kernel-active time. The CPU golden
+reference runs after inference and is not part of the useful-work numerator.
+The 616,710,144 useful-MAC numerator covers the standard Qwen layer-shape dense
+work in the three-task sequence; efficiency is measured against the two-CU
+peak of 1,024 MAC/cycle over the common modeled interval. These are not
+physical-board measurements.

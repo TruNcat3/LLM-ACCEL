@@ -472,6 +472,7 @@ struct command_line_t {
     bool hardware_softmax = false;
     bool resident_layer = false;
     bool coarse_tasks = false;
+    bool verify_e2e_golden = false;
     bool tie_embeddings = false;
     bool skip_weight_preload = false;
     bool load_only = false;
@@ -4976,6 +4977,65 @@ tensor_t golden_prefill_decoder_layer_sequence(
     return golden_residual(post_attention, down);
 }
 
+tensor_t golden_e2e_sequence_final_hidden(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    const std::vector<unsigned int>& token_ids,
+    unsigned int layer_count
+) {
+    if (
+        token_ids.empty() ||
+        token_ids.size() > shape.max_seq_len ||
+        layer_count == 0 ||
+        layer_count > shape.num_layers
+    ) {
+        throw std::runtime_error(
+            "E2E golden requires a non-empty in-range sequence and layer count"
+        );
+    }
+
+    tensor_t hidden(unsigned(token_ids.size()), shape.hidden_size);
+    for (unsigned int row = 0; row < token_ids.size(); row++) {
+        const tensor_t embedding = model.embedding(token_ids[row]);
+        std::copy(
+            embedding.values.begin(),
+            embedding.values.end(),
+            hidden.values.begin() + std::size_t(row) * shape.hidden_size
+        );
+    }
+    for (unsigned int layer = 0; layer < layer_count; layer++) {
+        hidden = golden_prefill_decoder_layer_sequence(
+            shape,
+            model,
+            hidden,
+            layer,
+            0
+        );
+    }
+    hidden = golden_rmsnorm(hidden, model.final_norm_row());
+    return tensor_rows(hidden, unsigned(token_ids.size() - 1), 1);
+}
+
+int tensor_maximum_raw_error(
+    const tensor_t& actual,
+    const tensor_t& expected
+) {
+    if (
+        actual.rows != expected.rows ||
+        actual.cols != expected.cols
+    ) {
+        return std::numeric_limits<int>::max();
+    }
+    int maximum_error = 0;
+    for (std::size_t i = 0; i < actual.values.size(); i++) {
+        maximum_error = std::max(
+            maximum_error,
+            std::abs(int(actual.values[i]) - int(expected.values[i]))
+        );
+    }
+    return maximum_error;
+}
+
 bool run_q214_payload_golden_diagnostic(
     const model_shape_t& shape,
     const model_data_t& model,
@@ -8295,6 +8355,11 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
         "--resident-layer"
     );
     command.coarse_tasks = has_flag(argc, argv, "--coarse-tasks");
+    command.verify_e2e_golden = has_flag(
+        argc,
+        argv,
+        "--verify-e2e-golden"
+    );
     command.tie_embeddings = has_flag(
         argc,
         argv,
@@ -8342,6 +8407,7 @@ void print_usage(const char* executable) {
         << "  --hardware-softmax       Deprecated; decode uses controller online softmax\n"
         << "  --resident-layer         Execute each decoder layer in one controller launch\n"
         << "  --coarse-tasks           Compose controller-resident attention and FFN tasks through HBM without an intermediate host copy\n"
+        << "  --verify-e2e-golden      In generate mode, compare every materialized hidden state and sampled token with a full-prefix CPU fixed-point oracle\n"
         << "  --skip-weight-preload    Program xclbin without migrating weights\n"
         << "  --load-only              Stop after xclbin/context/buffer setup\n"
         << "  --verbose-ops            Print every controller launch\n";
@@ -8560,6 +8626,20 @@ int main(int argc, const char* argv[]) {
             if (token >= shape.vocab_size) {
                 throw std::runtime_error("prompt token exceeds profile vocabulary");
             }
+        }
+        if (
+            command.verify_e2e_golden &&
+            (
+                command.mode != "generate" ||
+                !command.coarse_tasks ||
+                command.tokens.empty() ||
+                command.max_new_tokens == 0
+            )
+        ) {
+            throw std::runtime_error(
+                "--verify-e2e-golden requires generate --coarse-tasks, "
+                "a non-empty prompt, and at least one generated token"
+            );
         }
         if (
             shape.weight_shard_bytes() >
@@ -8911,6 +8991,22 @@ int main(int argc, const char* argv[]) {
         double time_to_first_token_ms = -1.0;
         unsigned int prompt_forward_passes = 0;
         unsigned int generated_forward_passes = 0;
+        const unsigned int effective_layer_count =
+            command.layer_count == 0 ?
+            shape.num_layers :
+            command.layer_count;
+        const int e2e_numeric_tolerance =
+            32 * int(effective_layer_count);
+        unsigned int e2e_numeric_steps = 0;
+        std::size_t e2e_numeric_checked_values = 0;
+        int e2e_numeric_max_raw_error = 0;
+        double e2e_golden_host_ms = 0.0;
+        std::vector<tensor_t> e2e_hardware_hiddens;
+        std::vector<unsigned int> e2e_hardware_tokens;
+        if (command.verify_e2e_golden) {
+            e2e_hardware_hiddens.reserve(command.max_new_tokens);
+            e2e_hardware_tokens.reserve(command.max_new_tokens);
+        }
         if (
             command.prefill_block_size == 0 ||
             command.prefill_block_size > kMaxTokensPerLaunch
@@ -8993,6 +9089,9 @@ int main(int argc, const char* argv[]) {
             for (unsigned int step = 0;
                  step < command.max_new_tokens;
                  step++) {
+                if (command.verify_e2e_golden) {
+                    e2e_hardware_hiddens.push_back(hidden);
+                }
                 const auto lm_head_begin =
                     std::chrono::steady_clock::now();
                 const unsigned int next = model.lm_head_argmax(hidden);
@@ -9002,6 +9101,9 @@ int main(int argc, const char* argv[]) {
                     std::chrono::duration<double, std::milli>(
                         lm_head_end - lm_head_begin
                     ).count();
+                if (command.verify_e2e_golden) {
+                    e2e_hardware_tokens.push_back(next);
+                }
                 sequence.push_back(next);
                 const unsigned int position =
                     unsigned(sequence.size() - 1);
@@ -9033,9 +9135,132 @@ int main(int argc, const char* argv[]) {
             }
         }
 
-        const auto end = std::chrono::steady_clock::now();
+        // Close the production inference timing boundary before running the
+        // independent CPU oracle.  Validation intentionally consumes the
+        // materialized final hidden state from each sampled-token step only
+        // after all accelerator work and Host LM-head decisions are complete.
+        const auto inference_end = std::chrono::steady_clock::now();
+
+        if (command.verify_e2e_golden) {
+            if (
+                e2e_hardware_hiddens.size() != command.max_new_tokens ||
+                e2e_hardware_tokens.size() != command.max_new_tokens
+            ) {
+                throw std::runtime_error(
+                    "post-inference E2E oracle snapshot count mismatch"
+                );
+            }
+            for (unsigned int step = 0;
+                 step < command.max_new_tokens;
+                 step++) {
+                const std::size_t prefix_tokens =
+                    command.tokens.size() + step;
+                const std::vector<unsigned int> prefix(
+                    sequence.begin(),
+                    sequence.begin() + prefix_tokens
+                );
+                const auto golden_begin =
+                    std::chrono::steady_clock::now();
+                const tensor_t expected_hidden =
+                    golden_e2e_sequence_final_hidden(
+                        shape,
+                        model,
+                        prefix,
+                        effective_layer_count
+                    );
+                const unsigned int expected_next =
+                    model.lm_head_argmax(expected_hidden);
+                const bool hidden_pass = compare_tensors(
+                    "e2e_full_prefix_hidden_step_" +
+                        std::to_string(step),
+                    e2e_hardware_hiddens[step],
+                    expected_hidden,
+                    e2e_numeric_tolerance
+                );
+                const int step_max_raw_error = tensor_maximum_raw_error(
+                    e2e_hardware_hiddens[step],
+                    expected_hidden
+                );
+                const bool token_pass =
+                    e2e_hardware_tokens[step] == expected_next;
+                const bool step_pass = hidden_pass && token_pass;
+                const auto golden_end =
+                    std::chrono::steady_clock::now();
+                e2e_golden_host_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        golden_end - golden_begin
+                    ).count();
+                e2e_numeric_max_raw_error = std::max(
+                    e2e_numeric_max_raw_error,
+                    step_max_raw_error
+                );
+                e2e_numeric_checked_values +=
+                    e2e_hardware_hiddens[step].values.size();
+                e2e_numeric_steps++;
+                std::cout
+                    << "QWEN_8X64_E2E_NUMERIC_STEP"
+                    << " step=" << step
+                    << " prefix_tokens=" << prefix_tokens
+                    << " layers=" << effective_layer_count
+                    << " checked_values="
+                    << e2e_hardware_hiddens[step].values.size()
+                    << " max_raw_error=" << step_max_raw_error
+                    << " tolerance=" << e2e_numeric_tolerance
+                    << " hardware_token=" << e2e_hardware_tokens[step]
+                    << " golden_token=" << expected_next
+                    << " hidden_pass=" << (hidden_pass ? 1 : 0)
+                    << " token_pass=" << (token_pass ? 1 : 0)
+                    << " validation_schedule=post_inference"
+                    << " " << (step_pass ? "PASS" : "FAIL")
+                    << "\n";
+                if (!step_pass) {
+                    std::cout
+                        << "QWEN_8X64_E2E_NUMERIC_VERIFY"
+                        << " oracle=cpu_fixed_q214_full_prefix"
+                        << " steps=" << e2e_numeric_steps
+                        << " checked_values="
+                        << e2e_numeric_checked_values
+                        << " max_raw_error="
+                        << e2e_numeric_max_raw_error
+                        << " tolerance=" << e2e_numeric_tolerance
+                        << " token_sequence_match=0"
+                        << " validation_schedule=post_inference"
+                        << " golden_host_ms=" << e2e_golden_host_ms
+                        << " FAIL\n";
+                    return 1;
+                }
+            }
+            std::cout
+                << "QWEN_8X64_E2E_NUMERIC_VERIFY"
+                << " oracle=cpu_fixed_q214_full_prefix"
+                << " prompt_tokens=" << command.tokens.size()
+                << " generated_tokens=" << command.max_new_tokens
+                << " layers=" << effective_layer_count
+                << " steps=" << e2e_numeric_steps
+                << " checked_values=" << e2e_numeric_checked_values
+                << " max_raw_error=" << e2e_numeric_max_raw_error
+                << " tolerance=" << e2e_numeric_tolerance
+                << " token_sequence_match=1"
+                << " validation_schedule=post_inference"
+                << " golden_host_ms=" << e2e_golden_host_ms
+                << " intermediate_host_copy=0"
+                << " kv_cache_owner=controller"
+                << " PASS\n";
+        }
+
+        const auto process_end = std::chrono::steady_clock::now();
         const double total_elapsed_ms =
-            std::chrono::duration<double, std::milli>(end - begin).count();
+            std::chrono::duration<double, std::milli>(
+                inference_end - begin
+            ).count();
+        const double total_process_elapsed_ms =
+            std::chrono::duration<double, std::milli>(
+                process_end - begin
+            ).count();
+        const double post_inference_validation_ms =
+            std::chrono::duration<double, std::milli>(
+                process_end - inference_end
+            ).count();
         if (command.mode == "generate") {
             const double mean_inter_token_ms =
                 generated_forward_passes == 0 ?
@@ -9070,6 +9295,12 @@ int main(int argc, const char* argv[]) {
                 << " decode_token_s=" << decode_token_s
                 << " lm_head_host_ms=" << lm_head_host_ms
                 << " total_host_elapsed_ms=" << total_elapsed_ms
+                << " total_process_elapsed_ms="
+                << total_process_elapsed_ms
+                << " post_inference_validation_ms="
+                << post_inference_validation_ms
+                << " validation_schedule="
+                << (command.verify_e2e_golden ? "post_inference" : "disabled")
                 << " event_timing_domain=" << event_timing_domain()
                 << " coarse_task_count=" << executor.coarse_task_count()
                 << " coarse_kernel_active_ms="
@@ -9090,6 +9321,16 @@ int main(int argc, const char* argv[]) {
                 << executor.output_materialization_count()
                 << " released_prompt_blocks="
                 << executor.released_prompt_block_count()
+                << " e2e_numeric_golden="
+                << (command.verify_e2e_golden ? 1 : 0)
+                << " e2e_numeric_steps=" << e2e_numeric_steps
+                << " e2e_numeric_checked_values="
+                << e2e_numeric_checked_values
+                << " e2e_numeric_max_raw_error="
+                << e2e_numeric_max_raw_error
+                << " e2e_numeric_tolerance="
+                << e2e_numeric_tolerance
+                << " e2e_golden_host_ms=" << e2e_golden_host_ms
                 << " intermediate_host_copy=0"
                 << " kv_cache_owner=controller"
                 << " PASS\n";
@@ -9097,6 +9338,10 @@ int main(int argc, const char* argv[]) {
         std::cout
             << "QWEN_8X64_HOST PASS elapsed_seconds="
             << total_elapsed_ms / 1000.0
+            << " process_elapsed_seconds="
+            << total_process_elapsed_ms / 1000.0
+            << " validation_elapsed_seconds="
+            << post_inference_validation_ms / 1000.0
             << " sequence=";
         for (std::size_t i = 0; i < sequence.size(); i++) {
             if (i != 0) {

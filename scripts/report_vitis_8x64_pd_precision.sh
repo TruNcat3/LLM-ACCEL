@@ -6,7 +6,7 @@ if [ "$#" -lt 1 ]; then
     exit 2
 fi
 
-printf 'phase\tcontext_len\ttokens\tq214_checks\tq214_failures\tq214_max_raw_error\treference_checks\treference_failures\treference_max_raw_error\n'
+printf 'phase\tcontext_len\tactive_query_rows_per_block\tq214_checks\tq214_failures\tq214_max_raw_error\treference_checks\treference_failures\treference_max_raw_error\n'
 
 for results_tsv in "$@"; do
     if [ ! -s "${results_tsv}" ]; then

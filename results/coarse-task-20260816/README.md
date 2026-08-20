@@ -26,6 +26,11 @@ target is 200 MHz. `performance.tsv` records the XSim interval, derives cycles
 at 300 MHz, and projects those cycles to 200 MHz. OpenCL event durations and
 host elapsed time are simulator wall-time proxies under HW Emu.
 
+The `xsim_active_us` column name is retained as historical schema. All four
+top-level CUs have the same profiler Running Time in the source CSVs, so the
+current interpretation is a common four-CU modeled interval, not separable
+per-CU active occupancy or an independently resolved inter-task issue gap.
+
 The persistent-auxiliary revision passes a one-layer Task-18/19 run, a
 two-layer/five-task stack, and a real `generate --coarse-tasks` composition.
 The generation case uses a two-token serial prompt and three sampled tokens.

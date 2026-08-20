@@ -30,9 +30,10 @@ BEGIN {
         3 * hidden * intermediate
     attention_macs_per_context = 2 * heads * head_dim
     peak_macs_per_cycle = 2 * 8 * 64
-    print "phase", "context_len", "tokens", "cycles_200mhz", \
+    print "phase", "context_len", "active_query_rows_per_block", "cycles_200mhz", \
           "latency_ms", "useful_macs", "throughput_gmac_s", \
-          "physical_efficiency_pct", "token_s"
+          "modeled_interval_efficiency_percent", \
+          "target_block_query_row_s"
 }
 FNR == 1 { next }
 $6 == 0 && $8 ~ /^[0-9]+$/ {

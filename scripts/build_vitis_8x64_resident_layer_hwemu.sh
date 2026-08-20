@@ -35,6 +35,7 @@ e2e_tokens="${VITIS_8X64_E2E_TOKENS:-0,1}"
 e2e_max_new_tokens="${VITIS_8X64_E2E_MAX_NEW_TOKENS:-3}"
 e2e_layers="${VITIS_8X64_E2E_LAYERS:-0}"
 e2e_prefill_block_size="${VITIS_8X64_E2E_PREFILL_BLOCK_SIZE:-${resident_token_rows}}"
+e2e_verify_golden="${VITIS_8X64_E2E_VERIFY_GOLDEN:-0}"
 verify_sequence_tokens="${VITIS_8X64_VERIFY_SEQUENCE_TOKENS:-16}"
 
 case "${profile}" in
@@ -60,6 +61,11 @@ if [ "${e2e_prefill_block_size}" -lt 1 ] || [ "${e2e_prefill_block_size}" -gt "$
 fi
 if [ "${build_exact_compute_xo}" != "0" ] && [ "${build_exact_compute_xo}" != "1" ]; then
     echo "VITIS_8X64_BUILD_EXACT_COMPUTE_XO must be 0 or 1" >&2
+    exit 2
+fi
+if [ "${e2e_verify_golden}" != "0" ] &&
+   [ "${e2e_verify_golden}" != "1" ]; then
+    echo "VITIS_8X64_E2E_VERIFY_GOLDEN must be 0 or 1" >&2
     exit 2
 fi
 if [ "${profile}" = "qwen2.5-3b" ] && [ "${build_exact_compute_xo}" != "1" ]; then
@@ -204,7 +210,7 @@ build_host() {
     make vitis_8x64_qwen_host vitis_8x64_emconfig \
         TARGET=hw_emu DEVICE="${device}" \
         VITIS_8X64_MODEL_PROFILE="${profile}" \
-        BUILD_DIR="${build_dir}"
+        VITIS_8X64_BUILD_DIR="${build_dir}"
 }
 
 run_hwemu() {
@@ -246,6 +252,10 @@ run_generate_hwemu() {
             exit 66
         fi
     done
+    extra_args=()
+    if [ "${e2e_verify_golden}" = "1" ]; then
+        extra_args+=(--verify-e2e-golden)
+    fi
     (
         cd "${build_dir}"
         XCL_EMULATION_MODE=hw_emu \
@@ -260,7 +270,8 @@ run_generate_hwemu() {
             --max-new-tokens "${e2e_max_new_tokens}" \
             --prefill-block-size "${e2e_prefill_block_size}" \
             --layers "${e2e_layers}" \
-            --coarse-tasks
+            --coarse-tasks \
+            "${extra_args[@]}"
     )
 }
 

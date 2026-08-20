@@ -35,8 +35,9 @@ build directories are intentionally excluded.
   materialized off chip.
 - **Controller-resident block prefill.** The same Task-18/19/20 contract accepts
   one to eight consecutive query rows, applies causal RoPE/KV/online attention
-  per row, and keeps the block resident across decoder layers.
-- **Shape-aware evaluation.** Decode reports both physical-array utilization
+  per row, and keeps intermediates accelerator-resident: on chip within each
+  coarse task and in HBM across Host-visible task and layer boundaries.
+- **Shape-aware evaluation.** Decode reports both full-array modeled utilization
   and utilization normalized to its single active token row. Prefill evaluates
   how one 8-row prefill block fills the complete datapath.
 
@@ -91,11 +92,20 @@ autoregressive decode has one active query row per forward. Workload labels such
 as `P8+P8` describe the complete sequence of blocks included in that measured
 case. In generation labels, `P<N>/G<M>` instead denotes a total N-token prompt
 and M sampled tokens; for example, `P16/G1` traverses two 8-row prompt blocks.
+All generation results in the current release use `sequence_batch=1`; `P8`
+therefore never means batch eight or eight tokens generated at once. Archived
+end-to-end TSV files spell this out as `sequence_batch`,
+`prompt_sequence_tokens`, `sampled_output_tokens`, `decode_forwards`,
+`prefill_blocks`, and
+`configured_max_active_query_rows_per_prefill_block`.
 
 Unless explicitly labeled CSim, RTL CoSim, or HLS synthesis, cycle and
 efficiency results in this repository come from Vitis 2022.2 HW Emu CU traces.
-They exclude simulator wall time, CPU golden-reference work, and Host scheduling
-gaps, and they are not physical-board measurements.
+The operator-level diagnostic sums individual controller-event intervals. The
+coarse-task path instead uses the profiler's common four-CU running-time field;
+that field does not resolve per-CU occupancy or inter-task issue gaps. Neither
+measurement is simulator wall time or a physical-board result, and the CPU
+golden reference runs outside the production inference boundary.
 
 In the current generation runtime, the Host prepares the input embedding,
 submits coarse Task-18/19/20 commands, and performs the final LM-head
@@ -107,6 +117,33 @@ counted as accelerator work.
 
 ## Key results
 
+### Bounded standard-shape P8/G2 end-to-end composition
+
+The current end-to-end release gate runs one Qwen2.5-3B-shaped decoder layer
+for an eight-token prompt and two sampled outputs. `P8` is one sequence with
+eight active prefill query rows, not batch eight. The prompt forward produces
+the first sample, and one real single-row decode forward produces the second.
+Each forward issues Task 18, Task 19, and Task 20, for six Host-visible coarse
+tasks in total.
+
+| Evidence source | Timed boundary | Workload | Sequence batch | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8 prompt + G2, including one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
+
+The deterministic random-Fix16/tied-embedding run completes all six tasks and
+passes two post-inference CPU-golden steps: 4,096 checked values, maximum raw
+error zero at tolerance 32, and an identical sampled-token sequence. Hidden
+state never crosses through Host memory between tasks, and the controller owns
+RoPE, online attention, and HBM-resident KV state. Host embedding and
+LM-head/argmax remain outside the timed accelerator interval. The trace also
+corresponds to 1,511.725 query rows/s and 335.939 request output tokens/s; the
+latter includes prefill and must not be interpreted as steady-state D1
+throughput. This is a one-layer HW-Emu result, not checkpoint-level accuracy,
+a 36-layer result, or a physical-board measurement. The raw Host/build logs,
+profile, source snapshot, resource report, artifact identities, and checksums
+are published in the
+[Qwen2.5-3B P8/G2/L1 evidence package](results/qwen3b-e2e-20260820/).
+
 ### Standard controller-resident P8 layer
 
 The release configuration executes one standard Qwen-shaped decoder layer as
@@ -115,16 +152,35 @@ hidden tensors, RoPE, online attention, and KV-cache state. The deterministic
 random-weight P8 HW-Emu gate passes all 16,384 final-hidden values with maximum
 raw error zero and no intermediate Host copy.
 
-| Scope | Active query rows / block | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Task 18 -> Task 19 -> Task 20 | 8 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
+| Evidence source | Timed boundary | Scope | Active query rows / block | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | Task 18 -> Task 19 -> Task 20 | 8 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
 
-The row comes from the common run-local Vitis 2022.2 HW-Emu CU interval for the
-controller, two compute CUs, and status sink. It excludes simulator wall time,
-Host task gaps, setup/migration, and the CPU oracle. It is a standard
-single-layer accelerator measurement, not a 36-layer end-to-end or physical
-board result. Raw evidence and artifact identities are published in the
+The row comes from the common profiler-reported Vitis 2022.2 HW-Emu running
+time for the controller, two compute CUs, and status sink. Every top-level CU
+has the same reported interval, so the ratio is useful MAC divided by the
+two-array peak over that common modeled interval; it is not a per-CU occupancy
+metric. It is a standard single-layer accelerator measurement, not a 36-layer
+end-to-end or physical-board result. Raw evidence and artifact identities are published in the
 [Q2.14 release artifact](results/q214-resident-fix-20260818/).
+
+### Full-profile resource qualification
+
+The current profile-matched Qwen2.5-3B release candidate remains below the
+whole-device HLS resource budget, although the controller is still too large
+for a comfortable single-SLR placement. These are local CSynth estimates, not
+routed utilization:
+
+| Scope | Instances | BRAM18 | DSP | FF | LUT | Maximum estimated period |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Controller | 1 | 1,212 | 126 | 429,922 | 453,437 | 3.746 ns |
+| Compute CUs | 2 | 96 | 1,354 | 395,134 | 235,298 | 2.433 ns |
+| Status sink | 1 | 0 | 0 | 4,867 | 8,532 | 2.433 ns |
+| Whole system | 4 | 1,308 (48.661%) | 1,480 (24.866%) | 829,923 (47.605%) | 697,267 (79.991%) | 3.746 ns |
+
+The table is regenerated directly from the three profile-matched HLS reports;
+see the [coarse-task runtime](docs/coarse-task-runtime.md#resource-gate) for
+the historical comparison and placement caveat.
 
 ### Operator-level Q2.14 diagnostic
 
@@ -135,7 +191,7 @@ measurements. The standard layer shape is
 `hidden=2048`, `intermediate=11008`, 16 query heads, 2 KV heads, and
 head dimension 128.
 
-| Phase | KV context | Active query rows / block | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| Phase | KV context | Active query rows / block | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Prefill | 64 | 8 | 637,103 | 3.186 ms | 194.17 | 94.81% |
 | Prefill | 256 | 8 | 685,489 | 3.427 ms | 182.30 | 89.02% |
@@ -185,7 +241,7 @@ small-shape protocol results; standard Qwen-layer performance is kept
 separate in the [block-prefill artifact](results/block-prefill-20260817/).
 The stronger two-layer P8 stack gate also passes 512 values (maximum raw error
 10 within tolerance 64) across five coarse tasks with no intermediate Host
-copy. Its run-local CU interval is 55,696.5 XSim cycles.
+copy. Its common four-CU running time is 55,696.5 XSim cycles.
 An exact P16 HW-Emu gate passes two consecutive 8-row blocks through both
 layers, releases the first block without Task 20 or D2H, materializes only the
 second block, and passes all 512 tail values against the cross-block CPU golden
@@ -194,7 +250,7 @@ and a P11/G1 tail-block run also pass, confirming controller-owned KV progress
 and that eight is a maximum query-block height rather than a fixed batch size.
 The standard Qwen-layer P8 gate also completes Task 18/19/20 with exactly
 16,384/16,384 final-hidden values correct, maximum raw error zero, and a
-651,621-cycle common CU interval at the modeled 200-MHz clock.
+651,621-cycle common four-CU running time at the modeled 200-MHz clock.
 
 ## Decoder schedule
 
@@ -289,10 +345,17 @@ scripts/launch_vitis_8x64_pd_sweep_tmux.sh \
   --build-dir <generated-hw_emu-build> \
   --profile qwen-layer-long --seed 20260722
 
-# Build profile-matched 2048-position XOs and launch the full
-# Qwen2.5-3B-shape prompt=8/generated=2/layers=36 coarse-task gate.
+# Build profile-matched 2048-position XOs. A bounded L1 gate exercises both
+# P8 prefill and a real D1 forward with six Host-visible coarse tasks; the
+# default L36 command expands the same contract to all 36 decoder layers.
 scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
-scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+VITIS_8X64_E2E_LAYERS=1 \
+  scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+
+# Run every non-simulator release gate: task-plan/launcher semantics,
+# Task-18 -> Task-19 HBM residency, progress/performance formulas, source
+# provenance, historical result integrity, and publication-tree structure.
+make test_publication_release
 ```
 
 The main pipeline parameters can be swept without editing source:
@@ -323,12 +386,17 @@ prefill evaluation, expected outputs, and artifact locations.
   precision gates, measurement boundary, and raw-data provenance.
 - [Coarse-task runtime](docs/coarse-task-runtime.md): Task 18/19/20 contract,
   HBM-resident composition, CoSim/HW-Emu evidence, and resource cost.
+- [Published evidence index](results/README.md): artifact-by-artifact workload,
+  measurement scope, supported claim, and checksum policy.
 - [Block-prefill evidence](results/block-prefill-20260817/): exact 8-row CSim,
   RTL CoSim, HW-Emu profiles, and HLS resource summaries.
 - [Controller-resident Q2.14 fix](results/q214-resident-fix-20260818/):
   bit-accurate probability/PV transport, finite-buffer CoSim, focused P2/P8
   HW-Emu diagnostics, the standard P8 three-task result, and release-bound
   artifact identities.
+- [Standard-shape Qwen2.5-3B P8/G2/L1 evidence](results/qwen3b-e2e-20260820/):
+  six-task Prefill-plus-real-D1 HW-Emu trace, post-inference fixed-point oracle,
+  profile-matched HLS resources, artifact identities, and source provenance.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
   4-PC weight multi-bank, and an analytical ~50 token/s decode projection
@@ -340,10 +408,12 @@ prefill evaluation, expected outputs, and artifact locations.
 The standard performance artifact remains a single-layer fixed-point research
 prototype. Its Q2.14 P/D numbers are kernel-only, host-orchestrated diagnostic
 profiles. The coarse-task runtime executes controller-resident subgraphs and
-now supports multi-row block prefill plus one-row decode while proving
-cross-task/cross-layer hidden and KV residency. It does not yet claim
-checkpoint-level 36-layer accuracy, accelerator-side LM-head/sampling,
-PCIe-inclusive physical latency, or physical-board performance.
+now completes a standard-shape P8/G2/L1 generation-path gate with one real D1
+forward, while proving cross-task hidden and controller-owned KV residency.
+Small-shape tests additionally prove cross-layer residency. Standard-shape
+multi-layer and 36-layer execution, checkpoint-level accuracy,
+accelerator-side LM-head/sampling, PCIe-inclusive physical latency, and
+physical-board performance remain open.
 
 ## Citation
 

@@ -66,6 +66,17 @@ if [ "${release_nonfinal}" != "0" ] && [ "${release_nonfinal}" != "1" ]; then
 fi
 
 host_validation="not_supplied"
+numeric_validation="not_supplied"
+numeric_steps=0
+numeric_checked_values=0
+numeric_max_raw_error=0
+numeric_tolerance=0
+numeric_golden_host_ms=0
+numeric_validation_schedule="not_supplied"
+host_inference_ms=0
+host_process_ms=0
+host_lm_head_ms=0
+host_validation_ms=0
 artifact_identity="not_recorded"
 host_exe_sha256="NA"
 xclbin_sha256="NA"
@@ -212,6 +223,90 @@ if [ -n "${host_log}" ]; then
         echo "End-to-end Host profile did not finish with PASS" >&2
         exit 65
     fi
+    host_inference_ms="$(field "${e2e_line}" total_host_elapsed_ms)"
+    host_process_ms="$(field "${e2e_line}" total_process_elapsed_ms)"
+    host_lm_head_ms="$(field "${e2e_line}" lm_head_host_ms)"
+    host_validation_ms="$(field "${e2e_line}" post_inference_validation_ms)"
+    for host_time in \
+        "${host_inference_ms}" "${host_process_ms}" \
+        "${host_lm_head_ms}" "${host_validation_ms}"
+    do
+        if ! [[ "${host_time}" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]]; then
+            echo "Malformed Host timing field: ${host_time:-missing}" >&2
+            exit 65
+        fi
+    done
+    if ! awk \
+        -v inference="${host_inference_ms}" \
+        -v process="${host_process_ms}" \
+        'BEGIN { exit process + 0.001 >= inference ? 0 : 1 }'
+    then
+        echo "Host process time is shorter than inference-only time" >&2
+        exit 65
+    fi
+    numeric_enabled="$(field "${e2e_line}" e2e_numeric_golden)"
+    case "${numeric_enabled}" in
+        0)
+            numeric_validation_schedule="$(field "${e2e_line}" validation_schedule)"
+            if [ "${numeric_validation_schedule}" != "disabled" ]; then
+                echo "Host profile did not mark numerical validation disabled" >&2
+                exit 65
+            fi
+            numeric_validation="not_requested"
+            ;;
+        1)
+            numeric_line="$(rg '^QWEN_8X64_E2E_NUMERIC_VERIFY ' "${host_log}" | tail -n 1 || true)"
+            if [ -z "${numeric_line}" ] ||
+               [[ "${numeric_line}" != *" token_sequence_match=1 "*" PASS" ]]; then
+                echo "Host log is missing a passing E2E numerical summary" >&2
+                exit 65
+            fi
+            numeric_steps="$(field "${numeric_line}" steps)"
+            numeric_checked_values="$(field "${numeric_line}" checked_values)"
+            numeric_max_raw_error="$(field "${numeric_line}" max_raw_error)"
+            numeric_tolerance="$(field "${numeric_line}" tolerance)"
+            numeric_golden_host_ms="$(field "${numeric_line}" golden_host_ms)"
+            numeric_validation_schedule="$(field "${numeric_line}" validation_schedule)"
+            profile_validation_schedule="$(field "${e2e_line}" validation_schedule)"
+            expected_numeric_values=$((generated_tokens * hidden))
+            numeric_step_lines="$(
+                rg -c '^QWEN_8X64_E2E_NUMERIC_STEP .* PASS$' \
+                    "${host_log}" || true
+            )"
+            for numeric_value in \
+                "${numeric_steps}" "${numeric_checked_values}" \
+                "${numeric_max_raw_error}" "${numeric_tolerance}"
+            do
+                if ! [[ "${numeric_value}" =~ ^[0-9]+$ ]]; then
+                    echo "Malformed E2E numerical field: ${numeric_value}" >&2
+                    exit 65
+                fi
+            done
+            if ! [[ "${numeric_golden_host_ms}" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] ||
+               [ "${numeric_steps}" -ne "${generated_tokens}" ] ||
+               [ "${numeric_step_lines}" -ne "${generated_tokens}" ] ||
+               [ "${numeric_checked_values}" -ne "${expected_numeric_values}" ] ||
+               [ "${numeric_max_raw_error}" -gt "${numeric_tolerance}" ] ||
+               [ "${numeric_validation_schedule}" != "post_inference" ] ||
+               [ "${profile_validation_schedule}" != "post_inference" ]; then
+                echo "E2E numerical contract mismatch" >&2
+                exit 65
+            fi
+            if ! awk \
+                -v validation="${host_validation_ms}" \
+                -v golden="${numeric_golden_host_ms}" \
+                'BEGIN { exit validation + 0.001 >= golden ? 0 : 1 }'
+            then
+                echo "Post-inference Host timing does not contain the recorded oracle time" >&2
+                exit 65
+            fi
+            numeric_validation="PASS"
+            ;;
+        *)
+            echo "Host profile has invalid e2e_numeric_golden=${numeric_enabled:-missing}" >&2
+            exit 65
+            ;;
+    esac
     if [ "$(field "${setup_line}" timing_domain)" != "host_wall" ] ||
        [ "$(field "${setup_line}" weight_preload)" != "1" ]; then
         echo "Host setup evidence does not prove a full weight preload" >&2
@@ -257,9 +352,42 @@ if [ -n "${host_log}" ]; then
     host_validation="PASS"
 fi
 
-active_us="$(awk -F, '$1 == "cc8_ctrl" { print $2; exit }' "${profile_csv}")"
-if [ -z "${active_us}" ]; then
-    echo "No cc8_ctrl running-time row in ${profile_csv}" >&2
+cu_time_summary="$(
+    awk -F, '
+        NF == 5 &&
+        ($1 == "cc8_ctrl" || $1 == "cc8_cu0" ||
+         $1 == "cc8_cu1" || $1 == "cc8_status") {
+            count[$1]++
+            time[$1] = $2
+        }
+        END {
+            print count["cc8_ctrl"] + 0,
+                  count["cc8_cu0"] + 0,
+                  count["cc8_cu1"] + 0,
+                  count["cc8_status"] + 0,
+                  time["cc8_ctrl"], time["cc8_cu0"],
+                  time["cc8_cu1"], time["cc8_status"]
+        }
+    ' "${profile_csv}"
+)"
+read -r ctrl_rows cu0_rows cu1_rows status_rows \
+    active_us cu0_us cu1_us status_us <<<"${cu_time_summary}"
+if [ "${ctrl_rows}" -ne 1 ] || [ "${cu0_rows}" -ne 1 ] ||
+   [ "${cu1_rows}" -ne 1 ] || [ "${status_rows}" -ne 1 ]; then
+    echo "HW-Emu CU profile must contain exactly one top-level running-time row for each deployed CU" >&2
+    exit 65
+fi
+if ! awk \
+    -v ctrl="${active_us}" -v cu0="${cu0_us}" \
+    -v cu1="${cu1_us}" -v status="${status_us}" '
+    function abs(value) { return value < 0 ? -value : value }
+    BEGIN {
+        exit abs(ctrl - cu0) <= 0.001 &&
+             abs(ctrl - cu1) <= 0.001 &&
+             abs(ctrl - status) <= 0.001 ? 0 : 1
+    }
+'; then
+    echo "HW-Emu CU running times are not a common four-CU measurement: ${cu_time_summary}" >&2
     exit 65
 fi
 
@@ -305,6 +433,17 @@ awk \
     -v head_dim="${head_dim}" \
     -v release_nonfinal="${release_nonfinal}" \
     -v host_validation="${host_validation}" \
+    -v numeric_validation="${numeric_validation}" \
+    -v numeric_steps="${numeric_steps}" \
+    -v numeric_checked_values="${numeric_checked_values}" \
+    -v numeric_max_raw_error="${numeric_max_raw_error}" \
+    -v numeric_tolerance="${numeric_tolerance}" \
+    -v numeric_golden_host_ms="${numeric_golden_host_ms}" \
+    -v numeric_validation_schedule="${numeric_validation_schedule}" \
+    -v host_inference_ms="${host_inference_ms}" \
+    -v host_process_ms="${host_process_ms}" \
+    -v host_lm_head_ms="${host_lm_head_ms}" \
+    -v host_validation_ms="${host_validation_ms}" \
     -v artifact_identity="${artifact_identity}" \
     -v host_exe_sha256="${host_exe_sha256}" \
     -v xclbin_sha256="${xclbin_sha256}" \
@@ -338,17 +477,30 @@ BEGIN {
     generated_token_s = generated > 0 ? \
         generated * target_mhz * 1000000.0 / cycles : 0
     print "evidence_source", "timed_scope", "host_validation", \
+          "numeric_validation", "numeric_steps", \
+          "numeric_checked_values", "numeric_max_raw_error", \
+          "numeric_tolerance", "numeric_golden_host_ms", \
+          "numeric_validation_schedule", "host_inference_ms", \
+          "host_process_ms", "host_lm_head_ms", "host_validation_ms", \
           "artifact_identity", "host_exe_sha256", "xclbin_sha256", \
-          "emconfig_sha256", "profile", "prompt_tokens", \
-          "generated_tokens", "decode_forwards", "layers", "block_size", \
+          "emconfig_sha256", "profile", "sequence_batch", \
+          "prompt_sequence_tokens", "sampled_output_tokens", \
+          "decode_forwards", "prefill_blocks", "layers", \
+          "configured_max_active_query_rows_per_prefill_block", \
           "release_nonfinal_blocks", "expected_coarse_tasks", \
-          "xsim_active_us", "xsim_clock_mhz", "xsim_cycles", \
+          "xsim_cu_running_us", "xsim_clock_mhz", "xsim_cycles", \
           "target_clock_mhz", "projected_target_us", "useful_mac", \
-          "useful_gmac_s", "physical_efficiency_percent", \
-          "query_row_s", "generated_token_s"
-    printf "HW_Emu_CU_trace\tkernel_active_only\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f\t%.3f\t%.1f\t%.3f\t%.4f\t%.0f\t%.6f\t%.6f\t%.3f\t%.3f\n", \
-        host_validation, artifact_identity, host_exe_sha256, xclbin_sha256, \
-        emconfig_sha256, profile, prompt, generated, decode_forwards, layers, block, \
+          "useful_gmac_s", "modeled_interval_efficiency_percent", \
+          "query_row_s", "request_output_token_s"
+    printf "HW_Emu_CU_trace\tcommon_four_CU_running_time\t%s\t%s\t%d\t%d\t%d\t%d\t%.3f\t%s\t%.3f\t%.3f\t%.3f\t%.3f\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.3f\t%.3f\t%.1f\t%.3f\t%.4f\t%.0f\t%.6f\t%.6f\t%.3f\t%.3f\n", \
+        host_validation, numeric_validation, numeric_steps, \
+        numeric_checked_values, numeric_max_raw_error, numeric_tolerance, \
+        numeric_golden_host_ms, numeric_validation_schedule, \
+        host_inference_ms, host_process_ms, host_lm_head_ms, \
+        host_validation_ms, \
+        artifact_identity, host_exe_sha256, xclbin_sha256, \
+        emconfig_sha256, profile, 1, prompt, generated, decode_forwards, \
+        prompt_blocks, layers, block, \
         release_nonfinal, tasks, active_us, xsim_mhz, cycles, target_mhz, \
         target_us, useful_mac, throughput, efficiency, query_row_s, \
         generated_token_s

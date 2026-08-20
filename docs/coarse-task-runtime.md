@@ -47,6 +47,53 @@ The host still chooses the task sequence and layer index. This keeps request,
 sampling, and model-level policy in software while removing host round trips
 inside each subgraph.
 
+## Generation composition and task count
+
+Let `P` be the prompt length, `B <= 8` the active-query-row block size, `G`
+the number of sampled tokens, and `L` the selected decoder-layer count. The
+Host submits
+
+```text
+prompt blocks = ceil(P / B)
+decode forwards = max(G - 1, 0)
+coarse tasks = prompt_blocks * (2 * L) + 1
+             + decode_forwards * (2 * L + 1)
+```
+
+Each prompt block runs Task 18 and Task 19 for every layer. Only the final
+prompt block runs Task 20 and materializes a hidden row for the vocabulary
+head; earlier blocks release their hidden output after updating
+controller-owned KV state. The first sampled token comes from that final
+prompt hidden, so a request must use at least `G2` to exercise a real decode
+forward. Every subsequent forward runs `2 * L + 1` tasks and materializes one
+final hidden row.
+
+For the bounded full-shape gate, `P8/G2/L1` therefore means one eight-row
+prefill forward plus one one-row decode forward: six coarse tasks and two
+output materializations. It is one sequence, not batch eight and not eight
+tokens generated in parallel. The corresponding `P8/G2/L36` expansion uses
+146 tasks while preserving the same three-operation interface.
+
+The implemented post-initialization inference boundary is:
+
+| Stage | Owner | Included in Host inference wall time | Included in CU-trace cycles |
+| --- | --- | ---: | ---: |
+| Prompt/decode embedding lookup | Host | yes | no |
+| Task 18/19/20 execution | Controller + compute CUs | yes | yes |
+| Intermediate hidden and KV movement | Controller/HBM | yes | yes |
+| Completion synchronization and final hidden D2H | Host/XRT | yes | no |
+| LM-head argmax/sampling | Host | yes | no |
+| Model allocation and one-time weight preload | Host/XRT setup | no, reported separately | no |
+| CPU fixed-point correctness oracle | Host, after inference | no, reported separately | no |
+
+Vitis HW Emu Host wall time follows simulator execution and is therefore not a
+physical latency estimate. Publication performance rows use the common
+profiler-reported running time for controller, both compute CUs, and status
+sink. The
+Host still reports inference-only, whole-process, LM-head, setup, and
+post-inference validation times so the boundary remains auditable and can be
+reused unchanged for a future physical-board run.
+
 ### Full-profile HBM capacity guard
 
 The `qwen2.5-3b` host plan checks aggregate allocation against the actual
@@ -159,6 +206,7 @@ mixing old RTL with a new testbench.
 | Small exact multi-block sequence HW Emu | PASS, P16 as two P8 blocks, nine tasks, 512-value final-tail CPU golden, max raw error 10/64 |
 | Small tail-block prompt composition HW Emu | PASS, P11 as blocks 0--7 and 8--10, 10 tasks, controller-owned KV |
 | Standard Qwen2.5-3B layer-shape 8-row HW Emu | PASS, Task 18/19/20, 16,384 values exact, 651,621 cycles, no intermediate Host copy |
+| Standard-shape Qwen2.5-3B P8/G2/L1 HW Emu | PASS, six tasks, two forwards, 4,096 values exact, one real D1 forward |
 
 The original one-row RTL CoSim records three passing transactions with
 minimum/average/maximum latency of 1,204/2,664/4,497 cycles. The current Q2.14
@@ -171,20 +219,20 @@ Q8.8 probability-buffer image completed the same sequence in 25,411 cycles.
 The release image executes one standard Qwen-shaped layer over an 8-row
 prefill block as three coarse tasks:
 
-\`\`\`text
+```text
 Task 18: RMSNorm -> Q/K/V -> RoPE -> KV/online attention -> O -> residual
 Task 19: RMSNorm -> Gate/Up -> SiLU-Mul -> Down -> residual
 Task 20: final RMSNorm
-\`\`\`
+```
 
-| Scope | Active query rows | Layers | Tasks | HW-Emu CU interval | Cycles at 200 MHz | Useful GMAC/s | Physical efficiency |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Task 18 -> 19 -> 20 | 8 | 1 | 3 | 3,258.106 us | 651,621 | 189.285 | 92.424% |
+| Evidence source | Host computation in timed interval | Scope | Active query rows / block | Layers | Tasks | Common HW-Emu CU running time | Cycles at 200 MHz | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | No | Task 18 -> 19 -> 20 | 8 | 1 | 3 | 3,258.106 us | 651,621 | 189.285 | 92.424% |
 
-Random Fix16 seed \`20260718\` passes all 16,384 final-hidden comparisons with
+Random Fix16 seed `20260718` passes all 16,384 final-hidden comparisons with
 maximum raw error zero at tolerance 32. The Host observes exactly three
-completion records; the result contract reports \`intermediate_host_copy=0\`
-and \`kv_cache_owner=controller\`. The CU trace gives the same interval for the
+completion records; the result contract reports `intermediate_host_copy=0`
+and `kv_cache_owner=controller`. The CU trace gives the same interval for the
 controller, both compute CUs, and the status sink.
 
 The efficiency numerator is 616,710,144 useful MAC, while the denominator is
@@ -193,6 +241,34 @@ because they track simulator wall time in HW Emu. This single-layer result does
 not include embedding, LM head, sampling, or 36-layer generation. Its complete
 log, profile, manifests, and checksums are in the
 [Q2.14 release artifact](../results/q214-resident-fix-20260818/).
+
+## Standard-shape P8/G2 end-to-end HW-Emu result
+
+The next release gate composes the production Host boundary around the same
+coarse tasks. With `sequence_batch=1`, `P8` is one eight-row prefill block from
+one sequence. Its prompt forward produces the first sample; one real D1
+forward produces the second. Each forward issues Task 18, Task 19, and Task
+20, so the L1 request contains six tasks.
+
+| Evidence source | Host computation in timed interval | Scope | Prompt rows | Sampled outputs | Layers | Tasks | Common HW-Emu CU running time | Cycles at 200 MHz | Useful GMAC/s | Modeled useful-MAC efficiency |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vitis 2022.2 HW Emu CU trace | No | P8 prefill + one real D1 | 8 | 2 | 1 | 6 | 5,953.465 us | 1,190,693 | 116.540 | 56.904% |
+
+The deterministic random-Fix16/tied-embedding model passes both CPU-golden
+steps after production inference: 4,096 checked values, maximum raw error zero
+at tolerance 32, and an identical sampled-token sequence. No intermediate
+hidden tensor is copied through Host memory; the controller owns RoPE, online
+attention, HBM-resident KV, and subgraph scheduling. Host embedding,
+coarse-task issue/status, and LM-head/argmax remain software responsibilities.
+The common four-CU interval excludes that Host computation and cannot resolve
+per-CU occupancy or individual inter-task gaps.
+
+The measured request rate is 335.939 output tokens/s including prefill and is
+therefore not a steady D1 rate. This result uses standard dimensions but one
+decoder layer and deterministic random weights: it is neither checkpoint
+accuracy nor a 36-layer or physical-board result. The complete evidence and
+source provenance are in
+[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/).
 
 ## Small-profile HW-Emu result
 
@@ -210,7 +286,7 @@ Random Fix16 seed `20260718` passed all 64 final-hidden comparisons with zero
 raw error. The host observed five expected tasks and no intermediate hidden
 copy. A separate one-layer Task-18/19 run passed the same checks.
 
-| Scope | Layers | Tasks | XSim active interval | XSim cycles | Projected latency at 200 MHz |
+| Scope | Layers | Tasks | Common HW-Emu CU running time | XSim cycles | Projected latency at 200 MHz |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Attention+FFN layer | 1 | 2 | 47.665 us | 14,300 | 71.498 us |
 | Stack plus final norm | 2 | 5 | 95.809 us | 28,743 | 143.714 us |
@@ -264,8 +340,9 @@ current implementation with model-initialized Norm/RoPE storage:
 | LUT | 406,157 | 406,003 | -154 (-0.038%) |
 | HLS estimated period | 3.746 ns | 3.746 ns | unchanged |
 
-The exact 8-row Qwen-layer specialization increases resident storage and adds
-a second vector-access path. Its HLS estimates are:
+The published 2026-08-18 exact 8-row `qwen-layer` specialization increases
+resident storage and adds a second vector-access path. Its historical HLS
+estimates are:
 
 | Design | BRAM18 | DSP | FF | LUT | Estimated period |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -274,18 +351,36 @@ a second vector-access path. Its HLS estimates are:
 | Status sink | 0 | 0 | 4,867 | 8,532 | 2.433 ns |
 | Controller + two compute CUs + status | 1,308 | 1,477 | 868,458 | 697,305 | local estimates |
 
-The system totals are approximately 48.7% BRAM18, 24.8% DSP, 49.8% FF, and
-80.0% LUT of the full U50. The controller alone estimates 104% of one SLR's
-LUT capacity, so this passes the whole-device resource gate but not a physical
-placement proof. The 200-MHz implementation target retains timing margin
-relative to the 3.746-ns local HLS estimate; final closure still requires
-place-and-route.
+The profile-matched `qwen2.5-3b` build used by the new P8/G2 release gate has
+the following independently regenerated estimates:
+
+| Design | Instances | BRAM18 | DSP | FF | LUT | Estimated period |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Controller | 1 | 1,212 | 126 | 429,922 | 453,437 | 3.746 ns |
+| Compute CU | 2 | 96 | 1,354 | 395,134 | 235,298 | 2.433 ns |
+| Status sink | 1 | 0 | 0 | 4,867 | 8,532 | 2.433 ns |
+| Whole system | 4 | 1,308 | 1,480 | 829,923 | 697,267 | 3.746 ns maximum |
+
+The current totals are 48.661% BRAM18, 24.866% DSP, 47.605% FF, and 79.991%
+LUT of the full U50. `scripts/report_qwen3b_hls_resources.sh` parses the three
+underlying CSynth reports and derives the two-CU/system rows; the E2E archiver
+stores that exact TSV beside the run evidence. The controller alone still
+estimates approximately 104% of one SLR's LUT capacity, so the whole-device
+resource gate is not a physical placement proof. The 200-MHz link target has
+local HLS timing margin relative to the 3.746-ns estimate; final closure still
+requires place-and-route.
 
 ## Measurement boundary
 
-For HW Emu, the run-local CU interval is the authoritative modeled RTL
-measurement. Host-reported OpenCL event durations are retained only as
-diagnostics because they follow simulator wall time. On a physical device,
+For HW Emu, the common profiler-reported running time of all four deployed CUs
+is the authoritative modeled RTL measurement used here. The release reporter
+requires exactly one top-level row for every CU and rejects times that differ
+by more than 0.001 us. This field is not described as a raw waveform interval
+or as Host wall time, and the identical per-function rows do not support a
+claim about separable CU active occupancy or inter-task issue gaps. The reported
+efficiency is useful MAC divided by the two-array peak over this common modeled
+interval. Host-reported OpenCL event durations are retained only as diagnostics
+because they follow simulator wall time. On a physical device,
 event profiling represents the device timeline and host elapsed time becomes
 the launch- and PCIe-inclusive measurement.
 
@@ -293,10 +388,10 @@ Weight, Norm/RoPE tables, and persistent KV allocation/preload are
 model-initialization costs. All `(2 * layers + 1)` norm rows and the complete
 position-indexed RoPE table are initialized once. A task sequence therefore
 reports `auxiliary_migration_ms=0`; Task 18 reads RoPE and appends K/V directly
-through controller HBM ports. The host-observed sequence includes the initial
-hidden migration, task/status synchronizations, and final hidden migration.
-Kernel-active cycles are reported separately so that datapath and
-software/runtime overhead are not conflated.
+through controller HBM ports. The Host-observed sequence includes the initial
+hidden migration, task/status synchronizations, and final hidden migration. It
+is reported beside, rather than conflated with, the common modeled four-CU
+interval.
 
 In `generate --coarse-tasks`, token embedding and LM-head/sampling remain host
 operations. All selected decoder layers, final normalization, hidden-state

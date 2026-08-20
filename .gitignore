@@ -16,6 +16,9 @@ vitis_8x64/
 
 # Curated, checksum-bound publication evidence.
 !results/**/raw/*.log
+!results/**/host.raw.log
+!results/**/host.evidence.log
+!results/**/build.raw.log
 
 # Emulation output
 emconfig.json

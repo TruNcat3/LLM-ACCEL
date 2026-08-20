@@ -4,6 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 artifact_dir="${1:-results/q214-resident-fix-20260818}"
+verify_current_source="${Q214_VERIFY_CURRENT_SOURCE:-0}"
+if [ "${verify_current_source}" != "0" ] &&
+   [ "${verify_current_source}" != "1" ]; then
+    echo "Q214_VERIFY_CURRENT_SOURCE must be 0 or 1" >&2
+    exit 2
+fi
 required=(
     README.md
     validation.tsv
@@ -39,26 +45,28 @@ awk -F '\t' '
     exit 65
 }
 
-while IFS=$'\t' read -r path expected role; do
-    if [ "${path}" = "path" ]; then
-        continue
-    fi
-    if [ ! -s "${path}" ]; then
-        echo "Source manifest path is missing: ${path}" >&2
-        exit 66
-    fi
-    actual="$(sha256sum "${path}" | awk '{print $1}')"
-    if [ "${actual}" != "${expected}" ]; then
-        echo "Source manifest mismatch: ${path}" >&2
-        echo "  expected=${expected}" >&2
-        echo "  actual=${actual}" >&2
-        exit 65
-    fi
-    if [ -z "${role}" ]; then
-        echo "Source manifest has an empty role: ${path}" >&2
-        exit 65
-    fi
-done < "${artifact_dir}/source_manifest.tsv"
+if [ "${verify_current_source}" = "1" ]; then
+    while IFS=$'\t' read -r path expected role; do
+        if [ "${path}" = "path" ]; then
+            continue
+        fi
+        if [ ! -s "${path}" ]; then
+            echo "Source manifest path is missing: ${path}" >&2
+            exit 66
+        fi
+        actual="$(sha256sum "${path}" | awk '{print $1}')"
+        if [ "${actual}" != "${expected}" ]; then
+            echo "Historical source snapshot mismatch: ${path}" >&2
+            echo "  expected=${expected}" >&2
+            echo "  actual=${actual}" >&2
+            exit 65
+        fi
+        if [ -z "${role}" ]; then
+            echo "Source manifest has an empty role: ${path}" >&2
+            exit 65
+        fi
+    done < "${artifact_dir}/source_manifest.tsv"
+fi
 
 awk -F '\t' '
     NR == 1 {
@@ -165,8 +173,8 @@ awk -F '\t' '
         if ($(column["xsim_cycles"]) < 1536 ||
             $(column["useful_mac"]) <= 0 ||
             $(column["useful_gmac_s"]) <= 0 ||
-            $(column["physical_efficiency_percent"]) <= 0 ||
-            $(column["physical_efficiency_percent"]) > 100) exit 2
+            $(column["modeled_interval_efficiency_percent"]) <= 0 ||
+            $(column["modeled_interval_efficiency_percent"]) > 100) exit 2
         found = 1
     }
     END { exit found ? 0 : 1 }
@@ -219,4 +227,4 @@ awk \
     sha256sum -c "$(basename "$(dirname "${artifact_dir}")")/$(basename "${artifact_dir}")/checksums.sha256"
 )
 
-echo "Q2.14 RESIDENT RELEASE VERIFY PASS artifact=${artifact_dir}"
+echo "Q2.14 RESIDENT RELEASE VERIFY PASS artifact=${artifact_dir} source_scope=$([ "${verify_current_source}" = "1" ] && printf historical_snapshot_matches_current_worktree || printf historical_snapshot_manifest_only)"

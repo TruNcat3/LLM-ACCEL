@@ -175,7 +175,7 @@ Three runtime boundaries were considered:
 The selected target keeps intermediate tensors and KV state in HBM/on-chip
 buffers while allowing the host to combine several task types into complete
 prefill and decode inference. End-to-end reporting must include both the
-controller-active intervals and the host-observed task-sequence latency.
+common four-CU modeled interval and the Host-observed task-sequence latency.
 The current generate path realizes this boundary for blockwise prompt and
 single-token decode traversal. The block-prefill extension groups each prompt into
 one-to-eight-row coarse-task blocks while leaving decode at one row. The next

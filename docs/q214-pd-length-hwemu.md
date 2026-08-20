@@ -30,7 +30,9 @@ The host invokes the hardware operators that compose one decoder layer. The
 reported interval is the sum of their controller-kernel active times, including
 RMSNorm, Q/K/V projections, tiled Attention, O projection, residual,
 Gate/Up/SiLU/Down FFN, and the final residual. Latency is computed at 200 MHz.
-Physical efficiency uses the peak of two 8x64 compute CUs, or 1024 MAC/cycle.
+Modeled useful-MAC efficiency divides the shape-counted useful MACs by the
+measured cycles and the peak of two 8x64 compute CUs, or 1,024 MAC/cycle. It is
+not post-route physical utilization.
 
 This is a **kernel-only, host-orchestrated layer profile**, not yet a single
 autonomous controller launch. Host scheduling gaps, transfers between
@@ -38,7 +40,7 @@ operator calls, CPU RoPE/test-fixture packing, KV fixture migration, and CPU
 golden checks are outside the reported interval. The dense and attention
 arithmetic listed above executes in the FPGA kernels.
 
-| Phase | Context | Active query rows / block | Cycles | Latency (ms) | Useful GMAC/s | Physical efficiency | target-block token/s |
+| Phase | Context | Active query rows / block | Cycles | Latency (ms) | Useful GMAC/s | Modeled useful-MAC efficiency | Target-block query-row/s |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | P | 64 | 8 | 637,103 | 3.1855 | 194.174 | 94.812% | 2,511.37 |
 | P | 256 | 8 | 685,489 | 3.4274 | 182.304 | 89.016% | 2,334.10 |
@@ -53,14 +55,14 @@ The measured cycle growth is close to linear in the number of 64-entry KV
 tiles.  A P tile costs approximately 16.0k additional cycles, while a D tile
 costs approximately 7.7k cycles.  P remains efficient because eight query rows
 fill the 8x64 datapath.  D uses only one query row, so its shape-normalized work
-is valid but its physical utilization remains around 12%.
+is valid but its full-array modeled utilization remains around 12%.
 
 `Active query rows / block = 8` means eight consecutive rows of one sequence,
 not an eight-sequence batch or eight decoded outputs; it also does not assert
 that the complete prompt contains only eight tokens. For P1024, the measured
 block contains positions 1016--1023 and reads a causal KV history of up to 1024
 entries. A complete 1024-token prefill contains 128 such context-dependent
-blocks. Consequently, `target-block token/s` is a one-layer block throughput,
+blocks. Consequently, `target-block query-row/s` is a one-layer block throughput,
 not full-prompt or whole-model generation throughput.
 
 The FPGA executes RMSNorm, all projections, QK/PV with online softmax,

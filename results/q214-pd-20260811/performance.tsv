@@ -1,4 +1,4 @@
-phase	context_len	active_query_rows_per_block	cycles_200mhz	latency_ms	useful_macs	throughput_gmac_s	physical_efficiency_pct	token_s
+phase	context_len	active_query_rows_per_block	cycles_200mhz	latency_ms	useful_macs	throughput_gmac_s	modeled_interval_efficiency_percent	target_block_query_row_s
 p	64	8	637103	3.185515	618545152	194.174	94.812	2511.368
 d	64	1	568040	2.840200	77336576	27.229	13.296	352.088
 p	256	8	685489	3.427445	624836608	182.304	89.016	2334.100

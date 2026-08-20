@@ -1,4 +1,4 @@
-evidence_source	timed_scope	profile	variant	scope	active_query_rows_per_block	block_partition	layers	forwards	tasks	xsim_active_us	xsim_clock_mhz	xsim_cycles	projected_us_200mhz	useful_mac	useful_gmac_s_200mhz	physical_efficiency_percent	checked_values	max_raw_error	tolerance	intermediate_host_copy	result
+evidence_source	timed_scope	profile	variant	scope	active_query_rows_per_block	block_partition	layers	forwards	tasks	xsim_active_us	xsim_clock_mhz	xsim_cycles	projected_us_200mhz	useful_mac	useful_gmac_s_200mhz	modeled_interval_efficiency_percent	checked_values	max_raw_error	tolerance	intermediate_host_copy	result
 HW_Emu_CU_trace	kernel_active_only	small	block_prefill_q214_exact	one_block_final_norm	8	P8	1	1	3	104.843	300	31452.9	157.2645	299520	1.904562	0.929962	512	10	32	0	PASS
 HW_Emu_CU_trace	kernel_active_only	small	block_prefill_q214_exact	two_layer_one_block_final_norm	8	P8	2	1	5	185.655	300	55696.5	278.4825	599040	2.151087	1.050335	512	10	64	0	PASS
 HW_Emu_CU_trace	kernel_active_only	small	block_prefill_q214_exact	block_prompt_p8_generate2	8	P8+D1	2	2	10	258.503	300	77550.9	387.7545	675072	1.740978	0.850087	NA	NA	NA	0	PASS

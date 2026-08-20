@@ -36,6 +36,12 @@ The evidence classes are intentionally separate:
 - `raw/` contains the frozen reports, host excerpts, and CU profiles used to
   derive the tables.
 
+The historical `timed_scope=kernel_active_only` value in `performance.tsv` is
+retained to preserve the published row. Its source profiles report the same
+Running Time for the controller, both compute CUs, and the status sink, so the
+current, narrower interpretation is a common four-CU modeled interval. The CSV
+does not resolve separable per-CU occupancy or inter-task issue gaps.
+
 The Small profile is a protocol/residency contract and not a Qwen throughput
 proxy. Its low MAC efficiency is expected because 64-wide matrices do not
 fill the standard 8x64/large-K datapath and the persistent interval includes

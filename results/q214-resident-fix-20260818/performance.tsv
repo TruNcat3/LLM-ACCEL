@@ -1,4 +1,4 @@
-evidence_source	timed_scope	profile	variant	scope	active_query_rows_per_block	layers	tasks	xsim_clock_mhz	xsim_cycles	latency_us_at_200mhz	useful_mac	useful_gmac_s	physical_efficiency_percent	checked_values	max_raw_error	tolerance	intermediate_host_copy	result
+evidence_source	timed_scope	profile	variant	scope	active_query_rows_per_block	layers	tasks	xsim_clock_mhz	xsim_cycles	latency_us_at_200mhz	useful_mac	useful_gmac_s	modeled_interval_efficiency_percent	checked_values	max_raw_error	tolerance	intermediate_host_copy	result
 HW_Emu_CU_trace	kernel_active_only	qwen-layer	resident_q214_fix	Task18_attention_diagnostic	2	1	1	200	115765	578.825	NA	NA	NA	4096	0	32	diagnostic_snapshot	PASS
 HW_Emu_CU_trace	kernel_active_only	qwen-layer	resident_q214_fix	Task18_attention_diagnostic	8	1	1	200	159655	798.275	NA	NA	NA	16384	1	32	diagnostic_snapshot	PASS
 HW_Emu_CU_trace	kernel_active_only	qwen-layer	resident_q214_fix	Task18_Task19_Task20	8	1	3	200	651621	3258.106	616710144	189.284862	92.424249	16384	0	32	0	PASS

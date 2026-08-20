@@ -186,8 +186,16 @@ repository and owns long jobs with `tmux`:
 # MAX_SEQ_LEN=2048; reusing the 96-position qwen-layer XO is not safe.
 scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
 
-# Default gate: P8 prompt, two sampled tokens, one real decode forward,
-# 36 layers, random deterministic Fix16 weights, and 146 coarse tasks.
+# Choose one run; do not launch both against the same build concurrently.
+# Bounded full-shape release gate: P8 prompt plus one real D1 forward through
+# one standard decoder layer, six coarse tasks, and a post-inference CPU
+# fixed-point oracle. This is the practical RTL HW-Emu numerical/trace gate.
+VITIS_8X64_E2E_LAYERS=1 \
+  scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+
+# Full 36-layer extension of the same contract: random deterministic Fix16
+# weights and 146 coarse tasks. This is the launcher default and is expected
+# to take much longer under RTL HW Emu.
 scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 
 # A real packed checkpoint can replace the deterministic random model.
@@ -196,7 +204,9 @@ VITIS_8X64_E2E_DATA_DIR=/path/to/packed/qwen2.5-3b \
   scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 ```
 
-The first new token is sampled from the prompt forward. Therefore G2 is the
+`P8` means eight active query rows from one sequence; it is neither batch size
+nor eight tokens generated in parallel. Decode remains `D1`. The first new
+token is sampled from the prompt forward. Therefore G2 is the
 smallest generation request that contains one actual decode forward; G1 is a
 prefill/TTFT-only gate. The Host emits one `COARSE_TASK_PROGRESS` line after
 each completed Task 18/19/20. Under RTL HW Emu, CPU wall time is simulator
@@ -206,25 +216,97 @@ configuration so a performance row can be tied to the exact generated inputs.
 The reporter validates the three identities as an all-or-none set and carries
 them into its tab-separated output.
 
-After a long run finishes, freeze its raw log, run-local CU profile, generated
-artifact identities, performance row, manifest, and checksums atomically:
+Inspect a live run without launching a second simulator:
+
+```bash
+scripts/status_vitis_8x64_qwen3b_e2e.sh \
+  logs/qwen3b_e2e_hwemu_p8_g2_l1_<timestamp>.log
+```
+
+After a long run finishes, freeze its build log, raw Host log, run-local CU
+profile, HLS resources, release-candidate source snapshot, generated artifact
+identities, performance row, manifest, and checksums atomically:
 
 ```bash
 scripts/archive_vitis_8x64_e2e_run.sh \
-  logs/qwen3b_e2e_hwemu_p8_g2_l36_<timestamp>.log \
+  logs/qwen3b_e2e_hwemu_p8_g2_l1_<timestamp>.log \
   /tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
-  results/qwen3b-e2e-<date>
+  results/qwen3b-e2e-<date> 200 200 1 \
+  logs/qwen3b_e2e_all_<build-timestamp>.log
 ```
 
 The archiver refuses incomplete/non-PASS runs and never overwrites an existing
-archive directory.
+archive directory. The Host/XCLBIN/emconfig SHA-256 values are authoritative
+for the binary run. `source_manifest.tsv` is an archive-time snapshot of the
+release-candidate worktree. `build_source_equivalence.tsv` reconstructs the
+source root recorded by the HLS build log and requires every kernel, local
+header, Tcl configuration, connectivity file, and build harness to match the
+release worktree byte for byte. The publication-oriented Makefile remains a
+separate `release_entrypoint`; Host binary identity is checked directly.
+`manifest.tsv` also fixes the trace scope as
+`common_four_CU_running_time`, marks per-CU occupancy and inter-task issue gaps
+as unresolved by the profiler CSV, and records that the result is not a
+physical-board measurement. It separately records the Host inference scope
+(`embedding_plus_lm_head_argmax`), the accelerator scope
+(`decoder_layers_final_norm_rope_online_attention_kv`), and the post-inference
+CPU-golden scope.
+
+After the archive passes its release audit, render its evidence page from the
+machine-readable workload fields rather than transcribing table values by
+hand:
+
+```bash
+scripts/verify_qwen3b_e2e_release.sh \
+  logs/qwen3b_e2e_hwemu_p8_g2_l1_<timestamp>.log \
+  /tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
+  /path/to/qwen3b-e2e-archive \
+  /path/to/release-source-root
+scripts/render_vitis_8x64_e2e_result_markdown.sh \
+  /path/to/qwen3b-e2e-archive > /tmp/qwen3b-e2e-README.md
+```
+
+The release verifier derives `P`, `G`, `L`, block count, decode-forward count,
+task sequence, checked-value count, and numerical tolerance from the immutable
+Host-log header. The same contract therefore covers L1 qualification and later
+standard-shape multi-layer runs without weakening topology, residency, or
+post-inference numerical checks.
+
+The rendered workload table distinguishes sequence batch, prompt length,
+sampled outputs, real D1 forwards, prefill blocks, and maximum active query
+rows per block. It also prints the Host/accelerator/CPU-golden boundary and
+labels HW-Emu timing, HLS estimates, and physical-board evidence separately.
+Install a verified temporary archive into the publication tree atomically:
+
+```bash
+scripts/install_vitis_8x64_e2e_result.sh \
+  /tmp/llm_accel_qwen3b_e2e_p8_g2_l1_archive_<timestamp> \
+  qwen3b-e2e-<date>
+```
+
+The installer refuses an invalid source package or existing destination,
+renders the result README, rebuilds an archive-relative SHA-256 manifest over
+every installed file, verifies it, and only then exposes the final directory.
+The result must still be added explicitly to `results/README.md`; this keeps
+the index claim and its measurement scope under review rather than generating
+research prose mechanically.
+
+For a running job, the hourly watcher performs the same archive and release
+audit automatically after a zero exit:
+
+```bash
+scripts/watch_vitis_8x64_e2e_archive_tmux.sh \
+  logs/qwen3b_e2e_hwemu_p8_g2_l1_<timestamp>.log \
+  /tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
+  /tmp/qwen3b-e2e-archive 3600 \
+  logs/qwen3b_e2e_all_<build-timestamp>.log
+```
 
 After a successful run, derive the modeled cycle/performance row from the
 run-local CU profile and simultaneously verify the Host contract:
 
 ```bash
 scripts/report_vitis_8x64_e2e_trace.sh \
-  /path/to/profile_kernels.csv qwen2.5-3b 8 2 36 8 200 200 1 \
+  /path/to/profile_kernels.csv qwen2.5-3b 8 2 1 8 200 200 1 \
   /path/to/qwen3b_e2e_host.log
 ```
 
@@ -353,10 +435,14 @@ end with `PASS` and process the expected task and packet counts.
 ### Hardware-emulation cycles
 
 Use `profile_kernels.csv` from the simulation directory. The `Running Time`
-field is simulated kernel-active time. The Q2.14 layer profile contains
-multiple host-submitted hardware operator calls, so the published number is
-the accumulated controller active time. Convert it with the clock embedded in
-the xclbin:
+field is a Vitis HW-Emu profiler measurement. The Q2.14 operator-level profile
+contains multiple Host-submitted hardware calls, so that published number is
+the accumulated controller-event time. In the coarse-task streaming image,
+the profiler reports an identical interval for the controller, both compute
+CUs, the status sink, and their internal functions. That common interval is
+therefore used as a modeled device-span metric; it must not be interpreted as
+separable per-CU active occupancy. Convert either explicitly identified scope
+with the clock embedded in the xclbin:
 
 ```text
 cycles = running_time_us * frequency_MHz
@@ -365,13 +451,14 @@ cycles = running_time_us * frequency_MHz
 Do not use XSim CPU wall time as accelerator latency. Hardware emulation can
 take hours while simulating only milliseconds of device time.
 
-For the Q2.14 diagnostic table, active cycles exclude host scheduling gaps,
+For the Q2.14 diagnostic table, active cycles exclude Host scheduling gaps,
 buffer migration, CPU-side RoPE/test-fixture packing, KV fixture preload, and
-golden checks. For the coarse-task runtime, use both the run-local CU interval
-and the host-observed sequence fields. The latter include the initial input,
-status synchronizations, and final output, but remain simulator wall-time
-proxies under HW Emu. Norm/RoPE state is initialized once with model storage;
-a valid task sequence reports `auxiliary_migration_ms=0`.
+golden checks. For the coarse-task runtime, use both the common four-CU running
+time reported by the profiler and the Host-observed sequence fields. The common
+field does not separately expose task-issue gaps. The Host fields include the
+initial input, status synchronizations, and final output, but remain simulator
+wall-time proxies under HW Emu. Norm/RoPE state is initialized once with model
+storage; a valid task sequence reports `auxiliary_migration_ms=0`.
 
 ### HLS reports
 
@@ -399,6 +486,7 @@ The published standard experiments use deterministic seeds:
 | 8-row prefill block | 20260722 | final checksum `0xb72a92cb5224f0c7` |
 | Q2.14 P/D length sweep | 20260722 | 8/8 exits zero; Q2.14 max raw error <= 1 |
 | Standard Qwen-layer P8 Task 18/19/20 | 20260718 | 16,384 values exact; 651,621 cycles; intermediate_host_copy=0 |
+| Standard-shape Qwen2.5-3B P8/G2/L1 | 20260718 | 6/6 tasks; 2/2 CPU-golden steps; 4,096 values exact; 1,190,693 cycles |
 
 The 8-row block run must also report 48 attention MM tasks and 1536 completed
 packets.
@@ -418,6 +506,52 @@ published tables are versioned under results/ together with SHA-256 manifests.
 This keeps the repository source-oriented without separating claims from their
 compact raw evidence. Large binaries should be archived separately and
 associated with the cited Git commit and artifact-manifest identities.
+
+The completed standard-shape P8/G2/L1 package is available under
+[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/). Its `P8`
+field means one sequence with eight prompt query rows; the package separately
+records sequence batch, sampled outputs, and the single real D1 forward.
+
+The publication tree and every versioned result package can be checked without
+launching any Xilinx tool:
+
+```bash
+make test_publication_release
+
+# The constituent checks can also be run independently.
+make test_publication_tree
+make verify_result_checksums
+
+# Release maintainers stage the complete candidate before rebuilding the root
+# manifest. The generator refuses unstaged or untracked release files.
+git add -A
+make regenerate_root_checksums
+git add CHECKSUMS.sha256
+VERIFY_ROOT_CHECKSUMS=1 make test_publication_tree
+```
+
+The aggregate target runs every non-simulator release gate: task-plan and
+launcher contracts, the Task-18-to-Task-19 HBM-residency invariant, progress
+and performance semantics, source provenance, the historical Q2.14 evidence
+package, and the publication tree. The publication-tree target validates the
+required English research documents, citation
+metadata, Markdown fences, local links, conflict markers, and all per-result
+SHA-256 manifests. The root-manifest check is opt-in because it is expected to
+be stale while a release candidate is being assembled.
+
+Historical result verifiers always validate their archived manifests, raw
+profiles, and derived rows. Because the research source continues to evolve,
+matching an old source snapshot against the current checkout is optional:
+
+```bash
+make verify_q214_pd_release
+make verify_q214_resident_release
+Q214_VERIFY_CURRENT_SOURCE=1 make verify_q214_resident_release
+```
+
+The strict second form is expected to pass only when the checkout corresponds
+to that historical source snapshot; the default remains valid on later
+releases without weakening the archived evidence checks.
 
 ## 8. Case 2: Streaming split architecture
 
