@@ -50,6 +50,7 @@ use sequence batch one; decode remains one active row per forward (`D1`).
 | Block prompt/decode HW Emu | Small two-layer P8 + G2 task composition | PASS, two forwards/ten tasks |
 | Standard Qwen-layer coarse-task HW Emu | P8 Task 18 -> 19 -> 20, controller-owned KV and hidden state | PASS, 16,384 values exact, 651,621 cycles |
 | Standard-shape generation-path HW Emu | Qwen2.5-3B P8/G2/L1, one prefill plus one real D1 forward | PASS, six tasks, two CPU-golden steps, 4,096 values exact |
+| Standard-shape multi-layer generation HW Emu | Qwen2.5-3B P8/G2/L2, cross-layer prefill plus real D1 | PASS, ten tasks, two CPU-golden steps, 4,096 values exact |
 
 The 8-row block run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -229,6 +230,7 @@ status is returned until the final hidden migration.
 | Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV |
 | Standard Qwen-layer P8 Task-18/19/20 HW Emu | PASS, 16,384/16,384 exact, no intermediate Host copy |
 | Standard-shape Qwen2.5-3B P8/G2/L1 HW Emu | PASS, six tasks, two forwards, 4,096/4,096 exact, controller-owned KV |
+| Standard-shape Qwen2.5-3B P8/G2/L2 HW Emu | PASS, ten tasks, two forwards, 4,096/4,096 exact, cross-layer HBM residency |
 
 The bounded standard-shape generation path is distinct from the one-forward
 P8 layer gate:
@@ -236,18 +238,23 @@ P8 layer gate:
 | Evidence source | Timed boundary | Workload | Sequence batch | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 2 | 10 | 2,319,441.4 | 11.597 ms | 119.652 | 58.424% |
 
 `P8` is eight consecutive query rows from one sequence, not batch eight or
 eight generated tokens. The prompt forward supplies the first sampled token;
 the second comes from the D1 forward. Deterministic random Fix16 weights and
-tied embeddings pass two post-inference CPU-golden steps with 4,096 checked
-values, maximum raw error zero at tolerance 32, and an identical sampled-token
-sequence. The controller owns online attention, KV, and intermediate hidden
-state. Host embedding and LM-head/argmax are functionally part of the request
-but excluded from the CU interval. Request output throughput is 335.939
-tokens/s including prefill, so it is not a steady-state decode rate. Complete
-evidence is archived under
-[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/).
+tied embeddings pass two post-inference CPU-golden steps in both L1 and L2,
+with 4,096 checked values, maximum raw error zero at tolerances 32 and 64, and
+identical sampled-token sequences. The L2 run uses the same Host, xclbin, and
+emulation configuration as L1. It doubles useful MAC while increasing modeled
+cycles by 1.948x: per-layer cycles fall 2.60%, useful throughput rises 2.67%,
+and efficiency rises from 56.904% to 58.424%. The controller owns online
+attention, KV, and intermediate hidden state across both layers. Host embedding
+and LM-head/argmax are functionally part of the request but excluded from the
+CU interval. Request output throughput includes prefill, so it is not a
+steady-state decode rate. Complete evidence is archived under the
+[L1](../results/qwen3b-e2e-20260820/) and
+[L2](../results/qwen3b-e2e-l2-20260821/) packages.
 
 The standard-dimension release gate is distinct from the small residency tests:
 
@@ -330,9 +337,9 @@ The combined results support three conclusions:
 
 - The coarse-task runtime now replays a prompt in blocks of up to eight
   consecutive query rows. A small two-layer prompt/decode HW-Emu contract is
-  complete, and both the standard-shape single-forward P8 gate and bounded
-  P8/G2/L1 generation-path gate are complete; standard-shape multi-layer,
-  multi-block, and checkpoint-level runs remain open.
+  complete, and the standard-shape single-forward P8, P8/G2/L1, and
+  P8/G2/L2 gates are complete. Standard-shape 36-layer, multi-block, and
+  checkpoint-level runs remain open.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
@@ -346,9 +353,8 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Extend the verified standard-shape P8/G2 gate from one to two decoder
-   layers, preserving the post-inference oracle and recording the common
-   four-CU interval before attempting the 36-layer run.
+1. Extend the verified standard-shape P8/G2 gate from two to all 36 decoder
+   layers, preserving the post-inference oracle and common four-CU interval.
 2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
 3. Reduce repeated Host task issue by packaging reusable task programs while

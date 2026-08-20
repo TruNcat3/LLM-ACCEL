@@ -119,30 +119,34 @@ counted as accelerator work.
 
 ### Bounded standard-shape P8/G2 end-to-end composition
 
-The current end-to-end release gate runs one Qwen2.5-3B-shaped decoder layer
-for an eight-token prompt and two sampled outputs. `P8` is one sequence with
-eight active prefill query rows, not batch eight. The prompt forward produces
-the first sample, and one real single-row decode forward produces the second.
-Each forward issues Task 18, Task 19, and Task 20, for six Host-visible coarse
-tasks in total.
+The current end-to-end release gates run one and two Qwen2.5-3B-shaped decoder
+layers for an eight-token prompt and two sampled outputs. `P8` is one sequence
+with eight active prefill query rows, not batch eight. The prompt forward
+produces the first sample, and one real single-row decode forward produces the
+second. Each layer issues Task 18 and Task 19; Task 20 executes once at the end
+of each forward. The L1 and L2 requests therefore contain six and ten
+Host-visible coarse tasks, respectively.
 
 | Evidence source | Timed boundary | Workload | Sequence batch | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8 prompt + G2, including one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
+| Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8 prompt + G2, including one real D1 forward | 1 | 2 | 10 | 2,319,441.4 | 11.597 ms | 119.652 | 58.424% |
 
-The deterministic random-Fix16/tied-embedding run completes all six tasks and
-passes two post-inference CPU-golden steps: 4,096 checked values, maximum raw
-error zero at tolerance 32, and an identical sampled-token sequence. Hidden
-state never crosses through Host memory between tasks, and the controller owns
-RoPE, online attention, and HBM-resident KV state. Host embedding and
-LM-head/argmax remain outside the timed accelerator interval. The trace also
-corresponds to 1,511.725 query rows/s and 335.939 request output tokens/s; the
-latter includes prefill and must not be interpreted as steady-state D1
-throughput. This is a one-layer HW-Emu result, not checkpoint-level accuracy,
-a 36-layer result, or a physical-board measurement. The raw Host/build logs,
-profile, source snapshot, resource report, artifact identities, and checksums
-are published in the
-[Qwen2.5-3B P8/G2/L1 evidence package](results/qwen3b-e2e-20260820/).
+Both deterministic random-Fix16/tied-embedding runs pass two post-inference
+CPU-golden steps: 4,096 checked values, maximum raw error zero at tolerances 32
+and 64, and identical sampled-token sequences. The L2 run crosses the layer-0
+to layer-1 HBM boundary in both Prefill and D1 without an intermediate Host
+copy. Doubling useful MAC increases modeled cycles by only 1.948x, reducing
+cycles per layer by 2.60%; useful throughput rises 2.67% and efficiency rises
+1.520 percentage points. Hidden state never crosses through Host memory
+between tasks, and the controller owns RoPE, online attention, and HBM-resident
+KV state. Host embedding and LM-head/argmax remain outside the timed
+accelerator interval. Request output-token rates include prefill and must not
+be interpreted as steady-state D1 throughput. These are bounded HW-Emu results,
+not checkpoint-level accuracy, a 36-layer result, or physical-board
+measurements. Raw evidence is published in the
+[L1](results/qwen3b-e2e-20260820/) and
+[L2](results/qwen3b-e2e-l2-20260821/) packages.
 
 ### Standard controller-resident P8 layer
 
@@ -397,6 +401,9 @@ prefill evaluation, expected outputs, and artifact locations.
 - [Standard-shape Qwen2.5-3B P8/G2/L1 evidence](results/qwen3b-e2e-20260820/):
   six-task Prefill-plus-real-D1 HW-Emu trace, post-inference fixed-point oracle,
   profile-matched HLS resources, artifact identities, and source provenance.
+- [Standard-shape Qwen2.5-3B P8/G2/L2 evidence](results/qwen3b-e2e-l2-20260821/):
+  ten-task multi-layer Prefill-plus-real-D1 HW-Emu trace and cross-layer
+  numerical closure using the same Host, xclbin, and emulation configuration.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
   4-PC weight multi-bank, and an analytical ~50 token/s decode projection
@@ -408,12 +415,12 @@ prefill evaluation, expected outputs, and artifact locations.
 The standard performance artifact remains a single-layer fixed-point research
 prototype. Its Q2.14 P/D numbers are kernel-only, host-orchestrated diagnostic
 profiles. The coarse-task runtime executes controller-resident subgraphs and
-now completes a standard-shape P8/G2/L1 generation-path gate with one real D1
-forward, while proving cross-task hidden and controller-owned KV residency.
-Small-shape tests additionally prove cross-layer residency. Standard-shape
-multi-layer and 36-layer execution, checkpoint-level accuracy,
-accelerator-side LM-head/sampling, PCIe-inclusive physical latency, and
-physical-board performance remain open.
+now completes standard-shape P8/G2/L1 and P8/G2/L2 generation-path gates with
+one real D1 forward. The L2 result proves cross-task and cross-layer hidden
+residency plus controller-owned KV state at standard dimensions. Full
+36-layer execution, checkpoint-level accuracy, accelerator-side
+LM-head/sampling, PCIe-inclusive physical latency, and physical-board
+performance remain open.
 
 ## Citation
 

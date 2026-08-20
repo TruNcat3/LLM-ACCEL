@@ -1,0 +1,71 @@
+started_at=2026-08-20T20:31:12+08:00
+profile=qwen2.5-3b
+prompt_tokens=8
+generated_tokens=2
+layers=2
+block_size=8
+prompt_blocks=1
+decode_forwards=1
+expected_coarse_tasks=10
+seed=20260718
+model_source=random
+checkpoint_dir=/home/wt/git/LLM-FPGA/data
+tie_embeddings=1
+verify_e2e_golden=1
+timeout_seconds=1209600
+xclbin_kernel_clock_mhz=200
+timing_note=HW_Emu_host_wall_is_simulator_runtime_use_CU_trace_for_modeled_cycles
+host_exe_sha256=99712b58f89958df18e8a0eb560236c771af501b19cec279f44035c6e622e0e3
+xclbin_sha256=adf21bc4cc20d5bec514e69bfbdb28e12e9572a33f1071c090f5003e4d904076
+emconfig_sha256=696c863021ad86e4740c840916408d9fdae97a9bbaadaefe1e43a1f0f79116ac
+using reproducible random Fix16 model seed=20260718
+Found Platform
+Platform Name: Xilinx
+INFO: Reading ./qwen_8x64_dual.xclbin
+Loading: './qwen_8x64_dual.xclbin'
+INFO: [HW-EMU 05] Path of the simulation directory : /tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/2747650/hw_em/device0/binary_0/behav_waveform/xsim
+
+ server socket name is	/tmp/wt/device0_0_2747650
+INFO: [HW-EMU 01] Hardware emulation runs simulation underneath. Using a large data set will result in long simulation times. It is recommended that a small dataset is used for faster execution. The flow uses approximate models for Global memories and interconnect and hence the performance data generated is approximate.
+configuring embedded scheduler mode
+scheduler config ert(1), dataflow(0), slots(16), cudma(0), cuisr(0), cdma(0), cus(4)
+programmed xilinx_u50_gen3x16_xdma_5_202210_1 for profile qwen2.5-3b
+QWEN_8X64_SETUP_PROFILE timing_domain=host_wall model_initialization_ms=93553.4 accelerator_initialization_ms=57478.1 total_setup_ms=151031 weight_preload=1
+using controller-side decode attention (HBM KV cache + online softmax)
+using host-composed attention/FFN tasks (HBM-resident boundary, no intermediate host copy)
+COARSE_TASK_PROGRESS completed=1 total=5 op=18 phase=attention layer=0 position=0 query_tokens=8 controller_ms=1.74521e+06
+COARSE_TASK_PROGRESS completed=2 total=5 op=19 phase=ffn layer=0 position=0 query_tokens=8 controller_ms=8.308e+06
+COARSE_TASK_PROGRESS completed=3 total=5 op=18 phase=attention layer=1 position=0 query_tokens=8 controller_ms=1.92023e+06
+COARSE_TASK_PROGRESS completed=4 total=5 op=19 phase=ffn layer=1 position=0 query_tokens=8 controller_ms=9.04107e+06
+COARSE_TASK_PROGRESS completed=5 total=5 op=20 phase=final_norm layer=0 position=0 query_tokens=8 controller_ms=265033
+COARSE_TASK_PREFILL_BLOCK layers=2 tasks=5 position_begin=0 query_tokens=8 position_end=7 event_timing_domain=hw_emu_host_wall_proxy attention_controller_ms=3.66543e+06 ffn_controller_ms=1.73491e+07 final_norm_controller_ms=265033 kernel_active_ms=2.12795e+07 input_migration_ms=79.075 auxiliary_migration_ms=0 status_kernel_ms=10001.4 status_migration_ms=110.98 output_migration_ms=54.3703 profiled_sequence_ms=2.12898e+07 host_elapsed_ms=2.12978e+07 output_materialized=1 intermediate_host_copy=0 kv_cache_owner=controller
+position=0 token=0 hidden_checksum=0x83d5479e6f2b0dea
+position=1 token=1 hidden_checksum=0x4c005e7b43bd9d31
+position=2 token=2 hidden_checksum=0xbc7daa9ee082f448
+position=3 token=3 hidden_checksum=0x883195e985e07034
+position=4 token=4 hidden_checksum=0x56f3a3471a845961
+position=5 token=5 hidden_checksum=0x412618e4e6eefffa
+position=6 token=6 hidden_checksum=0x6c193b666f60dbf3
+position=7 token=7 hidden_checksum=0x889763300b5aa965
+generated[0]=109217
+COARSE_TASK_PROGRESS completed=1 total=5 op=18 phase=attention layer=0 position=8 query_tokens=1 controller_ms=1.17613e+06
+COARSE_TASK_PROGRESS completed=2 total=5 op=19 phase=ffn layer=0 position=8 query_tokens=1 controller_ms=6.19874e+06
+COARSE_TASK_PROGRESS completed=3 total=5 op=18 phase=attention layer=1 position=8 query_tokens=1 controller_ms=1.20215e+06
+COARSE_TASK_PROGRESS completed=4 total=5 op=19 phase=ffn layer=1 position=8 query_tokens=1 controller_ms=6.15171e+06
+COARSE_TASK_PROGRESS completed=5 total=5 op=20 phase=final_norm layer=0 position=8 query_tokens=1 controller_ms=112014
+COARSE_TASK_STACK layers=2 tasks=5 position=8 event_timing_domain=hw_emu_host_wall_proxy attention_controller_ms=2.37828e+06 ffn_controller_ms=1.23505e+07 final_norm_controller_ms=112014 kernel_active_ms=1.48407e+07 input_migration_ms=67.3974 auxiliary_migration_ms=0 status_kernel_ms=10001.5 status_migration_ms=106.485 output_migration_ms=61.7337 profiled_sequence_ms=1.4851e+07 host_elapsed_ms=1.4858e+07 intermediate_host_copy=0
+generated[1]=150413
+RANDOM e2e_full_prefix_hidden_step_0 PASS values=2048 max_raw_error=0 tolerance=64
+QWEN_8X64_E2E_NUMERIC_STEP step=0 prefix_tokens=8 layers=2 checked_values=2048 max_raw_error=0 tolerance=64 hardware_token=109217 golden_token=109217 hidden_pass=1 token_pass=1 validation_schedule=post_inference PASS
+RANDOM e2e_full_prefix_hidden_step_1 PASS values=2048 max_raw_error=0 tolerance=64
+QWEN_8X64_E2E_NUMERIC_STEP step=1 prefix_tokens=9 layers=2 checked_values=2048 max_raw_error=0 tolerance=64 hardware_token=150413 golden_token=150413 hidden_pass=1 token_pass=1 validation_schedule=post_inference PASS
+QWEN_8X64_E2E_NUMERIC_VERIFY oracle=cpu_fixed_q214_full_prefix prompt_tokens=8 generated_tokens=2 layers=2 steps=2 checked_values=4096 max_raw_error=0 tolerance=64 token_sequence_match=1 validation_schedule=post_inference golden_host_ms=36730.3 intermediate_host_copy=0 kv_cache_owner=controller PASS
+QWEN_8X64_E2E_PROFILE prompt_tokens=8 generated_tokens=2 prompt_forward_passes=1 generated_forward_passes=1 prefill_mode=coarse_block prefill_block_size=8 prompt_forward_ms=2.12978e+07 prefill_token_s=0.000375625 time_to_first_token_ms=2.12982e+07 generated_forward_ms=1.4858e+07 mean_inter_token_ms=1.4858e+07 decode_token_s=6.73038e-05 lm_head_host_ms=666.884 total_host_elapsed_ms=3.61565e+07 total_process_elapsed_ms=3.61932e+07 post_inference_validation_ms=36730.3 validation_schedule=post_inference event_timing_domain=hw_emu_host_wall_proxy coarse_task_count=10 coarse_kernel_active_ms=3.61203e+07 coarse_profiled_sequence_ms=3.61408e+07 coarse_host_api_elapsed_ms=3.61558e+07 coarse_input_migration_ms=146.472 coarse_status_kernel_ms=20003 coarse_status_migration_ms=217.465 coarse_output_migration_ms=116.104 output_materializations=2 released_prompt_blocks=0 e2e_numeric_golden=1 e2e_numeric_steps=2 e2e_numeric_checked_values=4096 e2e_numeric_max_raw_error=0 e2e_numeric_tolerance=64 e2e_golden_host_ms=36730.3 intermediate_host_copy=0 kv_cache_owner=controller PASS
+QWEN_8X64_HOST PASS elapsed_seconds=36156.5 process_elapsed_seconds=36193.2 validation_elapsed_seconds=36.7303 sequence=0,1,2,3,4,5,6,7,109217,150413
+
+ socket connect is not established/broken 
+INFO: [HW-EMU 06-0] Waiting for the simulator process to exit
+INFO: [HW-EMU 06-1] All the simulator processes exited successfully
+INFO: [HW-EMU 07-0] Please refer the path "/tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/2747650/hw_em/device0/binary_0/behav_waveform/xsim/simulate.log" for more detailed simulation infos, errors and warnings.
+finished_at=2026-08-21T06:37:12+08:00
+exit_status=0

@@ -207,6 +207,7 @@ mixing old RTL with a new testbench.
 | Small tail-block prompt composition HW Emu | PASS, P11 as blocks 0--7 and 8--10, 10 tasks, controller-owned KV |
 | Standard Qwen2.5-3B layer-shape 8-row HW Emu | PASS, Task 18/19/20, 16,384 values exact, 651,621 cycles, no intermediate Host copy |
 | Standard-shape Qwen2.5-3B P8/G2/L1 HW Emu | PASS, six tasks, two forwards, 4,096 values exact, one real D1 forward |
+| Standard-shape Qwen2.5-3B P8/G2/L2 HW Emu | PASS, ten tasks, two forwards, 4,096 values exact, cross-layer HBM residency |
 
 The original one-row RTL CoSim records three passing transactions with
 minimum/average/maximum latency of 1,204/2,664/4,497 cycles. The current Q2.14
@@ -248,27 +249,32 @@ The next release gate composes the production Host boundary around the same
 coarse tasks. With `sequence_batch=1`, `P8` is one eight-row prefill block from
 one sequence. Its prompt forward produces the first sample; one real D1
 forward produces the second. Each forward issues Task 18, Task 19, and Task
-20, so the L1 request contains six tasks.
+20, so the L1 request contains six tasks and the L2 request contains ten.
 
 | Evidence source | Host computation in timed interval | Scope | Prompt rows | Sampled outputs | Layers | Tasks | Common HW-Emu CU running time | Cycles at 200 MHz | Useful GMAC/s | Modeled useful-MAC efficiency |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Vitis 2022.2 HW Emu CU trace | No | P8 prefill + one real D1 | 8 | 2 | 1 | 6 | 5,953.465 us | 1,190,693 | 116.540 | 56.904% |
+| Vitis 2022.2 HW Emu CU trace | No | P8 prefill + one real D1 | 8 | 2 | 2 | 10 | 11,597.207 us | 2,319,441.4 | 119.652 | 58.424% |
 
 The deterministic random-Fix16/tied-embedding model passes both CPU-golden
-steps after production inference: 4,096 checked values, maximum raw error zero
-at tolerance 32, and an identical sampled-token sequence. No intermediate
-hidden tensor is copied through Host memory; the controller owns RoPE, online
-attention, HBM-resident KV, and subgraph scheduling. Host embedding,
-coarse-task issue/status, and LM-head/argmax remain software responsibilities.
-The common four-CU interval excludes that Host computation and cannot resolve
-per-CU occupancy or individual inter-task gaps.
+steps after production inference in L1 and L2: 4,096 checked values, maximum
+raw error zero at tolerances 32 and 64, and identical sampled-token sequences.
+The L2 run uses the same Host/xclbin/emconfig identities and crosses both
+Prefill and D1 from layer 0 to layer 1. Doubling useful MAC increases cycles by
+1.948x and raises modeled useful-MAC efficiency by 1.520 percentage points. No
+intermediate hidden tensor is copied through Host memory; the controller owns
+RoPE, online attention, HBM-resident KV, and subgraph scheduling. Host
+embedding, coarse-task issue/status, and LM-head/argmax remain software
+responsibilities. The common four-CU interval excludes that Host computation
+and cannot resolve per-CU occupancy or individual inter-task gaps.
 
-The measured request rate is 335.939 output tokens/s including prefill and is
-therefore not a steady D1 rate. This result uses standard dimensions but one
-decoder layer and deterministic random weights: it is neither checkpoint
-accuracy nor a 36-layer or physical-board result. The complete evidence and
-source provenance are in
-[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/).
+The measured L1/L2 request rates are 335.939 and 172.455 output tokens/s,
+respectively. Both include prefill and are therefore not steady D1 rates.
+These results use standard dimensions but only one or two decoder layers and
+deterministic random weights: they are neither checkpoint accuracy nor a
+36-layer or physical-board result. Complete evidence and source provenance are
+in the [L1](../results/qwen3b-e2e-20260820/) and
+[L2](../results/qwen3b-e2e-l2-20260821/) packages.
 
 ## Small-profile HW-Emu result
 

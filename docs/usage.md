@@ -193,6 +193,11 @@ scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
 VITIS_8X64_E2E_LAYERS=1 \
   scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 
+# Standard-shape multi-layer gate using the same Host and xclbin: ten tasks,
+# two CPU-golden prefix checks, and no intermediate Host hidden copy.
+VITIS_8X64_E2E_LAYERS=2 \
+  scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
+
 # Full 36-layer extension of the same contract: random deterministic Fix16
 # weights and 146 coarse tasks. This is the launcher default and is expected
 # to take much longer under RTL HW Emu.
@@ -487,6 +492,7 @@ The published standard experiments use deterministic seeds:
 | Q2.14 P/D length sweep | 20260722 | 8/8 exits zero; Q2.14 max raw error <= 1 |
 | Standard Qwen-layer P8 Task 18/19/20 | 20260718 | 16,384 values exact; 651,621 cycles; intermediate_host_copy=0 |
 | Standard-shape Qwen2.5-3B P8/G2/L1 | 20260718 | 6/6 tasks; 2/2 CPU-golden steps; 4,096 values exact; 1,190,693 cycles |
+| Standard-shape Qwen2.5-3B P8/G2/L2 | 20260718 | 10/10 tasks; 2/2 CPU-golden steps; 4,096 values exact; 2,319,441.4 cycles |
 
 The 8-row block run must also report 48 attention MM tasks and 1536 completed
 packets.
@@ -507,10 +513,12 @@ This keeps the repository source-oriented without separating claims from their
 compact raw evidence. Large binaries should be archived separately and
 associated with the cited Git commit and artifact-manifest identities.
 
-The completed standard-shape P8/G2/L1 package is available under
-[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/). Its `P8`
-field means one sequence with eight prompt query rows; the package separately
-records sequence batch, sampled outputs, and the single real D1 forward.
+The completed standard-shape packages are available under
+[`results/qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/) for L1 and
+[`results/qwen3b-e2e-l2-20260821/`](../results/qwen3b-e2e-l2-20260821/) for
+L2. Their `P8` field means one sequence with eight prompt query rows; each
+package separately records sequence batch, sampled outputs, and the single
+real D1 forward.
 
 The publication tree and every versioned result package can be checked without
 launching any Xilinx tool:

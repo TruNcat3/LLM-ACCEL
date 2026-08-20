@@ -209,10 +209,11 @@ layers, this composition issues
 ownership do not: only final hidden rows needed by the Host vocabulary head
 cross back to software.
 
-The bounded standard-shape `P8/G2/L1` contract has completed Vitis 2022.2 HW
-Emu with all six tasks, one real D1 forward, and 4,096/4,096 fixed-point values
-exact. Its 1,190,693-cycle common four-CU interval is evidence for this
-one-layer composition only; standard-shape L2 and L36 remain separate gates.
+The bounded standard-shape `P8/G2/L1` and `P8/G2/L2` contracts have completed
+Vitis 2022.2 HW Emu with six and ten tasks, one real D1 forward each, and
+4,096/4,096 fixed-point values exact in both runs. Their common four-CU
+intervals are 1,190,693 and 2,319,441.4 cycles. L2 proves the same HBM and KV
+ownership across a standard-shape layer boundary; L36 remains a separate gate.
 
 ## 8. Online attention and KV-cache ownership
 
