@@ -45,6 +45,10 @@ standard_report="$(
     scripts/report_vitis_8x64_e2e_trace.sh \
         "${profile_csv}" qwen2.5-3b 8 2 2 8 200 300 1
 )"
+full_stack_report="$(
+    scripts/report_vitis_8x64_e2e_trace.sh \
+        "${profile_csv}" qwen2.5-3b 8 2 36 8 200 300 1
+)"
 
 value() {
     local column="$1"
@@ -86,6 +90,23 @@ standard_useful_mac="$(
     ' <<<"${standard_report}"
 )"
 standard_numeric_tolerance=$((32 * 2))
+full_stack_useful_mac="$(
+    awk -F '\t' '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "useful_mac") mac_index = i
+                if ($i == "expected_coarse_tasks") task_index = i
+            }
+            next
+        }
+        NR == 2 && mac_index && task_index {
+            print $mac_index, $task_index
+            exit
+        }
+    ' <<<"${full_stack_report}"
+)"
+read -r full_stack_mac full_stack_tasks <<<"${full_stack_useful_mac}"
+full_stack_numeric_tolerance=$((32 * 36))
 
 if [ "${sequence_batch}" != 1 ] || [ "${prompt}" != 8 ] ||
    [ "${sampled}" != 2 ] || [ "${decode_forwards}" != 1 ] ||
@@ -97,6 +118,12 @@ fi
 if [ "${standard_useful_mac}" != 1387634688 ] ||
    [ "${standard_numeric_tolerance}" != 64 ]; then
     echo "Standard-shape P8/G2/L2 accounting regressed" >&2
+    exit 1
+fi
+if [ "${full_stack_mac}" != 24977424384 ] ||
+   [ "${full_stack_tasks}" != 146 ] ||
+   [ "${full_stack_numeric_tolerance}" != 1152 ]; then
+    echo "Standard-shape P8/G2/L36 accounting regressed" >&2
     exit 1
 fi
 
@@ -159,3 +186,7 @@ printf 'P8/G2/L2 query_rows=9 decode_forwards=1 tasks=10 '
 printf 'small_useful_mac=%s standard_useful_mac=%s tolerance=%s\n' \
     "${useful_mac}" "${standard_useful_mac}" \
     "${standard_numeric_tolerance}"
+printf 'E2E FULL-STACK SEMANTICS PASS '
+printf 'P8/G2/L36 query_rows=9 tasks=%s useful_mac=%s tolerance=%s\n' \
+    "${full_stack_tasks}" "${full_stack_mac}" \
+    "${full_stack_numeric_tolerance}"
