@@ -1,24 +1,29 @@
 /**
  * ============================================================================
- * QKV Tile Kernel - V8-2 (2套计算核心 + 共享激活, 部署优化版)
+ * QKV Tile Kernel - V8-2 (two compute cores + shared activation, deployment-optimized)
  * ============================================================================
  *
- * 动机(用户): V8单实例 FF631k/LUT461k, 4实例LUT 1.84M(107%超标)无法部署。
- *   V8-2 = 1个kernel含2套计算核心, 共享1套激活 + 接口/缓存/控制。
- *   2×V8-2 = 4套核心, LUT 1.44M(83%可部署) vs 4×V8 LUT 1.84M(107%超标)。
+ * Motivation: one V8 uses 631k FF/461k LUT; four instances require 1.84M LUT
+ * (107%), which is not deployable. V8-2 places two compute cores in one kernel
+ * and shares one activation unit plus interface/cache/control logic. Two V8-2
+ * instances provide four cores at 1.44M LUT (83%) versus 1.84M LUT for four V8s.
  *
- * 关键收益: 激活是FF大头(V8的501k=79%), 2套核心共享1套激活 → 省一倍激活FF/LUT。
+ * Key benefit: activation dominates FF use (501k, or 79%, in V8). Sharing one
+ * activation unit between two cores roughly halves activation FF/LUT cost.
  *
- * V8-2结构:
- *   - 2套compute核心 (每套4 lane × 4×64 matmul = 1024 DSP), 共2048 DSP
- *   - 8 lane并行 (2 core × 4 lane), 8个模板matmul实例, compute_tiles II=1
- *   - 1套activate_tiles_core (522 DSP), 处理2 core × 4 lane × 16 tile = 128次
- *   - 共享 input/output/weight stream 接口 (路线2: weight 从 control/cache core, 替代 w0..w7 m_axi)
+ * V8-2 structure:
+ *   - two compute cores, each with 4 lanes x 4x64 matmul = 1024 DSP; 2048 DSP total;
+ *   - eight parallel lanes (2 cores x 4 lanes), eight templated matmul instances,
+ *     and compute_tiles II=1;
+ *   - one activate_tiles_core (522 DSP) serving 2 cores x 4 lanes x 16 tiles = 128 calls;
+ *   - shared input/output/weight stream interfaces. Design path 2 supplies
+ *     weights from the control/cache core instead of w0..w7 m_axi ports.
  *
- * 资源预期(单V8-2): DSP 2570, FF ~747k, LUT ~720k
- *   2×V8-2: DSP 5140(42%), FF 1.49M(43%), LUT 1.44M(83%) ✅可部署
+ * Expected resources for one V8-2: 2570 DSP, about 747k FF, about 720k LUT.
+ * Two V8-2 instances: 5140 DSP (42%), 1.49M FF (43%), 1.44M LUT (83%).
  *
- * lane_id映射: 0-3=core0 lane0-3, 4-7=core1 lane0-3 (core=lane/4, local_lane=lane%4)
+ * lane_id mapping: 0-3 = core0 lanes 0-3, 4-7 = core1 lanes 0-3
+ * (core=lane/4, local_lane=lane%4).
  * ============================================================================
  */
 
@@ -32,12 +37,13 @@
 #define CTRL_ACT_SILU      0x03
 #define CTRL_ACT_SOFTMAX   0x04
 #define CTRL_ACT_LAYERNORM 0x05
-#define CTRL_ACCUMULATE    0x40    // 累积: mm_results += (不清空)
-#define CTRL_FINALIZE      0x80    // 执行 activate + write_stream (最终 reduction step)
-#define CTRL_ACT_MASK      0x3F    // 激活类型掩码
+#define CTRL_ACCUMULATE    0x40    // Accumulate into mm_results without clearing.
+#define CTRL_FINALIZE      0x80    // Run activation + write_stream at the final reduction step.
+#define CTRL_ACT_MASK      0x3F    // Activation-type mask.
 
 // ============================================================================
-// 模板4×64矩阵乘法 (8个独立实例 matmul_4x64_tpl<0..7>, inline off防共享)
+// Templated 4x64 matrix multiplication. Eight independent instances
+// matmul_4x64_tpl<0..7> use inline off to prevent sharing.
 // ============================================================================
 template<int LANE_ID>
 static void matmul_4x64_tpl(
@@ -46,9 +52,11 @@ static void matmul_4x64_tpl(
     fm_accum_t output[OUTPUT_DIM]
 ) {
     #pragma HLS inline off
-    // P2: 宽位非饱和累加器, 消除每步 AP_RND/AP_SAT 的 fabric 钳位 (省 ~200k LUT/CU)。
-    // product = fm_t<16,8> × wt<16,4> = <32,12>; 累加 4 个 < <34,13>; 用 <48,24> 富余, 中间无 round/sat。
-    // 数值更准 (少中间钳位), 出口 output 单次 (fm_accum_t) 转换做 round/sat。
+    // P2: a wide non-saturating accumulator removes fabric clamping from
+    // AP_RND/AP_SAT at each step, saving about 200k LUT/CU.
+    // product = fm_t<16,8> x wt<16,4> = <32,12>; four products fit in <34,13>.
+    // <48,24> provides margin with no intermediate rounding or saturation.
+    // A single fm_accum_t conversion at the output performs rounding/saturation.
     ap_fixed<48, 24> acc[OUTPUT_DIM];
     #pragma HLS array_partition variable=acc complete
     for (int o = 0; o < OUTPUT_DIM; o++) {
@@ -59,17 +67,17 @@ static void matmul_4x64_tpl(
         #pragma HLS pipeline II=1
         for (int o = 0; o < OUTPUT_DIM; o++) {
             #pragma HLS unroll
-            acc[o] += input[in] * weight[in][o];   // 精确累加, 无中间钳位
+            acc[o] += input[in] * weight[in][o];   // Exact accumulation without intermediate clamping.
         }
     }
     for (int o = 0; o < OUTPUT_DIM; o++) {
         #pragma HLS unroll
-        output[o] = (fm_accum_t)acc[o];   // 出口单次 round/sat
+        output[o] = (fm_accum_t)acc[o];   // Single output rounding/saturation.
     }
 }
 
 // ============================================================================
-// 定点激活函数 (64维, 同V8)
+// Fixed-point activation functions (64 dimensions, matching V8).
 // ============================================================================
 static void activation_relu(fm_accum_t data[OUTPUT_DIM]) {
     #pragma HLS inline off
@@ -127,7 +135,7 @@ static void activation_softmax(fm_accum_t data[OUTPUT_DIM]) {
         fm_accum_t ev = (slope * (fm_t)xv) + fm_accum_t(offset);
         exp_vals[i] = ev; exp_sum += ev;
     }
-    fm_accum_t inv_sum = fm_accum_t(hls::recip(exp_sum.to_float()));   // NR: float recip 替换 ap_fixed 除法
+    fm_accum_t inv_sum = fm_accum_t(hls::recip(exp_sum.to_float()));   // NR: replace ap_fixed division with float reciprocal.
     for (unsigned int i = 0; i < OUTPUT_DIM; i++) {
         #pragma HLS unroll
         data[i] = exp_vals[i] * inv_sum;
@@ -154,8 +162,9 @@ static void activation_layernorm(fm_accum_t data[OUTPUT_DIM], const fm_t param1[
     else if (variance < fm_accum_t(4.0)) std_dev = fm_accum_t(0.4) * variance + fm_accum_t(0.4);
     else std_dev = fm_accum_t(0.2) * variance + fm_accum_t(1.2);
     std_dev += fm_accum_t(1e-6);
-    fm_accum_t inv_std = fm_accum_t(hls::recip(std_dev.to_float()));   // NR: float recip 替换 ap_fixed 除法
-    // P1: layernorm pipeline II=1; 先 copy param → local reg (避免 pipeline 内 m_axi read carried dependence, II=67 退化)
+    fm_accum_t inv_std = fm_accum_t(hls::recip(std_dev.to_float()));   // NR: replace ap_fixed division with float reciprocal.
+    // P1: layernorm pipeline II=1. Copy parameters into local registers first
+    // to avoid an m_axi read-carried dependence that degrades II to 67.
     fm_t p1[OUTPUT_DIM]; fm_t p2[OUTPUT_DIM];
     #pragma HLS array_partition variable=p1 complete
     #pragma HLS array_partition variable=p2 complete
@@ -189,8 +198,9 @@ static void unified_activation(fm_accum_t data[OUTPUT_DIM], unsigned int ctrl,
 }
 
 // ============================================================================
-// LANE_MM_stream: 流式 compute — 从 in_pkt (512-bit wide packet) 读 input, 不用 local_input_buffer
-// 始终 += (无分支); 不累积时由调用方在 compute 前清零 mm_results
+// LANE_MM_stream: streaming compute reads input from a 512-bit in_pkt without
+// local_input_buffer. It always uses +=; the caller clears mm_results before
+// compute when accumulation is disabled.
 // ============================================================================
 #define LANE_MM_stream(core, n) \
     { \
@@ -208,8 +218,9 @@ static void unified_activation(fm_accum_t data[OUTPUT_DIM], unsigned int ctrl,
     }
 
 // ============================================================================
-// compute_stream_core: 流式 compute — 边从 input_stream 读 512-bit packet 边 8 lane matmul
-// 消除 local_input_buffer (read+compute 融合), 保 8 lane 并行 + II=1, weight_stationary
+// compute_stream_core: streaming compute reads each 512-bit input packet while
+// running the 8-lane matmul. Fusing read+compute removes local_input_buffer and
+// retains 8-lane parallel, II=1, weight-stationary execution.
 // ============================================================================
 static void compute_stream_core(
     hls::stream<in_pkt_axis>& input_stream,
@@ -224,15 +235,16 @@ static void compute_stream_core(
         #pragma HLS dependence variable=mm_results inter false
         in_pkt_axis ipkt = input_stream.read();
         compute_input_packet_wide_t in_pkt = unpack_in_wide(ipkt.data);
-        unsigned int tile = p % NUM_TILES;   // token 维隐含 (mm_results 无 token 维, 多 token 覆盖)
+        unsigned int tile = p % NUM_TILES;   // Token dimension is implicit; mm_results has no token dimension.
         LANE_MM_stream(0, 0)
         LANE_MM_stream(1, 0)
     }
 }
 
 // ============================================================================
-// activate_tiles_core: 原始串行 (lane 不 unroll, 避免 HLS 调度爆炸).
-// P1 pipeline→unroll 回退已恢复 layernorm, 预期 latency 641→297.
+// activate_tiles_core: serial lanes avoid explosive HLS scheduling.
+// Restoring layernorm after the P1 pipeline-to-unroll rollback is expected to
+// reduce latency from 641 to 297 cycles.
 // ============================================================================
 static void activate_tiles_core(
     fm_accum_t mm_results[NUM_CORES][NUM_LANES][NUM_TILES * OUTPUT_DIM],
@@ -263,7 +275,7 @@ static void activate_tiles_core(
     }
 }
 
-// 权重加载宏 (显式wptr参数, 避免指针数组HLS限制)
+// Weight-load macro with explicit wptr parameters to avoid HLS pointer-array limits.
 #define LOAD_LANE_W(core, n, wptr) \
     for (int blk = 0; blk < WT_BLOCKS_PER_LANE; blk++) { \
         wt_block_t wb = wptr[blk]; \
@@ -275,26 +287,27 @@ static void activate_tiles_core(
     }
 
 // ============================================================================
-// V8-2 顶层: 2套计算核心 + 共享激活 (无dataflow)
+// V8-2 top level: two compute cores plus shared activation, without dataflow.
 // ============================================================================
 extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
     hls::stream<in_pkt_axis>& input_stream,
-    hls::stream<out_lo_axis>& output_stream_lo,   // results[0..31] (1024 bit, hw 限 ≤1024)
+    hls::stream<out_lo_axis>& output_stream_lo,   // results[0..31] (1024 bits, hardware limit <=1024)
     hls::stream<out_hi_axis>& output_stream_hi,   // results[32..63] (1024 bit)
-    hls::stream<weight_axis>& weight_stream_0,    // STEP 2: 4 weight stream (4 PC 并行)
+    hls::stream<weight_axis>& weight_stream_0,    // Step 2: four weight streams over four parallel PCs.
     hls::stream<weight_axis>& weight_stream_1,
     hls::stream<weight_axis>& weight_stream_2,
     hls::stream<weight_axis>& weight_stream_3,
-    hls::stream<ctrl_axis>&   ctrl_stream,        // cc → 本核: 每 op 1 个 op_ctrl
+    hls::stream<ctrl_axis>&   ctrl_stream,        // cc -> this kernel: one op_ctrl per operation.
 
     const fm_t* param1,
     const fm_t* param2,
     unsigned int num_tokens,
-    unsigned int num_ops,                         // op 外循环边界 (与 cc num_ops 严格相等)
+    unsigned int num_ops,                         // Operation-loop bound; must exactly match cc num_ops.
     unsigned int use_param1,
     unsigned int use_param2
 ) {
-    // Vitis mode: 只标 axis stream + m_axi, s_axilite 让 HLS 全自动统一 bundle
+    // Vitis mode: annotate only AXIS streams and m_axi; HLS automatically
+    // assigns all s_axilite ports to one bundle.
     #pragma HLS INTERFACE mode=axis port=input_stream
     #pragma HLS INTERFACE mode=axis port=output_stream_lo
     #pragma HLS INTERFACE mode=axis port=output_stream_hi
@@ -305,11 +318,13 @@ extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
     #pragma HLS INTERFACE mode=axis port=ctrl_stream
     #pragma HLS INTERFACE mode=m_axi port=param1 bundle=gmem_param offset=slave depth=64
     #pragma HLS INTERFACE mode=m_axi port=param2 bundle=gmem_param offset=slave depth=64
-    // num_tokens, num_ops, use_param1, use_param2, return → HLS 自动 s_axilite (统一 bundle)
+    // HLS automatically maps num_tokens, num_ops, use_param1, use_param2,
+    // and return to the unified s_axilite bundle.
 
-    // (流式 compute: 不用 local_input_buffer, read+compute 融合进 compute_stream_core)
+    // Streaming compute removes local_input_buffer by fusing read+compute in compute_stream_core.
 
-    // 独立数组; mm_results cyclic 64 dim=3 + BRAM (D=16: compute_stream II=2 但 hw_emu 稳定, 整层 Q 6.97×)
+    // Independent arrays; mm_results uses cyclic factor 64 on dimension 3 plus
+    // BRAM. At D=16 compute_stream has II=2, but HW Emu is stable and full-layer Q is 6.97x faster.
     fm_accum_t mm_results[NUM_CORES][NUM_LANES][NUM_TILES * OUTPUT_DIM];
     #pragma HLS bind_storage variable=mm_results type=RAM_2P impl=BRAM
     #pragma HLS array_partition variable=mm_results complete dim=1
@@ -322,14 +337,15 @@ extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
     #pragma HLS array_partition variable=local_output_buffer complete dim=2
     #pragma HLS array_partition variable=local_output_buffer cyclic factor=64 dim=3
 
-    // 权重: 2 core × 4 lane × (4 input × 64 output), 显式分维partition
+    // Weights: 2 cores x 4 lanes x (4 inputs x 64 outputs), with explicit per-dimension partitioning.
     wt_linear_t local_weights[NUM_CORES][NUM_LANES][INPUT_DIM][OUTPUT_DIM];
     #pragma HLS array_partition variable=local_weights complete dim=1
     #pragma HLS array_partition variable=local_weights complete dim=2
     #pragma HLS array_partition variable=local_weights complete dim=3
     #pragma HLS array_partition variable=local_weights cyclic factor=64 dim=4
 
-    // param 预 load → local (param 跨 op 不变; 避免 activation_layernorm pipeline 内 m_axi read carried dependence)
+    // Preload parameters locally because they remain constant across operations;
+    // this avoids an m_axi read-carried dependence in the activation_layernorm pipeline.
     fm_t g_p1[OUTPUT_DIM], g_p2[OUTPUT_DIM];
     #pragma HLS array_partition variable=g_p1 complete
     #pragma HLS array_partition variable=g_p2 complete
@@ -338,13 +354,15 @@ extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
         g_p1[i] = param1[i]; g_p2[i] = param2[i];
     }
 
-    // ---- op 外循环: 每 op 从 ctrl_stream 读 op_ctrl, 跑完整 5 阶段 (与 cc num_ops 严格对齐) ----
+    // ---- Outer operation loop: read one op_ctrl from ctrl_stream and execute
+    // all five stages, exactly aligned with cc num_ops. ----
     op_loop:
     for (unsigned int op = 0; op < num_ops; op++) {
         ctrl_axis cp = ctrl_stream.read();
-        unsigned int op_ctrl = cp.data;   // 每 op 动态 op_ctrl (激活选择, 透传 activate_tiles_core)
+        unsigned int op_ctrl = cp.data;   // Per-operation activation control forwarded to activate_tiles_core.
 
-        // 阶段0: 4 weight_stream 并行 → local_weights (STEP 2: 16 拍, 4× 带宽; 每 stream 16 wt_block)
+        // Stage 0: four parallel weight streams fill local_weights in 16 cycles
+        // at 4x bandwidth, with 16 wt_block values per stream.
         // stream0/1→core0 (blk0-15/16-31), stream2/3→core1 (blk0-15/16-31)
         load_weights_stream:
         for (unsigned int blk = 0; blk < WT_BLOCKS_PER_LANE / 2; blk++) {
@@ -366,14 +384,15 @@ extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
             }
         }
 
-    unsigned int num_packets = num_tokens * TOTAL_LANES * NUM_TILES;   // 供 write_stream
+    unsigned int num_packets = num_tokens * TOTAL_LANES * NUM_TILES;   // Packet count for write_stream.
 
-    // (阶段1 read_stream 已融合进 compute_stream_core: 边读 512-bit packet 边 8 lane matmul)
+    // Stage 1 read_stream is fused into compute_stream_core: read a 512-bit packet while running 8-lane matmul.
 
-    // 阶段2: 流式 compute (read+compute 融合, 无 local_input_buffer), accumulate 模式时累积到 mm_results
+    // Stage 2: fused streaming read+compute without local_input_buffer;
+    // accumulation mode adds into mm_results.
     bool accumulate = op_ctrl & CTRL_ACCUMULATE;
     bool finalize = op_ctrl & CTRL_FINALIZE;
-    // 不累积时清零 mm_results (cyclic64: c,l unroll + i unroll factor=64)
+    // Clear mm_results when not accumulating (cyclic64 with c/l unrolled and i factor=64).
     if (!accumulate) {
         for (unsigned int c = 0; c < NUM_CORES; c++) {
             #pragma HLS unroll
@@ -388,12 +407,12 @@ extern "C" void qkv_tile_kernel_cc_qwen_small_core_v8_2_s(
     }
     compute_stream_core(input_stream, mm_results, local_weights, num_tokens);
 
-    // FINALIZE 模式: 执行 activate + write_stream (最终 reduction step 或 standalone op)
+    // FINALIZE mode runs activation + write_stream for the final reduction step or standalone operation.
     if (finalize) {
-        // 阶段3: 1套激活, 处理2套核心结果
+        // Stage 3: one shared activation unit processes both cores.
         activate_tiles_core(mm_results, local_output_buffer, op_ctrl & CTRL_ACT_MASK, g_p1, g_p2);
 
-        // 阶段4: 输出缓存 → output_stream_lo/hi (仅最终步输出)
+        // Stage 4: send the output buffer to output_stream_lo/hi only at the final step.
         write_stream:
         for (unsigned int pkt = 0; pkt < num_packets; pkt++) {
             #pragma HLS pipeline II=1

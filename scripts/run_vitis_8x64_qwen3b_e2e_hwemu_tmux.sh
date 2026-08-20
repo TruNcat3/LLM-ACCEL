@@ -4,7 +4,7 @@ set -euo pipefail
 script_path="$(realpath "$0")"
 cd "$(dirname "${script_path}")/.."
 
-work_root="${VITIS_8X64_QWEN3B_WORK_ROOT:-/tmp/llm_fpga_qwen3b_e2e}"
+work_root="${VITIS_8X64_QWEN3B_WORK_ROOT:-/tmp/llm_accel_qwen3b_q214_resident_fix}"
 device="${DEVICE:-xilinx_u50_gen3x16_xdma_5_202210_1}"
 build_dir="${work_root}/build.hw_emu.${device}"
 prompt_tokens="${VITIS_8X64_E2E_PROMPT_TOKENS:-8}"
@@ -37,6 +37,17 @@ if [ "${1:-}" = "--worker" ]; then
         fi
     done
     source "${env_script}" >/dev/null 2>&1
+    xclbin_kernel_clock_mhz="$(
+        xclbinutil --info --input "${xclbin}" 2>/dev/null |
+        awk '
+            $1 == "Name:" && $2 == "KERNEL_CLK" { kernel = 1; next }
+            kernel && $1 == "Frequency:" { print $2; exit }
+        '
+    )"
+    if ! [[ "${xclbin_kernel_clock_mhz}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        echo "Cannot read KERNEL_CLK frequency from ${xclbin}" >&2
+        exit 65
+    fi
     token_csv=""
     for ((token = 0; token < prompt_tokens; token++)); do
         if [ -n "${token_csv}" ]; then
@@ -64,6 +75,7 @@ if [ "${1:-}" = "--worker" ]; then
     echo "checkpoint_dir=${checkpoint_dir}"
     echo "tie_embeddings=${tie_embeddings}"
     echo "timeout_seconds=${timeout_seconds}"
+    echo "xclbin_kernel_clock_mhz=${xclbin_kernel_clock_mhz}"
     echo "timing_note=HW_Emu_host_wall_is_simulator_runtime_use_CU_trace_for_modeled_cycles"
     echo "host_exe_sha256=$(sha256sum "${host_exe}" | awk '{print $1}')"
     echo "xclbin_sha256=$(sha256sum "${xclbin}" | awk '{print $1}')"

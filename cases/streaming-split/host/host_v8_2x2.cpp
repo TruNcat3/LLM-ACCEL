@@ -1,16 +1,17 @@
-// XRT host for sw_emu/hw: control_cache_core(编排器) + 1×V8-2_s, operator_program QKV 三连
-// stream (axis) 由 conn cfg 连接 (含 ctrl_stream), host 只 set m_axi + s_axilite args。
-// 验证: 3 op (Q/K/V), 权重 1.0/2.0/0.5, input 全 1.0 → 输出 4.0/8.0/2.0。
+// XRT Host for sw_emu/hw: control_cache_core orchestrator + one V8-2_s,
+// with an operator_program sequence. The connectivity file wires AXIS streams,
+// including ctrl_stream; the Host sets only m_axi and s_axilite arguments.
+// The complete test runs Q/K/V/O/Gate/Up/Down with distinct unit-scale weights.
 #include "xcl2.hpp"
 #include <vector>
 #include <iostream>
 #include <cstdint>
 #include <cmath>
 
-// ap_fixed bit patterns (host 用 int 存 bit pattern):
+// ap_fixed bit patterns (the Host stores raw patterns as integers):
 //   fm_t       = ap_fixed<16,8>:  1.0 = 1<<8  = 0x0100
 //   wt_linear_t= ap_fixed<16,4>:  1.0 = 1<<12 = 0x1000, 2.0 = 0x2000, 0.5 = 0x0800
-//   fm_accum_t = ap_fixed<32,16>: host 读 int32, float = raw / 65536.0
+//   fm_accum_t = ap_fixed<32,16>: Host reads int32, float = raw / 65536.0
 static void check_cl(cl_int err, const char* msg) {
     if (err != CL_SUCCESS) { std::cerr << "CL error: " << msg << " (" << err << ")\n"; exit(1); }
 }
@@ -23,18 +24,19 @@ int main(int argc, char** argv) {
     const unsigned NUM_TILES = 16, INPUT_DIM = 16, OUTPUT_DIM = 64;
     const unsigned PKT_PER_TOKEN = 32;        // 2 lane × 16 tile (D=16, TOTAL_LANES=2)
     const unsigned WT_PER_V82 = 64;           // 8 lane × 8 block
-    const unsigned NUM_OPS = 7;               // 整层 matmul: Q/K/V/O/Gate/Up/Down
+    const unsigned NUM_OPS = 7;               // Full-layer matmul set: Q/K/V/O/Gate/Up/Down.
     const unsigned OUT_PER_OP = PKT_PER_TOKEN * OUTPUT_DIM;   // 8192
     const unsigned OP_TASK_STRIDE = 6;
     const unsigned SRC_HBM = 0, DST_HBM = 0;
 
-    // ---- HBM 数据 ----
+    // ---- HBM data ----
     std::vector<int16_t> hin(NUM_TOKENS * NUM_TILES * INPUT_DIM, 0x0100);  // input=1.0
     std::vector<int32_t> hout(NUM_OPS * OUT_PER_OP, 0);
-    // 7 段权重, 不同值验证: Q=1.0(0x1000), K=2.0(0x2000), V=0.5(0x0800),
+    // Seven weight segments with distinct values: Q=1.0(0x1000),
+    // K=2.0(0x2000), V=0.5(0x0800),
     //   O=1.0, Gate=1.0, Up=1.0, Down=1.0
     int16_t w_val[7] = {0x1000, 0x2000, 0x0800, 0x1000, 0x1000, 0x1000, 0x1000};
-    // STEP 2: weight 拆 4 bank (每 bank WT_PER_V82/4 * 32 元素/op)
+    // Step 2: split weights across four banks (WT_PER_V82/4 * 32 elements per operation per bank).
     unsigned WT_PER_BANK = WT_PER_V82 / 4;
     std::vector<int16_t> w0(NUM_OPS * WT_PER_BANK * 32, 0);
     std::vector<int16_t> w1(NUM_OPS * WT_PER_BANK * 32, 0);
@@ -48,7 +50,7 @@ int main(int argc, char** argv) {
             w3[op * WT_PER_BANK * 32 + b] = w_val[op];
         }
     }
-    // op_program: 7 op × 6 uint. op_ctrl: standalone ops 加 FINALIZE(0x80)
+    // op_program: seven operations x six uint fields. Standalone operations set FINALIZE(0x80).
     unsigned char op_ctrls[7] = {0x80, 0x80, 0x80, 0x80, 0x02|0x80, 0x80, 0x80};  // NONE|FIN, GELU|FIN
     std::vector<uint32_t> op_program(NUM_OPS * OP_TASK_STRIDE, 0);
     for (unsigned op = 0; op < NUM_OPS; op++) {
@@ -56,7 +58,7 @@ int main(int argc, char** argv) {
         op_program[base + 0] = op_ctrls[op];
         op_program[base + 1] = op * WT_PER_V82;      // weight_offset
         op_program[base + 2] = SRC_HBM;
-        op_program[base + 3] = 0;                    // 都从 hin[0] (fan-out)
+        op_program[base + 3] = 0;                    // All operations fan out from hin[0].
         op_program[base + 4] = DST_HBM;
         op_program[base + 5] = op * OUT_PER_OP;
     }
@@ -115,7 +117,7 @@ int main(int argc, char** argv) {
     q.finish();
     std::cerr << "[dbg] migrate done\n";
 
-    // ---- run: cc + v82 并发 (各独立 queue) ----
+    // ---- Run cc and v82 concurrently on independent queues. ----
     cl::CommandQueue q_v0(context, devices[0], CL_QUEUE_PROFILING_ENABLE, &err);
     cl::CommandQueue q_cc(context, devices[0], CL_QUEUE_PROFILING_ENABLE, &err);
     q_v0.enqueueTask(krnl_v0); q_cc.enqueueTask(krnl_cc);
@@ -126,7 +128,7 @@ int main(int argc, char** argv) {
     q.enqueueMigrateMemObjects({hout_buf}, CL_MIGRATE_MEM_OBJECT_HOST);
     q.finish();
 
-    // ---- 校验: 整层 7 op (Q/K/V/O/Gate/Up/Down) ----
+    // ---- Verify the seven full-layer operations (Q/K/V/O/Gate/Up/Down). ----
     // Q(w=1)=4, K(w=2)=8, V(w=0.5)=2, O(w=1)=4, Gate(w=1,GELU)=~3.96, Up(w=1)=4, Down(w=1)=4
     const char* opnames[7] = {"Q","K","V","O","Gate(GELU)","Up","Down"};
     float w_float[7] = {1.0f, 2.0f, 0.5f, 1.0f, 1.0f, 1.0f, 1.0f};
@@ -150,6 +152,7 @@ int main(int argc, char** argv) {
         std::cout << opnames[op] << ": expect=" << expect[op] << " sample=" << sample
                   << " miss=" << miss << "/" << OUT_PER_OP << (miss==0?" ✅":" ❌") << "\n";
     }
-    std::cout << "整层 7-op: " << (pass ? "✅ operator_program 整层编排正确" : "❌ 存在错误") << "\n";
+    std::cout << "Full-layer 7-op sequence: "
+              << (pass ? "PASS" : "FAIL") << "\n";
     return pass ? 0 : 1;
 }

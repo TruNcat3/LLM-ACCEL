@@ -62,6 +62,10 @@ if [ "${build_exact_compute_xo}" != "0" ] && [ "${build_exact_compute_xo}" != "1
     echo "VITIS_8X64_BUILD_EXACT_COMPUTE_XO must be 0 or 1" >&2
     exit 2
 fi
+if [ "${profile}" = "qwen2.5-3b" ] && [ "${build_exact_compute_xo}" != "1" ]; then
+    echo "qwen2.5-3b requires a profile-matched compute XO; set VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1" >&2
+    exit 2
+fi
 
 if [ -n "${VITIS_8X64_CONN_CFG:-}" ]; then
     conn_cfg="${VITIS_8X64_CONN_CFG}"

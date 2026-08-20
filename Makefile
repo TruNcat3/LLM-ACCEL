@@ -69,7 +69,7 @@ endif
 .PHONY: help
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
-.PHONY: hls_csim_nk hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csim_nk test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
 .PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
 .PHONY: hls_csim_closed_loop_8x64_resident_prefill_block hls_cosim_closed_loop_8x64_resident_prefill_block
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
@@ -87,6 +87,10 @@ help:
 	@echo "  make hls_csynth_control"
 	@echo "  make hls_cosim_control"
 	@echo "  make hls_csim_nk"
+	@echo "  make test_resident_attention_q214"
+	@echo "  make test_q214_payload_golden"
+	@echo "  make test_qwen3b_e2e_plan"
+	@echo "  make verify_q214_resident_release"
 	@echo "  make hls_cosim_closed_loop_8x64_resident_layer"
 	@echo "  make hls_csim_closed_loop_8x64_composed_layer"
 	@echo "  make hls_cosim_closed_loop_8x64_composed_layer"
@@ -124,6 +128,22 @@ hls_cosim_control:
 hls_csim_nk:
 	scripts/run_vitis_hls.sh tcl/run_csim_compute_core_8x64_nk.tcl
 	scripts/run_vitis_hls.sh tcl/run_csim_control_cache_8x64_nk.tcl
+
+test_resident_attention_q214:
+	$(CXX) -std=c++14 -O0 -Wno-unknown-pragmas \
+		-Iinclude -I$(XILINX_HLS)/include \
+		tests/resident_probability_buffer_tb.cpp kernel/mm_controller.cpp \
+		-o /tmp/llm_accel_resident_probability_buffer_tb
+	/tmp/llm_accel_resident_probability_buffer_tb
+
+test_q214_payload_golden:
+	scripts/test_q214_payload_golden.sh
+
+test_qwen3b_e2e_plan:
+	scripts/test_qwen3b_e2e_plan.sh
+
+verify_q214_resident_release:
+	scripts/verify_q214_resident_release.sh
 
 hls_csim_closed_loop_8x64_resident_layer:
 	HLS_CSIM_ONLY=1 scripts/run_vitis_hls.sh tcl/run_cosim_closed_loop_8x64_resident_layer.tcl

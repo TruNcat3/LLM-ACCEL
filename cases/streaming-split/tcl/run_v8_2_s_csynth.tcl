@@ -1,4 +1,4 @@
-# V8-2_s 综合 (stream-weight 版, 确认 II=1 + 为 cosim 生成 RTL)
+# V8-2_s synthesis (stream-weight version): verify II=1 and generate RTL for co-simulation.
 open_project qkv_tile_kernel_cc_qwen_small_core_v8_2_s -reset
 set_top qkv_tile_kernel_cc_qwen_small_core_v8_2_s
 add_files kernel/qkv_tile_kernel_cc_qwen_small_core_v8_2_s.cpp
@@ -9,15 +9,15 @@ config_compile -name_max_length 256
 config_rtl -reset control
 
 puts "=========================================="
-puts "V8-2_s 综合 (stream-weight, 路线2)"
-puts "目标: compute_tiles II=1 + weight_stream 加载可综合"
+puts "V8-2_s synthesis (stream-weight, design path 2)"
+puts "Goal: compute_tiles II=1 with synthesizable weight_stream loading"
 puts "=========================================="
 
 csynth_design
 
 if {[file exists qkv_tile_kernel_cc_qwen_small_core_v8_2_s/csynth_solution/syn/report/csynth.rpt]} {
-    puts "✅ V8-2_s 综合完成!"
+    puts "V8-2_s synthesis completed successfully."
 } else {
-    puts "❌ V8-2_s 综合失败!"
+    puts "V8-2_s synthesis failed."
 }
 exit

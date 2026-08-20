@@ -8,6 +8,22 @@ fi
 
 cd "$(dirname "$0")/.."
 
+# Allow long-running/reproducible launchers to pin the toolchain explicitly
+# instead of inheriting whichever Vitis release a login shell happened to
+# source.  Existing callers retain their current environment when the variable
+# is unset.
+if [ -n "${VITIS_ENV_SCRIPT:-}" ]; then
+    if [ ! -r "${VITIS_ENV_SCRIPT}" ]; then
+        echo "HLS launcher: environment script not found: ${VITIS_ENV_SCRIPT}" >&2
+        exit 66
+    fi
+    # Vendor setup scripts are intentionally quiet in experiment logs; the
+    # resolved executable below records the effective toolchain unambiguously.
+    source "${VITIS_ENV_SCRIPT}" >/dev/null 2>&1
+fi
+
+echo "HLS launcher: vitis_hls=$(readlink -f "$(command -v vitis_hls)")" >&2
+
 tcl_script="$1"
 if [ ! -f "$tcl_script" ]; then
     echo "HLS launcher: TCL script not found: $tcl_script" >&2

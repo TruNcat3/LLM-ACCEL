@@ -58,7 +58,7 @@ Each compute CU contains an 8-row by 64-column MAC organization:
   output-column range.
 
 The array shape intentionally exposes the decode/prefill distinction. A single
-decode token activates one of eight rows, whereas an 8-token prefill block can
+decode token activates one of eight rows, whereas an 8-row prefill block can
 fill all rows. Consequently, decode results report both full-array utilization
 and utilization normalized to the one-row shape limit.
 
@@ -83,6 +83,11 @@ The regular packet boundary replaces an earlier fine-grained control style.
 It reduces cross-kernel control networks, but it does not by itself solve
 internal reduction dependencies, fan-out, or placement congestion. Timing and
 routing must therefore be assessed separately from interface width.
+
+The packet ABI is profile independent, but the compute service-loop bound is
+not: it scales with the maximum number of attention tiles in one launch. Full
+2048-position builds therefore synthesize the compute and controller kernels
+with the same model profile instead of reusing a shorter-context XO.
 
 ## 5. Controller memory hierarchy
 
@@ -270,7 +275,7 @@ schedule. Key differences from Case 1:
 | Controller style | Resident loop (attention/KV inline) | **Dataflow DAG** (dispatch→input/output_path) |
 | Schedule | Hardcoded layer loop | **operator_program** (flat uint32, reconfigurable) |
 | Accumulate | Internal wave scheduling | **op_program accumulate sequence** (caller-driven) |
-| Decode throughput | ~11 token/s (est.) | **~50 token/s** (csynth est.) |
+| Decode throughput | ~11 token/s (estimate) | **~50 token/s** (analytical HLS-schedule projection) |
 
 Case 2 demonstrates that a **fixed compute core** can serve arbitrary LLM
 dimensions through operator-program scheduling, achieving ~7× speedup over

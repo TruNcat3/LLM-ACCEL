@@ -12,7 +12,7 @@ host_log="$(realpath "$1")"
 build_dir="$(realpath "$2")"
 output_dir="$(realpath -m "$3")"
 target_mhz="${4:-200}"
-xsim_mhz="${5:-300}"
+requested_xsim_mhz="${5:-}"
 release_nonfinal="${6:-1}"
 
 if [ ! -s "${host_log}" ]; then
@@ -27,12 +27,17 @@ if [ -e "${output_dir}" ]; then
     echo "Refusing to overwrite archive path: ${output_dir}" >&2
     exit 73
 fi
-for value in "${target_mhz}" "${xsim_mhz}" "${release_nonfinal}"; do
+for value in "${target_mhz}" "${release_nonfinal}"; do
     if ! [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
         echo "Expected a non-negative numeric argument, got: ${value}" >&2
         exit 2
     fi
 done
+if [ -n "${requested_xsim_mhz}" ] &&
+   ! [[ "${requested_xsim_mhz}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "Expected a non-negative XSim frequency, got: ${requested_xsim_mhz}" >&2
+    exit 2
+fi
 if [ "${release_nonfinal}" != "0" ] && [ "${release_nonfinal}" != "1" ]; then
     echo "RELEASE_NONFINAL_BLOCKS must be 0 or 1" >&2
     exit 2
@@ -96,6 +101,22 @@ for input in "${host_exe}" "${xclbin}" "${emconfig}"; do
         exit 66
     fi
 done
+
+recorded_xsim_mhz="$(metadata xclbin_kernel_clock_mhz)"
+if [ -z "${recorded_xsim_mhz}" ]; then
+    recorded_xsim_mhz="${target_mhz}"
+fi
+if ! [[ "${recorded_xsim_mhz}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "Host log contains an invalid XCLBIN kernel clock: ${recorded_xsim_mhz}" >&2
+    exit 65
+fi
+xsim_mhz="${requested_xsim_mhz:-${recorded_xsim_mhz}}"
+if ! awk -v requested="${xsim_mhz}" -v recorded="${recorded_xsim_mhz}" \
+    'BEGIN { difference = requested - recorded; if (difference < 0) difference = -difference; exit difference <= 0.001 ? 0 : 1 }'
+then
+    echo "Requested XSim frequency ${xsim_mhz} MHz does not match the logged XCLBIN KERNEL_CLK ${recorded_xsim_mhz} MHz" >&2
+    exit 65
+fi
 
 simulation_dir="$(awk '
     /Path of the simulation directory[[:space:]]*:/ {

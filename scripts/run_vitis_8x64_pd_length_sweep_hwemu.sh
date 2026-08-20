@@ -16,7 +16,7 @@ usage() {
     echo "  --build-dir DIR       Existing prefill-layer hw_emu build"
     echo "  --profile NAME        Host/kernel profile (default: qwen-layer-long)"
     echo "  --lengths CSV         Context lengths (default: 64,256,512,1024)"
-    echo "  --phase p|d|pd        Run final 8-token P block, next-token D, or both"
+    echo "  --phase p|d|pd        Run final 8-row P block, next-token D, or both"
     echo "  --seed N              Random model/KV seed"
     echo "  --timeout SECONDS     Per-case host timeout"
     echo "  --dry-run             Print the generated cases without running"

@@ -3744,14 +3744,26 @@ static void emit_cc8_attention_pv_packet_inputs(
                  row < MM_STREAM_8X64_TOKENS;
                  row++) {
                 #pragma HLS unroll
-                activation0.data[row] =
-                    row < GQA_GROUP_SIZE ?
-                    p0.value[row][pos] :
-                    fm_t(0);
-                activation1.data[row] =
-                    row < GQA_GROUP_SIZE ?
-                    p1.value[row][pos] :
-                    fm_t(0);
+                fm_t probability0 = fm_t(0);
+                fm_t probability1 = fm_t(0);
+                if (row < GQA_GROUP_SIZE) {
+                    // Preserve the Q2.14 probability bits in the existing
+                    // 16-bit activation payload.  The compute CU interprets
+                    // those bits as Q8.8 (64x larger), and the PV task applies
+                    // the reciprocal scale at result conversion.
+                    probability0.range(fm_t::width - 1, 0) =
+                        p0.value[row][pos].range(
+                            attention_prob_t::width - 1,
+                            0
+                        );
+                    probability1.range(fm_t::width - 1, 0) =
+                        p1.value[row][pos].range(
+                            attention_prob_t::width - 1,
+                            0
+                        );
+                }
+                activation0.data[row] = probability0;
+                activation1.data[row] = probability1;
             }
 
             const unsigned int panel_index =
@@ -4932,7 +4944,7 @@ static void compute_cc8_resident_flash_probabilities_one_core(
     const cc8_attention_buffer_t& scores,
     fm_t online_max[MM_STREAM_8X64_TOKENS],
     fm_accum_t online_sum[MM_STREAM_8X64_TOKENS],
-    fm_t old_scale[MM_STREAM_8X64_TOKENS],
+    attention_prob_t old_scale[MM_STREAM_8X64_TOKENS],
     unsigned int tile_len
 ) {
     #pragma HLS inline off
@@ -4956,16 +4968,19 @@ static void compute_cc8_resident_flash_probabilities_one_core(
                 }
             }
 
-            const fm_t row_old_scale =
-                cc8_exp_xilinx(online_max[row] - row_max);
+            const attention_prob_t row_old_scale =
+                cc8_exp_attention_probability(
+                    online_max[row] - row_max
+                );
             fm_accum_t tile_sum = fm_accum_t(0);
             for (unsigned int elem = 0; elem < CC8_ATTN_TILE; elem++) {
                 #pragma HLS pipeline II=1
-                fm_t probability = fm_t(0);
+                attention_prob_t probability = attention_prob_t(0);
                 if (elem < tile_len) {
                     const fm_t score =
                         read_cc8_gbuf_value(scores, row, elem);
-                    probability = cc8_exp_xilinx(score - row_max);
+                    probability =
+                        cc8_exp_attention_probability(score - row_max);
                     tile_sum += fm_accum_t(probability);
                 }
                 probabilities.value[row][elem] = probability;
@@ -4975,7 +4990,7 @@ static void compute_cc8_resident_flash_probabilities_one_core(
                 online_sum[row] * fm_accum_t(row_old_scale) + tile_sum;
             online_max[row] = row_max;
         } else {
-            old_scale[row] = fm_t(0);
+            old_scale[row] = attention_prob_t(0);
         }
     }
 }
@@ -5537,8 +5552,8 @@ static unsigned int run_cc8_resident_decode_attention(
 
     fm_t online_max0[MM_STREAM_8X64_TOKENS];
     fm_t online_max1[MM_STREAM_8X64_TOKENS];
-    fm_t old_scale0[MM_STREAM_8X64_TOKENS];
-    fm_t old_scale1[MM_STREAM_8X64_TOKENS];
+    attention_prob_t old_scale0[MM_STREAM_8X64_TOKENS];
+    attention_prob_t old_scale1[MM_STREAM_8X64_TOKENS];
     fm_accum_t online_sum0[MM_STREAM_8X64_TOKENS];
     fm_accum_t online_sum1[MM_STREAM_8X64_TOKENS];
     cc8_flash_accumulator_t acc0;
@@ -5670,8 +5685,16 @@ static unsigned int run_cc8_resident_decode_attention(
                 old_scale1,
                 current_tile_len
             );
-            scale_cc8_flash_accumulator_one_core(acc0, old_scale0);
-            scale_cc8_flash_accumulator_one_core(acc1, old_scale1);
+            scale_cc8_prefill_flash_accumulator_one_core(
+                acc0,
+                old_scale0,
+                GQA_GROUP_SIZE
+            );
+            scale_cc8_prefill_flash_accumulator_one_core(
+                acc1,
+                old_scale1,
+                GQA_GROUP_SIZE
+            );
 
             for (unsigned int output_wave = 0;
                  output_wave < ceildiv(
@@ -5681,7 +5704,7 @@ static unsigned int run_cc8_resident_decode_attention(
                  output_wave++) {
                 if (output_wave < output_waves) {
                     cu8_task_t pv_task = build_cc8_compute_task(
-                        CU8_MODE_MM,
+                        CU8_MODE_MM_SCALE,
                         current_tile_len,
                         GQA_GROUP_SIZE,
                         MM_STREAM_8X64_OUTPUTS,
@@ -5690,6 +5713,7 @@ static unsigned int run_cc8_resident_decode_attention(
                         output_wave,
                         false
                     );
+                    pv_task.output_scale = fm_t(1.0 / 64.0);
                     core0_task_stream.write(pv_task);
                     core1_task_stream.write(pv_task);
                     emit_cc8_attention_pv_packet_inputs(

@@ -1,0 +1,5 @@
+profile	design	instances	bram18	dsp	ff	lut	hls_estimated_period_ns	full_u50_bram_percent	full_u50_dsp_percent	full_u50_ff_percent	full_u50_lut_percent	evidence
+qwen-layer	resident_q214_controller	1	1212	123	468481	453487	3.746	45.09	2.07	26.87	52.02	HLS_estimate_not_routed
+qwen-layer	exact_compute_cu	1	48	677	197555	117643	2.433	1.79	11.37	11.33	13.50	HLS_estimate_not_routed
+qwen-layer	status_sink	1	0	0	4867	8532	2.433	0.00	0.00	0.28	0.98	HLS_estimate_not_routed
+qwen-layer	controller_plus_two_compute_plus_status	1+2+1	1308	1477	868458	697305	NA	48.66	24.82	49.82	80.00	arithmetic_sum_of_HLS_estimates_not_routed

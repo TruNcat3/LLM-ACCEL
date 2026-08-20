@@ -109,13 +109,26 @@ stack followed by final RMSNorm:
 VITIS_8X64_MODEL_PROFILE=qwen-layer \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed
 
+# Reproduce the publication image and the standard-dimension P8 numerical
+# gate. All four variables are part of the artifact identity.
+VITIS_8X64_MODEL_PROFILE=qwen-layer \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+VITIS_8X64_MODEL_PROFILE=qwen-layer \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
+
 # Two layers and Task 20 in the small cross-layer contract profile.
 VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 VITIS_8X64_MODEL_PROFILE=small \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
 
-# Eight-token block prefill, then one decode forward for two sampled tokens.
+# One 8-row prefill block, then one decode forward for two sampled tokens.
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_E2E_TOKENS=0,1,2,3,4,5,6,7 \
@@ -128,19 +141,19 @@ VITIS_8X64_E2E_PREFILL_BLOCK_SIZE=8 \
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
 
 # Verify the same 8-row block through both Small-profile layers (five tasks).
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block-stack
 
 # Verify a 16-token sequence as two P8 blocks. The first block is released
@@ -168,8 +181,9 @@ The full-shape wrapper keeps large temporary HLS/Vitis products outside the
 repository and owns long jobs with `tmux`:
 
 ```bash
-# Reuse the exact compute XO, synthesize the qwen2.5-3b controller/status
-# kernels, link the four-CU HW-Emu image, and compile the matching Host.
+# Synthesize qwen2.5-3b compute/controller/status XOs, link the four-CU
+# HW-Emu image, and compile the matching Host. The compute XO is rebuilt for
+# MAX_SEQ_LEN=2048; reusing the 96-position qwen-layer XO is not safe.
 scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
 
 # Default gate: P8 prompt, two sampled tokens, one real decode forward,
@@ -198,7 +212,7 @@ artifact identities, performance row, manifest, and checksums atomically:
 ```bash
 scripts/archive_vitis_8x64_e2e_run.sh \
   logs/qwen3b_e2e_hwemu_p8_g2_l36_<timestamp>.log \
-  /tmp/llm_fpga_qwen3b_e2e/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
+  /tmp/llm_accel_qwen3b_q214_resident_fix/build.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1 \
   results/qwen3b-e2e-<date>
 ```
 
@@ -210,9 +224,16 @@ run-local CU profile and simultaneously verify the Host contract:
 
 ```bash
 scripts/report_vitis_8x64_e2e_trace.sh \
-  /path/to/profile_kernels.csv qwen2.5-3b 8 2 36 8 200 300 1 \
+  /path/to/profile_kernels.csv qwen2.5-3b 8 2 36 8 200 200 1 \
   /path/to/qwen3b_e2e_host.log
 ```
+
+The profile-matched Qwen2.5-3B wrapper links `KERNEL_CLK` at 200 MHz, so both
+frequency arguments are 200. Earlier Small-profile archives used a distinct
+300-MHz HW-Emu image and retain 300 as their recorded XSim frequency. The new
+launcher reads `KERNEL_CLK` from the XCLBIN into the Host log; the archiver
+uses that value by default and rejects an inconsistent manual frequency. The
+standalone reporter defaults an omitted XSim frequency to the stated target.
 
 The report audits every `COARSE_TASK_PROGRESS` event: Task-18/19/20 opcode and
 phase, layer bounds, active query rows, group start/end, controller duration,
@@ -223,7 +244,23 @@ Standard-dimension single-block numerical closure can be rerun independently
 with:
 
 ```bash
+# Reproduce the raw-payload versus direct-arithmetic discriminator without
+# launching RTL simulation.
+make test_q214_payload_golden
+
+# Compile the full-profile Host and audit its HBM/task execution plan.
+make test_qwen3b_e2e_plan
+
+# Run the complete standard P8 Task-18/19/20 HW-Emu gate.
 scripts/run_vitis_8x64_qwen_exact_p8_tmux.sh
+```
+
+After archiving the passing Host log and run-local CU profile, verify every
+release-critical source hash, raw checksum, validation row, performance row,
+and artifact identity before committing:
+
+```bash
+make verify_q214_resident_release
 ```
 
 The closed-loop finite-FIFO checks are:
@@ -238,7 +275,7 @@ make hls_cosim_closed_loop_8x64_resident_prefill_block
 The CoSim flow keeps deadlock detection enabled and rejects source changes
 between RTL synthesis and simulation by comparing SHA-256 fingerprints.
 
-### Run the 8-token diagnostic prefill
+### Run the 8-row diagnostic prefill block
 
 ```bash
 make vitis_8x64_run_qwen \
@@ -276,7 +313,7 @@ scripts/watch_vitis_8x64_pd_sweep_tmux.sh q214_pd 3600
 ```
 
 The sweep covers P/D at contexts 64, 256, 512, and 1024. Prefill runs the
-final 8-token block at each length; Decode runs one new token. The publication
+final 8-row block at each length; Decode runs one new token. The publication
 artifact and expected tables are in
 [`results/q214-pd-20260811/`](../results/q214-pd-20260811/).
 
@@ -359,24 +396,28 @@ The published standard experiments use deterministic seeds:
 | Resident single-token layer | 20260718 | 2048 outputs match bit-for-bit |
 | Coarse Task 18/19 layer | 20260718 | golden PASS and `intermediate_host_copy=0` |
 | Coarse two-layer Task 18/19 + Task 20 stack | 20260718 | 5/5 tasks; 64 outputs exact |
-| 8-token prefill | 20260722 | final checksum `0xb72a92cb5224f0c7` |
+| 8-row prefill block | 20260722 | final checksum `0xb72a92cb5224f0c7` |
 | Q2.14 P/D length sweep | 20260722 | 8/8 exits zero; Q2.14 max raw error <= 1 |
+| Standard Qwen-layer P8 Task 18/19/20 | 20260718 | 16,384 values exact; 651,621 cycles; intermediate_host_copy=0 |
 
-The 8-token run must also report 48 attention MM tasks and 1536 completed
+The 8-row block run must also report 48 attention MM tasks and 1536 completed
 packets.
 
 ## 7. Generated artifacts
 
-The following are intentionally excluded from the repository:
+The following large generated products are intentionally excluded from the
+repository:
 
-- HLS/Vivado project directories and reports;
+- HLS/Vivado project directories;
 - XO, xclbin, DCP, waveform, and emulator output;
-- executable host binaries and logs;
+- executable Host binaries;
 - model checkpoints and generated weight binaries.
 
-This keeps the repository source-oriented. A publication artifact should
-archive exact generated reports and binaries separately and associate them
-with the cited Git commit.
+Curated text reports, Host logs, and run-local CU profiles needed to reproduce
+published tables are versioned under results/ together with SHA-256 manifests.
+This keeps the repository source-oriented without separating claims from their
+compact raw evidence. Large binaries should be archived separately and
+associated with the cited Git commit and artifact-manifest identities.
 
 ## 8. Case 2: Streaming split architecture
 

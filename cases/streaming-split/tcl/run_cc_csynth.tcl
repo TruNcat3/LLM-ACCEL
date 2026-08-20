@@ -1,4 +1,4 @@
-# control_cache_core 综合 — 复核 512-bit store_out 周期 (8192→~512)
+# control_cache_core synthesis: verify the 512-bit store_out reduction (8192 to about 512 cycles).
 open_project control_cache_core -reset
 set_top control_cache_core
 add_files kernel/control_cache_core.cpp
@@ -9,15 +9,15 @@ config_compile -name_max_length 256
 config_rtl -reset control
 
 puts "=========================================="
-puts "cc 综合 (512-bit store_out 打包写)"
-puts "目标: store_out 从 8192cyc 降到 ~512cyc, 无 II 退化"
+puts "cc synthesis (512-bit packed store_out)"
+puts "Goal: reduce store_out from 8192 to about 512 cycles without II regression"
 puts "=========================================="
 
 csynth_design
 
 if {[file exists control_cache_core/csynth_solution/syn/report/csynth.rpt]} {
-    puts "✅ cc 综合完成!"
+    puts "cc synthesis completed successfully."
 } else {
-    puts "❌ cc 综合失败!"
+    puts "cc synthesis failed."
 }
 exit

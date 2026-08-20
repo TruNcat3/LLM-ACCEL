@@ -55,8 +55,9 @@ costs approximately 7.7k cycles.  P remains efficient because eight query rows
 fill the 8x64 datapath.  D uses only one query row, so its shape-normalized work
 is valid but its physical utilization remains around 12%.
 
-`Active query rows / block = 8` means eight consecutive rows of one sequence, not an
-eight-sequence batch and not an eight-token prompt. For P1024, the measured
+`Active query rows / block = 8` means eight consecutive rows of one sequence,
+not an eight-sequence batch or eight decoded outputs; it also does not assert
+that the complete prompt contains only eight tokens. For P1024, the measured
 block contains positions 1016--1023 and reads a causal KV history of up to 1024
 entries. A complete 1024-token prefill contains 128 such context-dependent
 blocks. Consequently, `target-block token/s` is a one-layer block throughput,

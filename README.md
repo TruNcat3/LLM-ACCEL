@@ -38,7 +38,7 @@ build directories are intentionally excluded.
   per row, and keeps the block resident across decoder layers.
 - **Shape-aware evaluation.** Decode reports both physical-array utilization
   and utilization normalized to its single active token row. Prefill evaluates
-  how an 8-token block fills the complete 8-row datapath.
+  how one 8-row prefill block fills the complete datapath.
 
 ## Architecture at a glance
 
@@ -89,7 +89,8 @@ It is not batch size and it is not the total request length. Prefill uses up to
 eight active rows per block, so a 1024-token prompt contains 128 P8 blocks;
 autoregressive decode has one active query row per forward. Workload labels such
 as `P8+P8` describe the complete sequence of blocks included in that measured
-case.
+case. In generation labels, `P<N>/G<M>` instead denotes a total N-token prompt
+and M sampled tokens; for example, `P16/G1` traverses two 8-row prompt blocks.
 
 Unless explicitly labeled CSim, RTL CoSim, or HLS synthesis, cycle and
 efficiency results in this repository come from Vitis 2022.2 HW Emu CU traces.
@@ -105,6 +106,25 @@ arithmetic is used only as an out-of-band correctness oracle and is never
 counted as accelerator work.
 
 ## Key results
+
+### Standard controller-resident P8 layer
+
+The release configuration executes one standard Qwen-shaped decoder layer as
+three Host-visible coarse tasks while the controller owns all intermediate
+hidden tensors, RoPE, online attention, and KV-cache state. The deterministic
+random-weight P8 HW-Emu gate passes all 16,384 final-hidden values with maximum
+raw error zero and no intermediate Host copy.
+
+| Scope | Active query rows / block | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Task 18 -> Task 19 -> Task 20 | 8 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
+
+The row comes from the common run-local Vitis 2022.2 HW-Emu CU interval for the
+controller, two compute CUs, and status sink. It excludes simulator wall time,
+Host task gaps, setup/migration, and the CPU oracle. It is a standard
+single-layer accelerator measurement, not a 36-layer end-to-end or physical
+board result. Raw evidence and artifact identities are published in the
+[Q2.14 release artifact](results/q214-resident-fix-20260818/).
 
 ### Operator-level Q2.14 diagnostic
 
@@ -126,8 +146,10 @@ head dimension 128.
 | Decode | 512 | 1 | 622,231 | 3.111 ms | 25.45 | 12.43% |
 | Decode | 1024 | 1 | 683,754 | 3.419 ms | 23.77 | 11.61% |
 
-`Active query rows / block = 8` means one full 8-row prefill block, not an eight-token
-prompt. P1024 measures positions 1016--1023 against a causal history of up to
+`Active query rows / block = 8` means one full 8-row prefill block from one
+sequence. It does not assert that the complete prompt contains only eight
+tokens, and it does not mean eight sequences or eight decoded outputs. P1024
+measures positions 1016--1023 against a causal history of up to
 1024 KV entries. A full 1024-token prefill requires 128 context-dependent
 blocks and is not represented by the P1024 latency alone.
 
@@ -158,7 +180,7 @@ passes all 64 final-hidden values exactly with `intermediate_host_copy=0`.
 The block extension passes an 8-row Task-18/19/20 HW-Emu check over 512 values
 (maximum raw error 10 within tolerance 32) and a two-layer P8+G2 composition
 with controller-owned KV and no intermediate host copy. Closed-loop block RTL
-CoSim passes in 25,411 cycles with deadlock detection enabled. These are
+CoSim passes in 25,591 cycles with deadlock detection enabled. These are
 small-shape protocol results; standard Qwen-layer performance is kept
 separate in the [block-prefill artifact](results/block-prefill-20260817/).
 The stronger two-layer P8 stack gate also passes 512 values (maximum raw error
@@ -170,6 +192,9 @@ second block, and passes all 512 tail values against the cross-block CPU golden
 (maximum raw error 10 within tolerance 64). A separate P16/G1 generation run
 and a P11/G1 tail-block run also pass, confirming controller-owned KV progress
 and that eight is a maximum query-block height rather than a fixed batch size.
+The standard Qwen-layer P8 gate also completes Task 18/19/20 with exactly
+16,384/16,384 final-hidden values correct, maximum raw error zero, and a
+651,621-cycle common CU interval at the modeled 200-MHz clock.
 
 ## Decoder schedule
 
@@ -212,6 +237,9 @@ bring-up details.
 ```bash
 export VITIS_ENV_SCRIPT=/path/to/vitis_env_22.sh
 
+# Fast software discriminator for the exact Q2.14-to-PV payload semantics.
+make test_q214_payload_golden
+
 # Closed controller-compute loop; RTL deadlock detection remains enabled.
 make hls_csim_closed_loop_8x64_resident_layer
 scripts/run_hls_resident_layer_cosim.sh
@@ -230,10 +258,28 @@ scripts/build_vitis_8x64_resident_layer_hwemu.sh run
 
 # Host-composed Attention+FFN or full profile stack plus final norm.
 scripts/build_vitis_8x64_resident_layer_hwemu.sh run-composed
+
+# Rebuild the release profile from exactly matched qwen-layer sources and run
+# its full 8-row Task-18/19/20 numerical gate. The dedicated runner below
+# enforces the same profile, bounds, and artifact identity under tmux.
+VITIS_8X64_MODEL_PROFILE=qwen-layer \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
-scripts/build_vitis_8x64_resident_layer_hwemu.sh run-stack
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+scripts/run_vitis_8x64_qwen_exact_p8_tmux.sh
+
+# Small-profile protocol gates remain useful for fast cross-layer regression.
+VITIS_8X64_MODEL_PROFILE=small \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh all
+VITIS_8X64_MODEL_PROFILE=small \
+CC8_RESIDENT_TOKEN_ROWS=8 \
+VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
+  scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block-stack
 
 # Build the long-context Q2.14 profile and run the P/D length sweep.
 VITIS_8X64_MODEL_PROFILE=qwen-layer-long \
@@ -243,7 +289,8 @@ scripts/launch_vitis_8x64_pd_sweep_tmux.sh \
   --build-dir <generated-hw_emu-build> \
   --profile qwen-layer-long --seed 20260722
 
-# Build and launch the full Qwen2.5-3B-shape P8/G2/L36 coarse-task gate.
+# Build profile-matched 2048-position XOs and launch the full
+# Qwen2.5-3B-shape prompt=8/generated=2/layers=36 coarse-task gate.
 scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh all
 scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 ```
@@ -278,9 +325,14 @@ prefill evaluation, expected outputs, and artifact locations.
   HBM-resident composition, CoSim/HW-Emu evidence, and resource cost.
 - [Block-prefill evidence](results/block-prefill-20260817/): exact 8-row CSim,
   RTL CoSim, HW-Emu profiles, and HLS resource summaries.
+- [Controller-resident Q2.14 fix](results/q214-resident-fix-20260818/):
+  bit-accurate probability/PV transport, finite-buffer CoSim, focused P2/P8
+  HW-Emu diagnostics, the standard P8 three-task result, and release-bound
+  artifact identities.
 - **Case 2**: [`cases/streaming-split/`](cases/streaming-split/) — streaming
   split architecture with `operator_program` scheduling, INPUT_DIM=16,
-  4-PC weight multi-bank, ~50 token/s decode (csynth). See
+  4-PC weight multi-bank, and an analytical ~50 token/s decode projection
+  from its HLS schedule. See
   [design](cases/streaming-split/docs/design.md).
 
 ## Scope

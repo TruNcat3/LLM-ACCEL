@@ -35,17 +35,18 @@ No result in this document is a physical-board measurement.
 | Controller C/RTL CoSim | 13 transactions, deadlock detection enabled | PASS |
 | Closed controller-compute CoSim | Finite-depth feedback network | PASS, 6,129 cycles |
 | Resident-layer hw_emu | Full standard layer, random fixed-point weights, position 0 | PASS, 2048 outputs bit exact |
-| 2-token prefill hw_emu | Full standard projections, attention, and FFN | PASS |
-| 8-token prefill hw_emu | Full standard projections, positions 0-7 causal attention, and FFN | PASS |
-| Q2.14 P/D length sweep | Final 8-token P block and next-token D at contexts 64/256/512/1024 | 8/8 PASS |
+| 2-row prefill HW Emu | Full standard projections, attention, and FFN | PASS |
+| 8-row prefill HW Emu | Full standard projections, positions 0-7 causal attention, and FFN | PASS |
+| Q2.14 P/D length sweep | Final 8-row P block and next-token D at contexts 64/256/512/1024 | 8/8 PASS |
 | Coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 7,983 cycles |
 | Coarse-task stack HW Emu | Two layers, five tasks, final norm, no intermediate host copy | PASS, 64 outputs exact |
-| 8-row coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 25,411 cycles |
+| 8-row coarse-task closed-loop RTL CoSim | Task 18 -> Task 19 -> Task 20, finite FIFOs | PASS, 25,591 cycles |
 | 8-row coarse-task HW Emu | Small one-layer block plus final norm | PASS, 512 values, max raw error 10/32 |
 | Two-layer 8-row stack HW Emu | Small P8 through five Task-18/19/20 commands | PASS, 512 values, max raw error 10/64 |
 | Block prompt/decode HW Emu | Small two-layer P8 + G2 task composition | PASS, two forwards/ten tasks |
+| Standard Qwen-layer coarse-task HW Emu | P8 Task 18 -> 19 -> 20, controller-owned KV and hidden state | PASS, 16,384 values exact, 651,621 cycles |
 
-The 8-token run completes 48 attention MM tasks and 1536 result packets. Its
+The 8-row block run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
 
 ## 4. Single-token resident layer
@@ -95,7 +96,7 @@ Moving from one to two tiles increases cycles by 1.95x, close to the doubled
 padded work. The low valid-MAC utilization at context 65 reflects one valid
 entry in the second 64-entry tile, not a protocol stall.
 
-## 7. Eight-token prefill baseline
+## 7. Eight-row prefill-block baseline
 
 ### Functional workload
 
@@ -120,7 +121,7 @@ valid causal QK + PV    =     147,456 MAC
 total useful            = 616,710,144 MAC
 ```
 
-| Metric | 2 tokens | 8 tokens | Scaling |
+| Metric | 2 active query rows | 8 active query rows | Scaling |
 | --- | ---: | ---: | ---: |
 | Active time | 2806.029 us | 3176.997 us | 1.132x |
 | Active cycles | 561,206 | 635,399 | 1.132x |
@@ -128,6 +129,10 @@ total useful            = 616,710,144 MAC
 | Throughput | 54.94 GMAC/s | **194.12 GMAC/s** | **3.53x** |
 | Two-CU utilization | 26.82% | **94.78%** | +67.96 points |
 | Amortized time/token/layer | 1403.0 us | **397.1 us** | 3.53x faster |
+
+Both columns are single-sequence prefill blocks evaluated within one layer.
+They are not request batch sizes and do not mean that autoregressive decode
+produces two or eight tokens per forward. Decode uses one active query row.
 
 Vector operations consume active cycles but are not added to useful MAC.
 Causal attention counts only valid entries, not padded tile operations. The
@@ -153,8 +158,10 @@ can approach peak utilization. The controller must be specialized into a
 resident static prefill task to remove mutually exclusive diagnostic paths and
 duplicated GBUF state.
 
-For comparison, the resource-pruned resident `.cw1` controller estimates
-3.746 ns, 488 BRAM18, 90 DSP, 421,880 FF, and 390,283 LUT.
+For comparison, the preceding single-row resource-pruned `.cw1` controller
+estimated 3.746 ns, 488 BRAM18, 90 DSP, 421,880 FF, and 390,283 LUT. It is a
+historical baseline, not the current 8-row Q2.14 release controller summarized
+in Section 10.
 
 ## 8. Q2.14 multi-length P/D sweep
 
@@ -212,6 +219,21 @@ status is returned until the final hidden migration.
 | Persistent Norm/RoPE/KV focused test | PASS, no row aliasing and banked cache layout exact |
 | Small two-layer/five-task HW Emu | PASS, 64/64 exact, no intermediate host copy |
 | Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV |
+| Standard Qwen-layer P8 Task-18/19/20 HW Emu | PASS, 16,384/16,384 exact, no intermediate Host copy |
+
+The standard-dimension release gate is distinct from the small residency tests:
+
+| Scope | Active query rows | Layers | Tasks | Cycles at 200 MHz | Latency | Useful GMAC/s | Physical efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Task 18 -> 19 -> 20 | 8 | 1 | 3 | 651,621 | 3.258 ms | 189.285 | 92.424% |
+
+The linked 200-MHz HW-Emu image reports a common \`3258.106 us\` active interval
+for all four CUs. The deterministic random-weight oracle checks 16,384 output
+values with maximum raw error zero at tolerance 32. The controller owns the KV
+cache, and hidden state is not copied to the Host between the three tasks.
+Useful throughput uses 616,710,144 MAC and the two-CU physical peak of
+1,024 MAC/cycle. The raw log and trace are archived under
+[\`results/q214-resident-fix-20260818/\`](../results/q214-resident-fix-20260818/).
 
 The small profile validates cross-layer HBM residency rather than Qwen-layer
 throughput:
@@ -262,21 +284,23 @@ the partial-block path that a non-multiple-of-eight prompt requires.
 
 The combined results support three conclusions:
 
-1. **The compute datapath is not intrinsically underutilized.** An 8-token
+1. **The compute datapath is not intrinsically underutilized.** An 8-row
    block reaches 94.78% useful-MAC efficiency.
 2. **Decode is shape limited.** Its one active row reaches 88.09% of the
    row-normalized reference while only using 11.01% of the physical array.
 3. **The resident block specialization closes the functional architecture but
    raises the physical resource risk.** Its controller plus two exact compute
-   CUs estimates 1,300 BRAM18, 1,465 DSP, 863,825 FF, and 689,033 LUT (about
-   48%, 25%, 50%, and 79% of the full U50). The controller alone exceeds one
-   SLR's LUT estimate, so place-and-route remains a required gate.
+   CUs plus the status sink estimates 1,308 BRAM18, 1,477 DSP, 868,458 FF, and
+   697,305 LUT (about 49%, 25%, 50%, and 80% of the full U50). The controller
+   alone exceeds one SLR's LUT estimate, so place-and-route remains a required
+   gate.
 
 ## 11. Current experimental boundaries
 
 - The coarse-task runtime now replays a prompt in blocks of up to eight
   consecutive query rows. A small two-layer prompt/decode HW-Emu contract is
-  complete; standard-shape multi-block and checkpoint-level runs remain open.
+  complete, and the standard-shape single-layer P8 gate is complete;
+  standard-shape multi-block and checkpoint-level runs remain open.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
@@ -290,13 +314,13 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Complete the standard Qwen-layer 8-row Task-18/19/20 HW-Emu correctness and
-   cycle gate using the exact block-prefill image.
-2. Exercise the multi-layer block-composition path with the full model shape,
+1. Exercise the multi-layer block-composition path with the full model shape,
    recording both kernel-active cycles and host-observed sequence latency.
-3. Reduce repeated host task issue by packaging reusable task programs while
+2. Add an explicit numerical oracle for the prompt-plus-decode generation path,
+   including cross-block and cross-position KV state.
+3. Reduce repeated Host task issue by packaging reusable task programs while
    preserving the explicit Task-18/19/20 boundary and controller-owned state.
-4. Add accelerator-side vocabulary projection or quantify the host LM-head
+4. Add accelerator-side vocabulary projection or quantify the Host LM-head
    boundary separately from the decoder-stack measurement.
 5. After functional closure, evaluate multi-request row batching for M=1
    decode and repeat physical placement/resource checks.

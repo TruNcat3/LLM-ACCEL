@@ -1,25 +1,31 @@
 /**
  * ============================================================================
- * control_cache_core — operator_program 编排器 (dataflow + 512-bit store)
+ * control_cache_core -- operator_program orchestrator (dataflow + 512-bit store)
  * ============================================================================
- * op_loop + 512-bit 打包写 + dataflow 任务级流水。
- * cc 拆成 3 个 dataflow process, 经 hls::stream 连成标准 DAG (无 array 参数, 无死锁):
+ * op_loop + 512-bit packed writes + task-level dataflow pipeline.
+ * The controller is split into three dataflow processes connected as a canonical
+ * DAG through hls::stream (no array arguments and no deadlock):
  *
  *   cc_dispatch ──iparam──▶ cc_input_path  (load_in + send ctrl/weight/input)
- *        │                   │  (独占 gmem0 hidden_in + gmem2 weight_hbm)
+ *        |                   |  (exclusive gmem0 hidden_in + gmem2 weight_hbm)
  *        └──oparam──▶ cc_output_path (collect + store_out 512-bit)
- *                            │  (独占 gmem1 hidden_out)
- *   cc_input_path ⇄ cc_output_path 经 V8-2_s stream 天然同步 (外部 kernel)
+ *                            |  (exclusive gmem1 hidden_out)
+ *   cc_input_path and cc_output_path synchronize naturally through the external
+ *   V8-2_s kernel streams.
  *
- * 任务级流水: store_out(op) 与 load_in+send(op+1) 重叠 (经 dispatch stream 喂参数)。
+ * Task-level pipeline: store_out(op) overlaps load_in+send(op+1), with parameters
+ * supplied through the dispatch streams.
  *
- * dataflow 规范性 (绕开已知陷阱):
- *   - canonical region: 只含函数调用 + 内部 hls::stream (无 array 参数 → 无 214-114/200-471)
- *   - op 参数经 stream 分发 (非 array) → 无 200-1449 (吞吐) / 200-1614 (cosim 死锁)
- *   - 3 process 各独占 m_axi bundle: dispatch=gmem3, input=gmem0/gmem2, output=gmem1
- *     → 无 bundle 共享 (HLS 200-984 根因)
+ * Canonical dataflow structure (avoids known tool pitfalls):
+ *   - the region contains only function calls and internal hls::stream objects;
+ *     no array arguments, avoiding 214-114/200-471;
+ *   - operation parameters are distributed by streams rather than arrays,
+ *     avoiding 200-1449 throughput and 200-1614 co-simulation deadlock issues;
+ *   - each process owns its m_axi bundle: dispatch=gmem3, input=gmem0/gmem2,
+ *     and output=gmem1, avoiding bundle sharing (the cause of HLS 200-984).
  *
- * 回退点: kernel/control_cache_core_packed_v1.cpp.bak (打包写版, 无 dataflow, 已三关验证)
+ * Fallback: kernel/control_cache_core_packed_v1.cpp.bak (packed writes without
+ * dataflow; previously validated through all three gates).
  * ============================================================================
  */
 #include "../include/control_cache_packets.hpp"
@@ -30,18 +36,19 @@
 #define MAX_TOKENS        2
 #define MAX_OPS           512
 
-// op 参数包 (dispatch → input/output path 经 hls::stream 分发)
+// Operation-parameter packet distributed from dispatch to the input/output paths.
 struct op_param_t {
-    unsigned int ctrl;     // op_ctrl (激活+bias, 透传 V8-2_s)
+    unsigned int ctrl;     // op_ctrl (activation + bias, forwarded to V8-2_s)
     unsigned int woff;     // weight_offset
     unsigned int isrc;     // input_source
     unsigned int ioff;     // input_hbm_offset
-    unsigned int ofinal;   // FINALIZE 标志 (ctrl & 0x80)
+    unsigned int ofinal;   // FINALIZE flag (ctrl & 0x80)
     unsigned int odest;    // output_dest
-    unsigned int ooff;     // output_hbm_offset (fm_accum_t 元素语义)
+    unsigned int ooff;     // output_hbm_offset in fm_accum_t elements
 };
 
-// ---- cc_dispatch: 读 op_program (独占 gmem3), 每个op打包分发到 iparam/oparam stream ----
+// ---- cc_dispatch: read op_program from exclusive gmem3 and distribute each
+// operation to the iparam/oparam streams. ----
 static void cc_dispatch(const unsigned int* op_program, unsigned int num_ops,
                         hls::stream<op_param_t>& iparam_stream,
                         hls::stream<op_param_t>& oparam_stream) {
@@ -62,8 +69,8 @@ static void cc_dispatch(const unsigned int* op_program, unsigned int num_ops,
     }
 }
 
-// ---- cc_input_path: 从 iparam 收 op 参数 + load_in + send ctrl/weight/input ----
-//    独占 gmem0 hidden_in + gmem2 weight_hbm
+// ---- cc_input_path: receive parameters from iparam, load input, and send
+// control/weight/input. Owns gmem0 hidden_in and gmem2 weight_hbm. ----
 static void cc_input_path(
     const fm_t* hidden_in,
     const wt_block_t* weight_hbm_0, const wt_block_t* weight_hbm_1,
@@ -86,7 +93,8 @@ static void cc_input_path(
     for (unsigned int op = 0; op < num_ops; op++) {
         op_param_t p = iparam_stream.read();
 
-        // (a) 输入载入 (复用逻辑: SRC_HBM 且首op/输入变了才 reload)
+        // (a) Load input. Reload only for SRC_HBM when this is the first
+        // operation or the input address changed.
         if (p.isrc == SRC_HBM) {
             bool need_reload = (op == 0) || (p.isrc != prev_src) || (p.ioff != prev_off);
             if (need_reload) {
@@ -102,11 +110,12 @@ static void cc_input_path(
             prev_src = p.isrc; prev_off = p.ioff;
         }
 
-        // (b) 发 ctrl (op_ctrl 透传 V8-2_s), 必须在 weight/input 前
+        // (b) Send ctrl before weight/input; op_ctrl is forwarded to V8-2_s.
         ctrl_axis cp; cp.data = p.ctrl; cp.last = (op == num_ops - 1); cp.keep = -1;
         ctrl_stream.write(cp);
 
-        // (c) 发 weight (STEP 2: 4 m_axi 并行 + 4 stream, 16 拍 4× 带宽; 每 m_axi 16 wt_block)
+        // (c) Send weights: four parallel m_axi ports and four streams deliver
+        // 16 cycles at 4x bandwidth, with 16 wt_block values per m_axi port.
         send_weight:
         for (unsigned int b = 0; b < WT_PER_V82 / 4; b++) {
             #pragma HLS pipeline II=1
@@ -124,7 +133,8 @@ static void cc_input_path(
             weight_stream_3.write(wp3);
         }
 
-        // (d) 发 input (512-bit wide: 每 tile 1 packet, 8 lane × INPUT_DIM; broadcast 同 input)
+        // (d) Send input: one 512-bit packet per tile, carrying
+        // 8 lanes x INPUT_DIM; broadcast the same input to all lanes.
         send_input:
         for (unsigned int t = 0; t < ntok; t++) {
             for (unsigned int tile = 0; tile < NUM_TILES; tile++) {
@@ -134,7 +144,7 @@ static void cc_input_path(
                     #pragma HLS unroll
                     for (unsigned int i = 0; i < INPUT_DIM; i++) {
                         #pragma HLS unroll
-                        p.data[lane][i] = gbuf_in[t][tile][i];   // broadcast: 8 lane 同 input (weight_stationary)
+                        p.data[lane][i] = gbuf_in[t][tile][i];   // weight-stationary broadcast to 8 lanes
                     }
                 }
                 in_pkt_axis ip; ip.data = pack_in_wide(p); ip.last = (t == ntok-1 && tile == NUM_TILES-1);
@@ -144,8 +154,8 @@ static void cc_input_path(
     }
 }
 
-// ---- cc_output_path: 从 oparam 收 op 参数 + collect + store_out (512-bit 打包写) ----
-//    独占 gmem1 hidden_out
+// ---- cc_output_path: receive parameters from oparam, collect results, and
+// store 512-bit packed output through exclusive gmem1 hidden_out. ----
 static void cc_output_path(
     ap_uint<512>* hidden_out,
     hls::stream<op_param_t>& oparam_stream,
@@ -161,9 +171,10 @@ static void cc_output_path(
     op_op_loop:
     for (unsigned int op = 0; op < num_ops; op++) {
         op_param_t p = oparam_stream.read();
-        // 仅 FINALIZE op 收+写 (V8-2_s accumulate 模式不写 output stream, 避免流死锁)
+        // Only FINALIZE operations collect and write output. Accumulation-mode
+        // V8-2_s operations do not write the output stream, preventing deadlock.
         if (p.ofinal) {
-            // (e) 收 output → gbuf_out_w (512-bit 字打包)
+            // (e) Receive output into the 512-bit packed gbuf_out_w.
             collect:
             for (unsigned int t = 0; t < ntok; t++) {
                 for (unsigned int pkt = 0; pkt < PKT_PER_TOKEN; pkt++) {
@@ -184,7 +195,8 @@ static void cc_output_path(
                     }
                 }
             }
-            // (f) 路由输出 (512-bit 打包写: ooff 保持 host 的 fm_accum_t 语义, /16 转字偏移)
+            // (f) Route output using 512-bit packed writes. ooff remains in
+            // Host-visible fm_accum_t elements and is divided by 16 for word addressing.
             if (p.odest == DST_HBM) {
                 store_out:
                 for (unsigned int t = 0; t < ntok; t++) {
@@ -212,9 +224,9 @@ extern "C" void control_cache_core(
     hls::stream<weight_axis>&  weight_stream_3,
     hls::stream<out_lo_axis>& from_compute_0_lo,
     hls::stream<out_hi_axis>& from_compute_0_hi,
-    hls::stream<ctrl_axis>&   ctrl_stream,          // cc → V8-2_s: 每 op 1 个 op_ctrl
+    hls::stream<ctrl_axis>&   ctrl_stream,          // cc -> V8-2_s: one op_ctrl per operation
 
-    const unsigned int* op_program,                 // m_axi: num_ops×6 uint (op_task_t 平坦)
+    const unsigned int* op_program,                 // m_axi: flat num_ops x 6 uint op_task_t array
     unsigned int num_ops,
     unsigned int num_tokens
 ) {
@@ -248,13 +260,15 @@ extern "C" void control_cache_core(
     if (ntok == 0) ntok = 1;
     if (ntok > MAX_TOKENS) ntok = MAX_TOKENS;
 
-    // dataflow 内部 stream: dispatch → input_path / output_path (op 参数分发)
+    // Internal dataflow streams distribute operation parameters from dispatch
+    // to the input and output paths.
     hls::stream<op_param_t> iparam_stream("iparam_stream");
     hls::stream<op_param_t> oparam_stream("oparam_stream");
     #pragma HLS stream variable=iparam_stream depth=4
     #pragma HLS stream variable=oparam_stream depth=4
 
-    // canonical dataflow region: 3 函数调用 + 内部 stream (无 array 参数, 无死锁)
+    // Canonical dataflow region: three function calls plus internal streams,
+    // with no array arguments and no deadlock.
     #pragma HLS dataflow
     cc_dispatch(op_program, num_ops, iparam_stream, oparam_stream);
     cc_input_path(hidden_in, weight_hbm_0, weight_hbm_1, weight_hbm_2, weight_hbm_3,

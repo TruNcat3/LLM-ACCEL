@@ -437,6 +437,12 @@ struct composed_layer_result_t {
     unsigned int task_count = 0;
 };
 
+struct composed_task_diagnostic_result_t {
+    tensor_t output;
+    decoded_status_t status;
+    double controller_ms = -1.0;
+};
+
 struct command_line_t {
     std::string mode = "plan";
     std::string profile = "small";
@@ -1167,6 +1173,85 @@ public:
             hidden.rows,
             shape_.hidden_size
         );
+    }
+
+    composed_task_diagnostic_result_t run_composed_task_diagnostic(
+        const tensor_t& hidden,
+        operator_kind_t op,
+        unsigned int layer,
+        unsigned int position
+    ) {
+        if (
+            hidden.rows == 0 ||
+            hidden.rows > kMaxTokensPerLaunch ||
+            hidden.cols != shape_.hidden_size ||
+            layer >= shape_.num_layers ||
+            position >= shape_.max_seq_len ||
+            position + hidden.rows > shape_.max_seq_len ||
+            (op != kOpAttentionSublayer &&
+             op != kOpFfnSublayer &&
+             op != kOpFinalNorm)
+        ) {
+            throw std::runtime_error(
+                "composed diagnostic task shape or operator mismatch"
+            );
+        }
+
+        ensure_persistent_auxiliary_state();
+        clear_feature_data();
+        pack_feature(hidden, data_words_[2], data_words_[3]);
+        std::vector<cl::Memory> inputs = {
+            data_buffers_[2],
+            data_buffers_[3],
+            status_buffer_
+        };
+        check_cl(
+            transfer_queue_.enqueueMigrateMemObjects(inputs, 0),
+            "migrate composed diagnostic input"
+        );
+        check_cl(
+            transfer_queue_.finish(),
+            "finish composed diagnostic input migration"
+        );
+
+        composed_task_diagnostic_result_t result;
+        try {
+            bind_controller_data_ports(0, 1, 2, 3);
+            result.status = execute_bound_resident_task(
+                op,
+                layer,
+                position,
+                hidden.rows
+            );
+            result.controller_ms = last_controller_ms_;
+            check_status(op, result.status);
+            std::vector<cl::Memory> outputs = {
+                data_buffers_[0],
+                data_buffers_[1]
+            };
+            check_cl(
+                transfer_queue_.enqueueMigrateMemObjects(
+                    outputs,
+                    CL_MIGRATE_MEM_OBJECT_HOST
+                ),
+                "migrate composed diagnostic output"
+            );
+            check_cl(
+                transfer_queue_.finish(),
+                "finish composed diagnostic output migration"
+            );
+        } catch (...) {
+            bind_controller_data_ports(0, 1, 2, 3);
+            throw;
+        }
+        bind_controller_data_ports(0, 1, 2, 3);
+        result.output = unpack_feature(
+            data_words_[0],
+            data_words_[1],
+            hidden.rows,
+            shape_.hidden_size
+        );
+        return result;
     }
 
     composed_layer_result_t run_composed_decoder_stack(
@@ -3514,10 +3599,14 @@ tensor_t golden_tiled_flash_attention_wide_rescale_pv(
 }
 
 // Production Q2.14 online-softmax model.  The existing 16-bit activation
-// packet carries these raw probability bits; the compute CU interprets them
-// as Q8.8 and applies output_scale=1/64, which is mathematically identical to
-// the Q2.14 multiply below without changing the stream ABI.
-tensor_t golden_tiled_flash_attention_q2_14(
+// packet carries the raw probability bits.  The compute CU interprets those
+// bits as Q8.8, accumulates the resulting 64x products in four banks, applies
+// output_scale=1/64 to the bank sum, and only then narrows the result to
+// Q8.8.  Reproduce that exact conversion order here: direct Q2.14
+// multiplication is equivalent in real arithmetic but not after the fixed-
+// point product, accumulator, and result-packet quantizers.
+template <bool kRawPayloadSemantics>
+tensor_t golden_tiled_flash_attention_q2_14_impl(
     const tensor_t& query,
     const tensor_t& k_cache,
     const tensor_t& v_cache
@@ -3600,8 +3689,18 @@ tensor_t golden_tiled_flash_attention_q2_14(
                     const golden_weight_t value = golden_weight_t(
                         fixed_from_raw<golden_fm_t>(v_tile.at(pos, elem))
                     );
-                    const golden_accum_t product =
-                        golden_accum_t(probability * value);
+                    golden_accum_t product(0);
+                    if (kRawPayloadSemantics) {
+                        golden_fm_t payload;
+                        payload.range(golden_fm_t::width - 1, 0) =
+                            probability.range(
+                                golden_probability_t::width - 1,
+                                0
+                            );
+                        product = golden_accum_t(payload * value);
+                    } else {
+                        product = golden_accum_t(probability * value);
+                    }
                     const unsigned int phase = pos & 3u;
                     if (pos < 4) {
                         banks[phase] = product;
@@ -3609,9 +3708,12 @@ tensor_t golden_tiled_flash_attention_q2_14(
                         banks[phase] += product;
                     }
                 }
-                const golden_fm_t tile_value = golden_fm_t(
-                    banks[0] + banks[1] + banks[2] + banks[3]
-                );
+                golden_accum_t tile_sum =
+                    banks[0] + banks[1] + banks[2] + banks[3];
+                if (kRawPayloadSemantics) {
+                    tile_sum *= golden_accum_t(golden_fm_t(1.0 / 64.0));
+                }
+                const golden_fm_t tile_value = golden_fm_t(tile_sum);
                 accumulator[std::size_t(row) * query.cols + elem] +=
                     golden_accum_t(tile_value);
             }
@@ -3633,6 +3735,26 @@ tensor_t golden_tiled_flash_attention_q2_14(
         }
     }
     return output;
+}
+
+tensor_t golden_tiled_flash_attention_q2_14(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_q2_14_impl<true>(
+        query, k_cache, v_cache
+    );
+}
+
+tensor_t golden_tiled_flash_attention_q2_14_direct(
+    const tensor_t& query,
+    const tensor_t& k_cache,
+    const tensor_t& v_cache
+) {
+    return golden_tiled_flash_attention_q2_14_impl<false>(
+        query, k_cache, v_cache
+    );
 }
 
 bool compare_tensors(
@@ -4639,6 +4761,31 @@ void profile_scatter_attention_group_row(
     }
 }
 
+void rotate_fix16_pair_with_quantized_rope(
+    int16_t x0_raw,
+    int16_t x1_raw,
+    double cosine,
+    double sine,
+    int16_t& y0_raw,
+    int16_t& y1_raw
+) {
+    // The resident controller consumes a Q8.8 RoPE table from HBM and casts
+    // each fixed-point multiply/add result back to fm_t.  Keep the CPU oracle
+    // bit-accurate with that ordering: using double coefficients until the
+    // final result makes position zero exact but diverges from position one
+    // onward, and a following wide projection can amplify that small error.
+    const golden_fm_t x0 = fixed_from_raw<golden_fm_t>(x0_raw);
+    const golden_fm_t x1 = fixed_from_raw<golden_fm_t>(x1_raw);
+    const golden_fm_t c = fixed_from_raw<golden_fm_t>(
+        quantize_fix16(cosine)
+    );
+    const golden_fm_t s = fixed_from_raw<golden_fm_t>(
+        quantize_fix16(sine)
+    );
+    y0_raw = fixed_to_raw(golden_fm_t(x0 * c - x1 * s));
+    y1_raw = fixed_to_raw(golden_fm_t(x1 * c + x0 * s));
+}
+
 void profile_apply_rope(
     const model_shape_t& shape,
     tensor_t& q,
@@ -4664,13 +4811,18 @@ void profile_apply_rope(
             const double angle = position * inverse_frequency;
             const double cosine = std::cos(angle);
             const double sine = std::sin(angle);
-            const double x0 = dequantize_fix16(q.at(0, base + i));
-            const double x1 =
-                dequantize_fix16(q.at(0, base + half + i));
-            q.at(0, base + i) =
-                quantize_fix16(x0 * cosine - x1 * sine);
-            q.at(0, base + half + i) =
-                quantize_fix16(x1 * cosine + x0 * sine);
+            int16_t y0 = 0;
+            int16_t y1 = 0;
+            rotate_fix16_pair_with_quantized_rope(
+                q.at(0, base + i),
+                q.at(0, base + half + i),
+                cosine,
+                sine,
+                y0,
+                y1
+            );
+            q.at(0, base + i) = y0;
+            q.at(0, base + half + i) = y1;
         }
     }
     for (unsigned int head = 0; head < shape.num_kv_heads; head++) {
@@ -4682,13 +4834,18 @@ void profile_apply_rope(
             const double angle = position * inverse_frequency;
             const double cosine = std::cos(angle);
             const double sine = std::sin(angle);
-            const double x0 = dequantize_fix16(k.at(0, base + i));
-            const double x1 =
-                dequantize_fix16(k.at(0, base + half + i));
-            k.at(0, base + i) =
-                quantize_fix16(x0 * cosine - x1 * sine);
-            k.at(0, base + half + i) =
-                quantize_fix16(x1 * cosine + x0 * sine);
+            int16_t y0 = 0;
+            int16_t y1 = 0;
+            rotate_fix16_pair_with_quantized_rope(
+                k.at(0, base + i),
+                k.at(0, base + half + i),
+                cosine,
+                sine,
+                y0,
+                y1
+            );
+            k.at(0, base + i) = y0;
+            k.at(0, base + half + i) = y1;
         }
     }
 }
@@ -4698,7 +4855,10 @@ tensor_t golden_prefill_decoder_layer_sequence(
     const model_data_t& model,
     const tensor_t& hidden,
     unsigned int layer,
-    unsigned int position
+    unsigned int position,
+    tensor_t* post_attention_output = nullptr,
+    bool q2_14_attention = true,
+    bool q2_14_raw_payload_semantics = true
 ) {
     if (
         hidden.rows == 0 ||
@@ -4754,16 +4914,36 @@ tensor_t golden_prefill_decoder_layer_sequence(
             cache_v1, profile_payload_head(v_payload, 1)
         );
 
-        const tensor_t context0 = golden_tiled_flash_attention_q2_14(
-            profile_build_query_group(shape, q_row, 0),
-            cache_k0,
-            cache_v0
-        );
-        const tensor_t context1 = golden_tiled_flash_attention_q2_14(
-            profile_build_query_group(shape, q_row, 1),
-            cache_k1,
-            cache_v1
-        );
+        const tensor_t query_group0 =
+            profile_build_query_group(shape, q_row, 0);
+        const tensor_t query_group1 =
+            profile_build_query_group(shape, q_row, 1);
+        const tensor_t context0 = q2_14_attention ?
+            (
+                q2_14_raw_payload_semantics ?
+                golden_tiled_flash_attention_q2_14(
+                    query_group0, cache_k0, cache_v0
+                ) :
+                golden_tiled_flash_attention_q2_14_direct(
+                    query_group0, cache_k0, cache_v0
+                )
+            ) :
+            golden_tiled_flash_attention(
+                query_group0, cache_k0, cache_v0
+            );
+        const tensor_t context1 = q2_14_attention ?
+            (
+                q2_14_raw_payload_semantics ?
+                golden_tiled_flash_attention_q2_14(
+                    query_group1, cache_k1, cache_v1
+                ) :
+                golden_tiled_flash_attention_q2_14_direct(
+                    query_group1, cache_k1, cache_v1
+                )
+            ) :
+            golden_tiled_flash_attention(
+                query_group1, cache_k1, cache_v1
+            );
         profile_scatter_attention_group_row(
             attention, token, context0, 0, group_size, head_dim
         );
@@ -4776,6 +4956,9 @@ tensor_t golden_prefill_decoder_layer_sequence(
         shape, model, kOpOProjection, attention, layer
     );
     const tensor_t post_attention = golden_residual(hidden, projected);
+    if (post_attention_output != nullptr) {
+        *post_attention_output = post_attention;
+    }
     const tensor_t ffn_input = golden_rmsnorm(
         post_attention,
         model.norm_row(layer, true)
@@ -4791,6 +4974,194 @@ tensor_t golden_prefill_decoder_layer_sequence(
         shape, model, kOpFfnDown, activated, layer
     );
     return golden_residual(post_attention, down);
+}
+
+bool run_q214_payload_golden_diagnostic(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    uint32_t seed,
+    unsigned int token_count
+) {
+    if (
+        token_count == 0 ||
+        token_count > kMaxTokensPerLaunch ||
+        shape.num_layers == 0
+    ) {
+        throw std::runtime_error(
+            "Q2.14 payload diagnostic requires 1..8 active query rows"
+        );
+    }
+
+    const tensor_t hidden = make_random_tensor(
+        token_count,
+        shape.hidden_size,
+        seed ^ 0x626c6f63u,
+        -48,
+        48
+    );
+    tensor_t payload_post_attention;
+    const tensor_t payload_layer = golden_prefill_decoder_layer_sequence(
+        shape,
+        model,
+        hidden,
+        0,
+        0,
+        &payload_post_attention,
+        true,
+        true
+    );
+    tensor_t direct_post_attention;
+    const tensor_t direct_layer = golden_prefill_decoder_layer_sequence(
+        shape,
+        model,
+        hidden,
+        0,
+        0,
+        &direct_post_attention,
+        true,
+        false
+    );
+    const tensor_t payload_final = golden_rmsnorm(
+        payload_layer,
+        model.final_norm_row()
+    );
+    const tensor_t direct_final = golden_rmsnorm(
+        direct_layer,
+        model.final_norm_row()
+    );
+
+    (void)compare_tensors(
+        "q214_raw_payload_vs_direct_post_attention",
+        payload_post_attention,
+        direct_post_attention,
+        0
+    );
+    (void)compare_tensors(
+        "q214_raw_payload_vs_direct_post_ffn",
+        payload_layer,
+        direct_layer,
+        0
+    );
+    (void)compare_tensors(
+        "q214_raw_payload_vs_direct_final_norm_tolerance32",
+        payload_final,
+        direct_final,
+        32
+    );
+
+    const unsigned int probe_row = std::min(3u, token_count - 1);
+    const unsigned int probe_cols[4] = {1, 2, 4, 9};
+    for (unsigned int i = 0; i < 4; i++) {
+        const unsigned int col = probe_cols[i];
+        if (col < shape.hidden_size) {
+            std::cout
+                << "Q214_PAYLOAD_GOLDEN_PROBE"
+                << " row=" << probe_row
+                << " col=" << col
+                << " raw_payload=" << payload_final.at(probe_row, col)
+                << " direct=" << direct_final.at(probe_row, col)
+                << "\n";
+        }
+    }
+    std::cout
+        << "Q214_PAYLOAD_GOLDEN_DIAGNOSTIC"
+        << " seed=" << seed
+        << " active_query_rows=" << token_count
+        << " profile=" << shape.name
+        << " PASS\n";
+    return true;
+}
+
+bool run_composed_prefill_attention_verification(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    accelerator_t& accelerator,
+    uint32_t seed,
+    unsigned int position,
+    unsigned int token_count
+) {
+    if (
+        position != 0 ||
+        token_count == 0 ||
+        token_count > kMaxTokensPerLaunch ||
+        shape.num_layers == 0
+    ) {
+        throw std::runtime_error(
+            "composed prefill-attention verification requires position 0, one model layer, and 1..8 tokens"
+        );
+    }
+
+    const tensor_t hidden = make_random_tensor(
+        token_count,
+        shape.hidden_size,
+        seed ^ 0x626c6f63u,
+        -48,
+        48
+    );
+    const composed_task_diagnostic_result_t actual =
+        accelerator.run_composed_task_diagnostic(
+            hidden,
+            kOpAttentionSublayer,
+            0,
+            position
+        );
+    tensor_t expected_attention;
+    golden_prefill_decoder_layer_sequence(
+        shape,
+        model,
+        hidden,
+        0,
+        position,
+        &expected_attention
+    );
+    tensor_t expected_attention_q8_8;
+    golden_prefill_decoder_layer_sequence(
+        shape,
+        model,
+        hidden,
+        0,
+        position,
+        &expected_attention_q8_8,
+        false
+    );
+
+    const bool protocol_pass =
+        actual.status.op == unsigned(kOpAttentionSublayer) &&
+        actual.status.code == 0 &&
+        actual.status.token_count == token_count;
+    bool data_pass = true;
+    bool legacy_q8_8_match = true;
+    for (unsigned int row = 0; row < token_count; row++) {
+        data_pass = compare_tensors(
+            "task_composed_prefill_attention_row" + std::to_string(row),
+            tensor_rows(actual.output, row, 1),
+            tensor_rows(expected_attention, row, 1),
+            32
+        ) && data_pass;
+        legacy_q8_8_match = compare_tensors(
+            "task_composed_prefill_attention_q8_8_row" +
+                std::to_string(row),
+            tensor_rows(actual.output, row, 1),
+            tensor_rows(expected_attention_q8_8, row, 1),
+            0
+        ) && legacy_q8_8_match;
+    }
+    const bool pass = protocol_pass && data_pass;
+    std::cout
+        << "TASK_COMPOSED_PREFILL_ATTENTION_VERIFY"
+        << " seed=" << seed
+        << " position=" << position
+        << " query_tokens=" << token_count
+        << " op=" << actual.status.op
+        << " protocol_pass=" << (protocol_pass ? 1 : 0)
+        << " q2_14_data_pass=" << (data_pass ? 1 : 0)
+        << " legacy_q8_8_match=" << (legacy_q8_8_match ? 1 : 0)
+        << " controller_ms=" << actual.controller_ms
+        << " intermediate_host_copy=diagnostic_snapshot"
+        << " kv_cache_owner=controller"
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
 }
 
 bool run_composed_prefill_block_verification(
@@ -7941,7 +8312,7 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable << " [options]\n"
-        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-prefill-sequence|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax\n"
+        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-attention|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-prefill-sequence|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax|diagnose-q214-payload-golden\n"
         << "  --prefill-start N   First P-stage position (resume support)\n"
         << "  --profile small|medium|qwen-layer|qwen-layer-long|qwen2.5-3b\n"
         << "  --xclbin <file>          Required for run/generate\n"
@@ -8144,6 +8515,7 @@ int main(int argc, const char* argv[]) {
             command.mode != "verify-decode-smoke" &&
             command.mode != "verify-resident-layer" &&
             command.mode != "verify-composed-layer" &&
+            command.mode != "verify-composed-prefill-attention" &&
             command.mode != "verify-composed-prefill-block" &&
             command.mode != "verify-composed-prefill-stack" &&
             command.mode != "verify-composed-prefill-sequence" &&
@@ -8159,12 +8531,14 @@ int main(int argc, const char* argv[]) {
             command.mode != "profile-ffn-sublayer" &&
             command.mode != "profile-prefill-block" &&
             command.mode != "profile-prefill-vector" &&
-            command.mode != "diagnose-prefill-softmax"
+            command.mode != "diagnose-prefill-softmax" &&
+            command.mode != "diagnose-q214-payload-golden"
         ) {
             throw std::runtime_error("unknown --mode " + command.mode);
         }
         if (
             command.mode != "diagnose-prefill-softmax" &&
+            command.mode != "diagnose-q214-payload-golden" &&
             command.xclbin.empty()
         ) {
             throw std::runtime_error("--xclbin is required for run/generate");
@@ -8236,6 +8610,7 @@ int main(int argc, const char* argv[]) {
                 command.mode == "verify-decode-smoke" ||
                 command.mode == "verify-resident-layer" ||
                 command.mode == "verify-composed-layer" ||
+                command.mode == "verify-composed-prefill-attention" ||
                 command.mode == "verify-composed-prefill-block" ||
                 command.mode == "verify-composed-prefill-stack" ||
                 command.mode == "verify-composed-prefill-sequence" ||
@@ -8252,6 +8627,7 @@ int main(int argc, const char* argv[]) {
                 command.mode == "profile-prefill-block" ||
                 command.mode == "profile-prefill-vector" ||
                 command.mode == "diagnose-prefill-softmax" ||
+                command.mode == "diagnose-q214-payload-golden" ||
                 command.random_model
             )
         ) {
@@ -8273,6 +8649,14 @@ int main(int argc, const char* argv[]) {
                 command.attention_prefill_len,
                 command.attention_prefill_start,
                 command.random_seed
+            ) ? 0 : 1;
+        }
+        if (command.mode == "diagnose-q214-payload-golden") {
+            return run_q214_payload_golden_diagnostic(
+                shape,
+                model,
+                command.random_seed,
+                command.prefill_block_size
             ) ? 0 : 1;
         }
         const auto accelerator_initialization_begin =
@@ -8341,6 +8725,16 @@ int main(int argc, const char* argv[]) {
                 accelerator,
                 command.random_seed,
                 command.attention_position
+            ) ? 0 : 1;
+        }
+        if (command.mode == "verify-composed-prefill-attention") {
+            return run_composed_prefill_attention_verification(
+                shape,
+                model,
+                accelerator,
+                command.random_seed,
+                command.attention_position,
+                command.prefill_block_size
             ) ? 0 : 1;
         }
         if (command.mode == "verify-composed-prefill-block") {

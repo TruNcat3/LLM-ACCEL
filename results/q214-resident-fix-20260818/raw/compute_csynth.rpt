@@ -1,0 +1,195 @@
+
+
+================================================================
+== Vitis HLS Report for 'compute_core_8x64_unified_nk'
+================================================================
+* Date:           Mon Aug 17 23:05:26 2026
+
+* Version:        2022.2 (Build 3670227 on Oct 13 2022)
+* Project:        qwen_hls_compute_core_8x64_nk_prj_qwen_layer.resident_layer.t8.d2.ii2.r0.wr33.cw1.block_prefill_q214_resident_fix
+* Solution:       solution1 (Vitis Kernel Flow Target)
+* Product family: virtexuplus
+* Target device:  xcu50-fsvh2104-2-e
+
+
+================================================================
+== Performance Estimates
+================================================================
++ Timing: 
+    * Summary: 
+    +--------+---------+----------+------------+
+    |  Clock |  Target | Estimated| Uncertainty|
+    +--------+---------+----------+------------+
+    |ap_clk  |  3.33 ns|  2.433 ns|     0.90 ns|
+    +--------+---------+----------+------------+
+
++ Latency: 
+    * Summary: 
+    +---------+---------+----------+----------+-----+-----+----------+
+    |  Latency (cycles) |  Latency (absolute) |  Interval | Pipeline |
+    |   min   |   max   |    min   |    max   | min | max |   Type   |
+    +---------+---------+----------+----------+-----+-----+----------+
+    |        ?|        ?|         ?|         ?|    ?|    ?|  dataflow|
+    +---------+---------+----------+----------+-----+-----+----------+
+
+    + Detail: 
+        * Instance: 
+        +------------------------------+---------------------------+---------+-----------+----------+-----------+-----+-----------+---------+
+        |                              |                           |   Latency (cycles)  |  Latency (absolute)  |     Interval    | Pipeline|
+        |           Instance           |           Module          |   min   |    max    |    min   |    max    | min |    max    |   Type  |
+        +------------------------------+---------------------------+---------+-----------+----------+-----------+-----+-----------+---------+
+        |unpack_cu8_nk_inputs_U0       |unpack_cu8_nk_inputs       |      657|  924322041|  2.190 us|  3.081 sec|  657|  924322041|       no|
+        |compute_core_8x64_unified_U0  |compute_core_8x64_unified  |        ?|          ?|         ?|          ?|    ?|          ?|       no|
+        |pack_cu8_nk_results_U0        |pack_cu8_nk_results        |      986|  462162498|  3.286 us|  1.540 sec|  986|  462162498|       no|
+        +------------------------------+---------------------------+---------+-----------+----------+-----------+-----+-----------+---------+
+
+        * Loop: 
+        N/A
+
+
+
+================================================================
+== Utilization Estimates
+================================================================
+* Summary: 
++---------------------+---------+------+---------+--------+-----+
+|         Name        | BRAM_18K|  DSP |    FF   |   LUT  | URAM|
++---------------------+---------+------+---------+--------+-----+
+|DSP                  |        -|     -|        -|       -|    -|
+|Expression           |        -|     -|        0|       4|    -|
+|FIFO                 |        0|     -|    11287|    6087|    -|
+|Instance             |       48|   677|   186265|  111552|    0|
+|Memory               |        -|     -|        -|       -|    -|
+|Multiplexer          |        -|     -|        -|       -|    -|
+|Register             |        -|     -|        3|       -|    -|
++---------------------+---------+------+---------+--------+-----+
+|Total                |       48|   677|   197555|  117643|    0|
++---------------------+---------+------+---------+--------+-----+
+|Available SLR        |     1344|  2976|   871680|  435840|  320|
++---------------------+---------+------+---------+--------+-----+
+|Utilization SLR (%)  |        3|    22|       22|      26|    0|
++---------------------+---------+------+---------+--------+-----+
+|Available            |     2688|  5952|  1743360|  871680|  640|
++---------------------+---------+------+---------+--------+-----+
+|Utilization (%)      |        1|    11|       11|      13|    0|
++---------------------+---------+------+---------+--------+-----+
+
++ Detail: 
+    * Instance: 
+    +------------------------------+---------------------------+---------+-----+--------+--------+-----+
+    |           Instance           |           Module          | BRAM_18K| DSP |   FF   |   LUT  | URAM|
+    +------------------------------+---------------------------+---------+-----+--------+--------+-----+
+    |compute_core_8x64_unified_U0  |compute_core_8x64_unified  |       48|  673|  182626|  109986|    0|
+    |control_s_axi_U               |control_s_axi              |        0|    0|      36|      40|    0|
+    |pack_cu8_nk_results_U0        |pack_cu8_nk_results        |        0|    3|     393|     517|    0|
+    |unpack_cu8_nk_inputs_U0       |unpack_cu8_nk_inputs       |        0|    1|    3210|    1009|    0|
+    +------------------------------+---------------------------+---------+-----+--------+--------+-----+
+    |Total                         |                           |       48|  677|  186265|  111552|    0|
+    +------------------------------+---------------------------+---------+-----+--------+--------+-----+
+
+    * DSP: 
+    N/A
+
+    * Memory: 
+    N/A
+
+    * FIFO: 
+    +------------------------------+---------+------+----+-----+------+-----+---------+
+    |             Name             | BRAM_18K|  FF  | LUT| URAM| Depth| Bits| Size:D*B|
+    +------------------------------+---------+------+----+-----+------+-----+---------+
+    |result_task_stream_U          |        0|  1547|   0|    -|     3|  369|     1107|
+    |typed_activation_stream_U     |        0|   401|   0|    -|    16|  128|     2048|
+    |typed_out_stream_U            |        0|  1552|   0|    -|    16|  370|     5920|
+    |typed_task_stream_U           |        0|  1547|   0|    -|     3|  369|     1107|
+    |typed_vector_input0_stream_U  |        0|  1552|   0|    -|    16|  370|     5920|
+    |typed_vector_input1_stream_U  |        0|  1552|   0|    -|    16|  370|     5920|
+    |typed_weight_stream0_U        |        0|   784|   0|    -|    16|  256|     4096|
+    |typed_weight_stream1_U        |        0|   784|   0|    -|    16|  256|     4096|
+    |typed_weight_stream2_U        |        0|   784|   0|    -|    16|  256|     4096|
+    |typed_weight_stream3_U        |        0|   784|   0|    -|    16|  256|     4096|
+    +------------------------------+---------+------+----+-----+------+-----+---------+
+    |Total                         |        0| 11287|   0|    0|   134| 3000|    38406|
+    +------------------------------+---------+------+----+-----+------+-----+---------+
+
+    * Expression: 
+    +--------------------------------------+----------+----+---+----+------------+------------+
+    |             Variable Name            | Operation| DSP| FF| LUT| Bitwidth P0| Bitwidth P1|
+    +--------------------------------------+----------+----+---+----+------------+------------+
+    |ap_idle                               |       and|   0|  0|   2|           1|           1|
+    |unpack_cu8_nk_inputs_U0_start_full_n  |       and|   0|  0|   2|           1|           1|
+    +--------------------------------------+----------+----+---+----+------------+------------+
+    |Total                                 |          |   0|  0|   4|           2|           2|
+    +--------------------------------------+----------+----+---+----+------------+------------+
+
+    * Multiplexer: 
+    N/A
+
+    * Register: 
+    +--------------+---+----+-----+-----------+
+    |     Name     | FF| LUT| Bits| Const Bits|
+    +--------------+---+----+-----+-----------+
+    |ap_rst_n_inv  |  1|   0|    1|          0|
+    |ap_rst_reg_1  |  1|   0|    1|          0|
+    |ap_rst_reg_2  |  1|   0|    1|          0|
+    +--------------+---+----+-----+-----------+
+    |Total         |  3|   0|    3|          0|
+    +--------------+---+----+-----+-----------+
+
+
+
+================================================================
+== Interface
+================================================================
+* Summary: 
++-----------------------------+-----+-----+------------+------------------------------+--------------+
+|          RTL Ports          | Dir | Bits|  Protocol  |         Source Object        |    C Type    |
++-----------------------------+-----+-----+------------+------------------------------+--------------+
+|s_axi_control_AWVALID        |   in|    1|       s_axi|                       control|   return void|
+|s_axi_control_AWREADY        |  out|    1|       s_axi|                       control|   return void|
+|s_axi_control_AWADDR         |   in|    4|       s_axi|                       control|   return void|
+|s_axi_control_WVALID         |   in|    1|       s_axi|                       control|   return void|
+|s_axi_control_WREADY         |  out|    1|       s_axi|                       control|   return void|
+|s_axi_control_WDATA          |   in|   32|       s_axi|                       control|   return void|
+|s_axi_control_WSTRB          |   in|    4|       s_axi|                       control|   return void|
+|s_axi_control_ARVALID        |   in|    1|       s_axi|                       control|   return void|
+|s_axi_control_ARREADY        |  out|    1|       s_axi|                       control|   return void|
+|s_axi_control_ARADDR         |   in|    4|       s_axi|                       control|   return void|
+|s_axi_control_RVALID         |  out|    1|       s_axi|                       control|   return void|
+|s_axi_control_RREADY         |   in|    1|       s_axi|                       control|   return void|
+|s_axi_control_RDATA          |  out|   32|       s_axi|                       control|   return void|
+|s_axi_control_RRESP          |  out|    2|       s_axi|                       control|   return void|
+|s_axi_control_BVALID         |  out|    1|       s_axi|                       control|   return void|
+|s_axi_control_BREADY         |   in|    1|       s_axi|                       control|   return void|
+|s_axi_control_BRESP          |  out|    2|       s_axi|                       control|   return void|
+|ap_clk                       |   in|    1|  ap_ctrl_hs|  compute_core_8x64_unified_nk|  return value|
+|ap_rst_n                     |   in|    1|  ap_ctrl_hs|  compute_core_8x64_unified_nk|  return value|
+|interrupt                    |  out|    1|  ap_ctrl_hs|  compute_core_8x64_unified_nk|  return value|
+|out_stream_TDATA             |  out|  416|        axis|                    out_stream|       pointer|
+|out_stream_TVALID            |  out|    1|        axis|                    out_stream|       pointer|
+|out_stream_TREADY            |   in|    1|        axis|                    out_stream|       pointer|
+|task_stream_TDATA            |   in|  160|        axis|                   task_stream|       pointer|
+|task_stream_TVALID           |   in|    1|        axis|                   task_stream|       pointer|
+|task_stream_TREADY           |  out|    1|        axis|                   task_stream|       pointer|
+|activation_stream_TDATA      |   in|  128|        axis|             activation_stream|       pointer|
+|activation_stream_TVALID     |   in|    1|        axis|             activation_stream|       pointer|
+|activation_stream_TREADY     |  out|    1|        axis|             activation_stream|       pointer|
+|weight_stream0_TDATA         |   in|  256|        axis|                weight_stream0|       pointer|
+|weight_stream0_TVALID        |   in|    1|        axis|                weight_stream0|       pointer|
+|weight_stream0_TREADY        |  out|    1|        axis|                weight_stream0|       pointer|
+|weight_stream1_TDATA         |   in|  256|        axis|                weight_stream1|       pointer|
+|weight_stream1_TVALID        |   in|    1|        axis|                weight_stream1|       pointer|
+|weight_stream1_TREADY        |  out|    1|        axis|                weight_stream1|       pointer|
+|weight_stream2_TDATA         |   in|  256|        axis|                weight_stream2|       pointer|
+|weight_stream2_TVALID        |   in|    1|        axis|                weight_stream2|       pointer|
+|weight_stream2_TREADY        |  out|    1|        axis|                weight_stream2|       pointer|
+|weight_stream3_TDATA         |   in|  256|        axis|                weight_stream3|       pointer|
+|weight_stream3_TVALID        |   in|    1|        axis|                weight_stream3|       pointer|
+|weight_stream3_TREADY        |  out|    1|        axis|                weight_stream3|       pointer|
+|vector_input0_stream_TDATA   |   in|  416|        axis|          vector_input0_stream|       pointer|
+|vector_input0_stream_TVALID  |   in|    1|        axis|          vector_input0_stream|       pointer|
+|vector_input0_stream_TREADY  |  out|    1|        axis|          vector_input0_stream|       pointer|
+|vector_input1_stream_TDATA   |   in|  416|        axis|          vector_input1_stream|       pointer|
+|vector_input1_stream_TVALID  |   in|    1|        axis|          vector_input1_stream|       pointer|
+|vector_input1_stream_TREADY  |  out|    1|        axis|          vector_input1_stream|       pointer|
++-----------------------------+-----+-----+------------+------------------------------+--------------+
+

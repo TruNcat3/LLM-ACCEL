@@ -58,6 +58,14 @@ worst-case payload is 769,130,496 bytes, leaving 36,175,872 bytes of headroom.
 The host rejects initialization if either the per-shard or shared-group guard
 fails.
 
+The full-profile build also synthesizes a profile-matched compute XO. The
+compute service loop is statically bounded by the maximum number of online
+attention descriptors in one controller launch: the 96-position single-layer
+profile reserves 328 descriptors, whereas the 2048-position profile reserves
+1,792. Reusing the shorter-context XO would preserve the stream ABI but could
+stop consuming tasks before `last_task` at long context, so the Qwen2.5-3B
+build wrapper explicitly forbids that reuse.
+
 ## Verification interfaces
 
 The model host exposes four relevant paths:
@@ -106,19 +114,19 @@ VITIS_8X64_E2E_PREFILL_BLOCK_SIZE=8 \
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh all
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block
 
 # Reuse that image for an exact two-layer-by-eight-row stack gate.
 VITIS_8X64_MODEL_PROFILE=small \
 CC8_RESIDENT_TOKEN_ROWS=8 \
 VITIS_8X64_BUILD_EXACT_COMPUTE_XO=1 \
-VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214 \
+VITIS_8X64_RESIDENT_VARIANT_TAG=block_prefill_q214_resident_fix \
   scripts/build_vitis_8x64_resident_layer_hwemu.sh run-block-stack
 
 # Run a standard-dimension Attention+FFN layer.
@@ -139,8 +147,8 @@ mixing old RTL with a new testbench.
 | Controller route CSim | PASS, 21 cases including Tasks 18/19/20 |
 | Closed-loop three-transaction CSim | PASS, Task 18 -> 19 -> 20 |
 | Closed-loop RTL CoSim | PASS, 7,983 total cycles, deadlock detection enabled |
-| 8-row block closed-loop CSim | PASS, Task 18 -> 19 -> 20, `tokens=8` |
-| 8-row block closed-loop RTL CoSim | PASS, 25,411 total cycles, deadlock detection enabled |
+| 8-row block closed-loop CSim | PASS, Task 18 -> 19 -> 20, eight active query rows |
+| 8-row block closed-loop RTL CoSim | PASS, 25,591 total cycles, deadlock detection enabled |
 | Persistent Norm/RoPE/KV focused test | PASS, three independent norm rows and banked RoPE/KV checked |
 | Small two-layer/five-task HW Emu | PASS, 64/64 values exact, `intermediate_host_copy=0` |
 | Small prompt/decode composition HW Emu | PASS, 4 forwards/20 tasks, controller-owned KV, no intermediate host copy |
@@ -150,12 +158,41 @@ mixing old RTL with a new testbench.
 | Small multi-block prompt composition HW Emu | PASS, P16 as blocks 0--7 and 8--15, 10 tasks, controller-owned KV |
 | Small exact multi-block sequence HW Emu | PASS, P16 as two P8 blocks, nine tasks, 512-value final-tail CPU golden, max raw error 10/64 |
 | Small tail-block prompt composition HW Emu | PASS, P11 as blocks 0--7 and 8--10, 10 tasks, controller-owned KV |
-| Standard Qwen2.5-3B layer-shape 8-row HW Emu | Running; published only after its numeric/cycle gate closes |
+| Standard Qwen2.5-3B layer-shape 8-row HW Emu | PASS, Task 18/19/20, 16,384 values exact, 651,621 cycles, no intermediate Host copy |
 
 The original one-row RTL CoSim records three passing transactions with
-minimum/average/maximum latency of 1,204/2,664/4,497 cycles. The new 8-row
-CoSim records 2,354/8,473/18,877 cycles and 25,411 total cycles. Both exercise
-finite stream depths with RTL deadlock detection enabled.
+minimum/average/maximum latency of 1,204/2,664/4,497 cycles. The current Q2.14
+8-row CoSim records 2,354/8,533/19,057 cycles and 25,591 total cycles. Both
+exercise finite stream depths with RTL deadlock detection enabled. The previous
+Q8.8 probability-buffer image completed the same sequence in 25,411 cycles.
+
+## Standard Qwen-layer P8 HW-Emu result
+
+The release image executes one standard Qwen-shaped layer over an 8-row
+prefill block as three coarse tasks:
+
+\`\`\`text
+Task 18: RMSNorm -> Q/K/V -> RoPE -> KV/online attention -> O -> residual
+Task 19: RMSNorm -> Gate/Up -> SiLU-Mul -> Down -> residual
+Task 20: final RMSNorm
+\`\`\`
+
+| Scope | Active query rows | Layers | Tasks | HW-Emu CU interval | Cycles at 200 MHz | Useful GMAC/s | Physical efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Task 18 -> 19 -> 20 | 8 | 1 | 3 | 3,258.106 us | 651,621 | 189.285 | 92.424% |
+
+Random Fix16 seed \`20260718\` passes all 16,384 final-hidden comparisons with
+maximum raw error zero at tolerance 32. The Host observes exactly three
+completion records; the result contract reports \`intermediate_host_copy=0\`
+and \`kv_cache_owner=controller\`. The CU trace gives the same interval for the
+controller, both compute CUs, and the status sink.
+
+The efficiency numerator is 616,710,144 useful MAC, while the denominator is
+1,024 MAC/cycle times 651,621 cycles. Host/OpenCL event durations are not used
+because they track simulator wall time in HW Emu. This single-layer result does
+not include embedding, LM head, sampling, or 36-layer generation. Its complete
+log, profile, manifests, and checksums are in the
+[Q2.14 release artifact](../results/q214-resident-fix-20260818/).
 
 ## Small-profile HW-Emu result
 
@@ -232,12 +269,13 @@ a second vector-access path. Its HLS estimates are:
 
 | Design | BRAM18 | DSP | FF | LUT | Estimated period |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 8-row controller | 1,204 | 111 | 468,715 | 453,747 | 3.746 ns |
+| 8-row Q2.14 controller | 1,212 | 123 | 468,481 | 453,487 | 3.746 ns |
 | One exact compute CU | 48 | 677 | 197,555 | 117,643 | 2.433 ns |
-| Controller + two compute CUs | 1,300 | 1,465 | 863,825 | 689,033 | local estimates |
+| Status sink | 0 | 0 | 4,867 | 8,532 | 2.433 ns |
+| Controller + two compute CUs + status | 1,308 | 1,477 | 868,458 | 697,305 | local estimates |
 
-The system totals are approximately 48.4% BRAM18, 24.6% DSP, 49.6% FF, and
-79.0% LUT of the full U50. The controller alone estimates 104% of one SLR's
+The system totals are approximately 48.7% BRAM18, 24.8% DSP, 49.8% FF, and
+80.0% LUT of the full U50. The controller alone estimates 104% of one SLR's
 LUT capacity, so this passes the whole-device resource gate but not a physical
 placement proof. The 200-MHz implementation target retains timing margin
 relative to the 3.746-ns local HLS estimate; final closure still requires

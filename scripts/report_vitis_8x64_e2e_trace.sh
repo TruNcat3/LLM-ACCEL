@@ -13,7 +13,7 @@ generated_tokens="$4"
 layers="$5"
 block_size="${6:-8}"
 target_mhz="${7:-200}"
-xsim_mhz="${8:-300}"
+xsim_mhz="${8:-${target_mhz}}"
 release_nonfinal="${9:-1}"
 host_log="${10:-}"
 
@@ -261,6 +261,32 @@ active_us="$(awk -F, '$1 == "cc8_ctrl" { print $2; exit }' "${profile_csv}")"
 if [ -z "${active_us}" ]; then
     echo "No cc8_ctrl running-time row in ${profile_csv}" >&2
     exit 65
+fi
+
+# A completed coarse task must at least write its hidden-state result.  This
+# lower bound intentionally ignores every read, matrix operation, stream
+# transfer, and control cycle: even an ideal 512-bit HBM write port can retire
+# no more than 32 Fix16 values per cycle.  Reject shorter traces instead of
+# turning a truncated XSim profile into an impossible efficiency result.
+if [ "${host_validation}" = "PASS" ]; then
+    minimum_output_cycles="$((
+        (attention_rows + ffn_rows + final_norm_rows) * hidden / 32
+    ))"
+    trace_is_plausible="$(awk \
+        -v active_us="${active_us}" \
+        -v xsim_mhz="${xsim_mhz}" \
+        -v minimum="${minimum_output_cycles}" \
+        'BEGIN { print (active_us * xsim_mhz >= minimum) ? 1 : 0 }'
+    )"
+    if [ "${trace_is_plausible}" != "1" ]; then
+        observed_cycles="$(awk \
+            -v active_us="${active_us}" \
+            -v xsim_mhz="${xsim_mhz}" \
+            'BEGIN { printf "%.1f", active_us * xsim_mhz }'
+        )"
+        echo "Truncated or invalid HW-Emu CU trace: observed ${observed_cycles} cycles, below the output-only lower bound ${minimum_output_cycles}." >&2
+        exit 65
+    fi
 fi
 
 awk \

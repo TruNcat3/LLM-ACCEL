@@ -215,7 +215,7 @@ struct cc8_rope_coefficient_buffer_t {
 };
 
 struct cc8_resident_probability_buffer_t {
-    fm_t value
+    attention_prob_t value
         [GQA_GROUP_SIZE]
         [CC8_ATTN_TILE];
 };

@@ -1,0 +1,38 @@
+started_at=2026-08-18T00:08:18+08:00
+gate=standard_qwen_composed_attention_p2
+profile=qwen-layer
+query_tokens=2
+seed=20260718
+timeout_seconds=21600
+host_exe_sha256=abed2894d280b9875d010da09c2fba008f2fa1af4bdaf930760a5147b01d18eb
+xclbin_sha256=77290eceaa11a4a655abf22ff4431406e8616a803f547c78c6350e935ed14537
+emconfig_sha256=696c863021ad86e4740c840916408d9fdae97a9bbaadaefe1e43a1f0f79116ac
+using reproducible random Fix16 model seed=20260718
+Found Platform
+Platform Name: Xilinx
+INFO: Reading ./qwen_8x64_dual.xclbin
+Loading: './qwen_8x64_dual.xclbin'
+INFO: [HW-EMU 05] Path of the simulation directory : /home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer.resident_layer.t8.d2.ii2.r0.wr33.cw1.block_prefill_q214_resident_fix_exact.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/931671/hw_em/device0/binary_0/behav_waveform/xsim
+
+ server socket name is	/tmp/wt/device0_0_931671
+INFO: [HW-EMU 01] Hardware emulation runs simulation underneath. Using a large data set will result in long simulation times. It is recommended that a small dataset is used for faster execution. The flow uses approximate models for Global memories and interconnect and hence the performance data generated is approximate.
+configuring embedded scheduler mode
+scheduler config ert(1), dataflow(0), slots(16), cudma(0), cuisr(0), cdma(0), cus(4)
+programmed xilinx_u50_gen3x16_xdma_5_202210_1 for profile qwen-layer
+QWEN_8X64_SETUP_PROFILE timing_domain=host_wall model_initialization_ms=2562.55 accelerator_initialization_ms=28883.8 total_setup_ms=31446.4 weight_preload=1
+RANDOM task_composed_prefill_attention_row0 PASS values=2048 max_raw_error=0 tolerance=32
+RANDOM task_composed_prefill_attention_q8_8_row0 PASS values=2048 max_raw_error=0 tolerance=0
+RANDOM task_composed_prefill_attention_row1 PASS values=2048 max_raw_error=0 tolerance=32
+  mismatch row=0 col=5 actual_raw=12 expected_raw=13 error=1
+  mismatch row=0 col=8 actual_raw=43 expected_raw=42 error=1
+  mismatch row=0 col=9 actual_raw=-107 expected_raw=-108 error=1
+  mismatch row=0 col=13 actual_raw=-46 expected_raw=-45 error=1
+RANDOM task_composed_prefill_attention_q8_8_row1 FAIL values=2048 max_raw_error=1 tolerance=0 mismatches=550
+TASK_COMPOSED_PREFILL_ATTENTION_VERIFY seed=20260718 position=0 query_tokens=2 op=18 protocol_pass=1 q2_14_data_pass=1 legacy_q8_8_match=0 controller_ms=1.70217e+06 intermediate_host_copy=diagnostic_snapshot kv_cache_owner=controller PASS
+
+ socket connect is not established/broken 
+INFO: [HW-EMU 06-0] Waiting for the simulator process to exit
+INFO: [HW-EMU 06-1] All the simulator processes exited successfully
+INFO: [HW-EMU 07-0] Please refer the path "/home/wt/git/LLM-FPGA/vitis_8x64/build.qwen_layer.resident_layer.t8.d2.ii2.r0.wr33.cw1.block_prefill_q214_resident_fix_exact.hw_emu.xilinx_u50_gen3x16_xdma_5_202210_1/.run/931671/hw_em/device0/binary_0/behav_waveform/xsim/simulate.log" for more detailed simulation infos, errors and warnings.
+finished_at=2026-08-18T00:37:41+08:00
+exit_status=0

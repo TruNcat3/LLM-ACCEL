@@ -22,7 +22,7 @@ Candidate shapes trade parallel rows, output columns, DSP count, and placement
 regularity. The current pair of 8x64 CUs was selected because it provides:
 
 - 1024 MAC/cycle system peak;
-- a natural 8-token prefill block;
+- a natural 8-row prefill block;
 - two independently placeable compute islands;
 - output-column partitioning with shared activation broadcast.
 
@@ -139,7 +139,7 @@ The implemented coarse-task runtime uses static resident subgraphs:
 5. the following layer consumes pair B without a host copy, and Task 20 applies
    final RMSNorm after the last layer.
 
-The 8-token hardware-emulation result shows that the arithmetic schedule can
+The 8-row-block hardware-emulation result shows that the arithmetic schedule can
 reach 94.78% useful-MAC efficiency. The separate coarse-task evidence proves
 the HBM residency contract; standard-shape cycles are reported independently
 because diagnostic prefill and coarse-task runs have different host/runtime

@@ -95,9 +95,9 @@ conn_v8_2x2.cfg:
 - **Weight** (`weight_axis` = `ap_axiu<512>`): 1 wt_block (32 × 16-bit) per
   packet.
 
-## Performance (csynth + hw_emu verified)
+## Performance and validation evidence
 
-### Single-op timing (300 MHz)
+### Single-op HLS schedule (300 MHz target)
 
 | Stage | Cycles | Notes |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ conn_v8_2x2.cfg:
 | **accumulate op** | **54** | load_w + compute |
 | **FINALIZE op** | **~369** | + activate + write |
 
-### Full-layer estimate (Qwen-3B, hidden=2048)
+### Analytical full-layer projection (Qwen-3B, hidden=2048)
 
 | Metric | Value |
 | --- | --- |
@@ -117,14 +117,20 @@ conn_v8_2x2.cfg:
 | 36-layer decode | ~21 ms/token ≈ **50 token/s** |
 | vs D=4 original | **4.3× speedup** |
 
-### Resource (U50 xcu50)
+### HLS resource estimate (xcu50)
 
-| Resource | Usage | % |
-| --- | --- | --- |
-| DSP | 2838 | 23% |
-| FF | 676K | 19% |
-| LUT | 342K | 19% |
-| BRAM | 256 | 4% |
+| Resource | Approximate usage | Fraction of full xcu50 |
+| --- | ---: | ---: |
+| DSP | 2,838 | 47.7% |
+| FF | 676K | 38.8% |
+| LUT | 342K | 39.3% |
+| BRAM18 | 256 | 9.5% |
+
+Percentages use the full xcu50 capacities (5,952 DSP, 1,743K FF, 871K LUT,
+and 2,688 BRAM18). The figures are pre-route HLS estimates; they are not a
+placed-and-routed utilization report. Likewise, the 36-layer row above is an
+analytical composition of the single-op schedule rather than a measured
+end-to-end HW-Emu or board throughput result.
 
 ### Validation
 

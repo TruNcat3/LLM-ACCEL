@@ -34,6 +34,9 @@ v++ -l -t sw_emu --platform $PLATFORM --config conn_v8_2x2.cfg \
 g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
   host/host_v8_2x2.cpp host/xcl2.cpp -o build/host_v8_2x2 \
   -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
+g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
+  host/host_accum.cpp host/xcl2.cpp -o build/host_accum \
+  -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
 
 # Run 7-op integrated layer test
 XCL_EMULATION_MODE=sw_emu ./build/host_v8_2x2 build/v8_2x2.xclbin
@@ -58,7 +61,9 @@ HBM ──→ cc (dataflow orchestrator)           V8-2_s (fixed compute core)
              └─ store_out (512-bit packed)
 ```
 
-**Key parameters:** INPUT_DIM=16, OUTPUT_DIM=64, 2 cores × 1 lane = 2048 DSP,
-4 weight m_axi (HBM[2:5]), ~50 token/s decode (Qwen-3B, 36 layers).
+**Key parameters:** INPUT_DIM=16, OUTPUT_DIM=64, 2 cores × 1 lane = 2048
+matrix DSP lanes, and 4 weight m_axi ports (HBM[2:5]). Composing the HLS
+single-op schedule analytically projects about 50 token/s for 36 Qwen-3B
+decoder layers; this is not an end-to-end HW-Emu or board measurement.
 
 See [design.md](docs/design.md) for full details.

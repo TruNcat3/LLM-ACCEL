@@ -1,0 +1,32 @@
+make: Nothing to be done for 'vitis_8x64_qwen_host'.
+using reproducible random Fix16 model seed=20260718
+RANDOM q214_raw_payload_vs_direct_post_attention PASS values=4096 max_raw_error=0 tolerance=0
+RANDOM q214_raw_payload_vs_direct_post_ffn PASS values=4096 max_raw_error=0 tolerance=0
+RANDOM q214_raw_payload_vs_direct_final_norm_tolerance32 PASS values=4096 max_raw_error=0 tolerance=32
+Q214_PAYLOAD_GOLDEN_PROBE row=1 col=1 raw_payload=32767 direct=32767
+Q214_PAYLOAD_GOLDEN_PROBE row=1 col=2 raw_payload=32767 direct=32767
+Q214_PAYLOAD_GOLDEN_PROBE row=1 col=4 raw_payload=32767 direct=32767
+Q214_PAYLOAD_GOLDEN_PROBE row=1 col=9 raw_payload=-32768 direct=-32768
+Q214_PAYLOAD_GOLDEN_DIAGNOSTIC seed=20260718 active_query_rows=2 profile=qwen-layer PASS
+using reproducible random Fix16 model seed=20260718
+  mismatch row=3 col=48 actual_raw=71 expected_raw=72 error=1
+  mismatch row=3 col=190 actual_raw=103 expected_raw=104 error=1
+  mismatch row=3 col=314 actual_raw=-28 expected_raw=-29 error=1
+  mismatch row=3 col=351 actual_raw=-20 expected_raw=-19 error=1
+RANDOM q214_raw_payload_vs_direct_post_attention FAIL values=16384 max_raw_error=1 tolerance=0 mismatches=117
+  mismatch row=3 col=0 actual_raw=-1142 expected_raw=-1143 error=1
+  mismatch row=3 col=1 actual_raw=-484 expected_raw=-482 error=2
+  mismatch row=3 col=2 actual_raw=913 expected_raw=919 error=6
+  mismatch row=3 col=3 actual_raw=-2182 expected_raw=-2187 error=5
+RANDOM q214_raw_payload_vs_direct_post_ffn FAIL values=16384 max_raw_error=19 tolerance=0 mismatches=9216
+  mismatch row=3 col=1 actual_raw=-11446 expected_raw=-11398 error=48
+  mismatch row=3 col=2 actual_raw=24082 expected_raw=24240 error=158
+  mismatch row=3 col=4 actual_raw=21908 expected_raw=21751 error=157
+  mismatch row=3 col=9 actual_raw=12575 expected_raw=12716 error=141
+RANDOM q214_raw_payload_vs_direct_final_norm_tolerance32 FAIL values=16384 max_raw_error=454 tolerance=32 mismatches=3615
+Q214_PAYLOAD_GOLDEN_PROBE row=3 col=1 raw_payload=-11446 direct=-11398
+Q214_PAYLOAD_GOLDEN_PROBE row=3 col=2 raw_payload=24082 direct=24240
+Q214_PAYLOAD_GOLDEN_PROBE row=3 col=4 raw_payload=21908 direct=21751
+Q214_PAYLOAD_GOLDEN_PROBE row=3 col=9 raw_payload=12575 direct=12716
+Q214_PAYLOAD_GOLDEN_DIAGNOSTIC seed=20260718 active_query_rows=8 profile=qwen-layer PASS
+Q214 PAYLOAD GOLDEN REGRESSION PASS seed=20260718 p2=bit_identical p8=hardware_failure_fingerprint_exact

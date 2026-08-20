@@ -4,8 +4,9 @@ This artifact freezes the Vitis HLS 2022.2 and Vitis 2022.2 HW-Emu evidence
 for the 1--8-row controller-resident coarse-task runtime.
 
 `query_tokens=8` means eight consecutive positions from one sequence in one
-prefill block. It is neither batch size eight nor a complete eight-token-only
-request. The host chunks a longer prompt into blocks of at most eight rows;
+prefill block. It is neither batch size eight nor eight decoded outputs, and it
+does not require the complete prompt to contain only eight tokens. The Host
+chunks a longer prompt into blocks of at most eight rows;
 decode remains a one-row task.
 
 The host-visible program is:

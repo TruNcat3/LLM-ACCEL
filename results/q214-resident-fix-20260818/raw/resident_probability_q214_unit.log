@@ -1,0 +1,7 @@
+g++ -std=c++14 -O0 -Wno-unknown-pragmas \
+	-Iinclude -I/tools/Xilinx/Vitis_HLS/2022.2/include \
+	tests/resident_probability_buffer_tb.cpp kernel/mm_controller.cpp \
+	-o /tmp/llm_fpga_resident_probability_buffer_tb
+/tmp/llm_fpga_resident_probability_buffer_tb
+RESIDENT PROBABILITY BUFFER TEST PASS errors=0
+INFO [HLS SIM]: The maximum depth reached by any hls::stream() instance in the design is 1

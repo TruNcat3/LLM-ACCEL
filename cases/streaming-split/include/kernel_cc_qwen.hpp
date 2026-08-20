@@ -3,16 +3,16 @@
 
 /*
 ============================================================================
-LLM-FPGA-CC Qwen-Normal版本 - 正常Qwen尺寸 + 完整Pipeline优化
+LLM-FPGA-CC Qwen-Normal version: standard Qwen dimensions with full pipeline optimization.
 ============================================================================
 
-特性:
-1. 正常Qwen尺寸 (HIDDEN_SIZE=2048)
-2. 单层transformer layer测试
-3. 完整五级流水线优化 (IF-ID-EX-MEM-WB)
-4. 多级双缓冲 (ping-pong buffers)
-5. 2-3轮attention tile换入换出测试
-6. Prefill + Decode双场景
+Features:
+1. Standard Qwen dimensions (HIDDEN_SIZE=2048).
+2. Single-transformer-layer test.
+3. Full five-stage pipeline (IF-ID-EX-MEM-WB).
+4. Multilevel ping-pong buffering.
+5. Two- to three-round attention tile swap tests.
+6. Prefill and Decode scenarios.
 
 ============================================================================
 */
@@ -22,10 +22,10 @@ LLM-FPGA-CC Qwen-Normal版本 - 正常Qwen尺寸 + 完整Pipeline优化
 #include <hls_stream.h>
 
 // ============================================================================
-// 五级流水线数据抽象
+// Five-stage pipeline data abstractions.
 // ============================================================================
 
-// IF (Instruction Fetch) - 抽象token读取
+// IF (Instruction Fetch): abstract token read.
 struct if_stage_t {
     unsigned int token_id;
     unsigned int tile_idx;
@@ -46,7 +46,7 @@ struct if_stage_t {
     }
 };
 
-// ID (Instruction Decode) - 抽象数据属性
+// ID (Instruction Decode): abstract data attributes.
 struct id_stage_t {
     fm_t input_block[32];
     unsigned int output_channel;
@@ -63,7 +63,7 @@ struct id_stage_t {
     }
 };
 
-// EX (Execute) - MAC计算
+// EX (Execute): MAC computation.
 struct ex_stage_t {
     fm_accum_t accumulators[32];
     bool valid;
@@ -78,10 +78,10 @@ struct ex_stage_t {
     }
 };
 
-// MEM (Memory) - 访问双缓冲
+// MEM (Memory): access ping-pong buffers.
 struct mem_stage_t {
     fm_t results[32];
-    bool buffer_select;  // ping-pong buffer选择
+    bool buffer_select;  // Ping-pong buffer selection.
     bool valid;
 
     void init() {
@@ -95,7 +95,7 @@ struct mem_stage_t {
     }
 };
 
-// WB (Write Back) - 结果写回
+// WB (Write Back): write results.
 struct wb_stage_t {
     fm_t output_data[32];
     unsigned int write_addr;
@@ -113,7 +113,7 @@ struct wb_stage_t {
 };
 
 // ============================================================================
-// 五级流水线核心 - 单token处理
+// Five-stage pipeline core for one token.
 // ============================================================================
 
 struct five_stage_core_t {
@@ -123,13 +123,13 @@ struct five_stage_core_t {
     mem_stage_t mem_stage;
     wb_stage_t wb_stage;
 
-    // 流水线寄存器
+    // Pipeline registers.
     void pipeline_stages() {
         #pragma HLS pipeline II=1
-        // Stage间寄存器由HLS自动推断
+        // HLS infers inter-stage registers automatically.
     }
 
-    // 初始化所有stage
+    // Initialize all stages.
     void init() {
         #pragma HLS inline
         if_stage.init();
@@ -139,11 +139,11 @@ struct five_stage_core_t {
         wb_stage.init();
     }
 
-    // IF Stage: 读取token
+    // IF stage: read token.
     void if_stage_compute(unsigned int token_id, unsigned int tile_idx, const fm_t input[32]) {
         if_stage.set(token_id, tile_idx);
 
-        // 传递到ID stage
+        // Forward to the ID stage.
         for (unsigned int i = 0; i < 32; i++) {
             #pragma HLS unroll
             id_stage.input_block[i] = input[i];
@@ -152,15 +152,15 @@ struct five_stage_core_t {
         id_stage.valid = true;
     }
 
-    // ID Stage: 解码数据属性
+    // ID stage: decode data attributes.
     void id_stage_compute() {
         if (!id_stage.valid) return;
 
-        // 数据属性抽象完成，传递到EX stage
+        // Forward decoded attributes to the EX stage.
         ex_stage.valid = true;
     }
 
-    // EX Stage: MAC计算
+    // EX stage: MAC computation.
     void ex_stage_compute(const wt_block_t& weights) {
         if (!ex_stage.valid) return;
 
@@ -172,7 +172,7 @@ struct five_stage_core_t {
         }
     }
 
-    // MEM Stage: 双缓冲访问
+    // MEM stage: ping-pong buffer access.
     void mem_stage_compute() {
         if (!ex_stage.valid) return;
 
@@ -182,12 +182,12 @@ struct five_stage_core_t {
             mem_stage.results[i] = fm_t(ex_stage.accumulators[i]);
         }
 
-        // 切换ping-pong buffer
+        // Switch the ping-pong buffer.
         mem_stage.buffer_select = !mem_stage.buffer_select;
         mem_stage.valid = true;
     }
 
-    // WB Stage: 写回结果
+    // WB stage: write results.
     void wb_stage_compute(unsigned int base_addr) {
         if (!mem_stage.valid) return;
 
@@ -201,7 +201,7 @@ struct five_stage_core_t {
         wb_stage.valid = true;
     }
 
-    // 完整流水线执行
+    // Execute the complete pipeline.
     void execute_pipeline(
         unsigned int token_id,
         unsigned int tile_idx,
@@ -209,7 +209,7 @@ struct five_stage_core_t {
         const wt_block_t& weights,
         unsigned int output_addr
     ) {
-        // 五级流水线并行执行
+        // Execute all five stages concurrently.
         if_stage_compute(token_id, tile_idx, input);
         id_stage_compute();
         ex_stage_compute(weights);
@@ -219,18 +219,18 @@ struct five_stage_core_t {
 };
 
 // ============================================================================
-// 多级双缓冲系统
+// Multilevel ping-pong buffering system.
 // ============================================================================
 
 struct multi_level_buffers_t {
     // Level 1: Input ping-pong buffer
-    fm_t input_buffer[2][8][32];  // 2个buffer，每个8个lane
+    fm_t input_buffer[2][8][32];  // Two buffers with eight lanes each.
 
     // Level 2: Weight ping-pong buffer
-    wt_block_t weight_buffer[2][16];  // 2个buffer，每个16个shards
+    wt_block_t weight_buffer[2][16];  // Two buffers with 16 shards each.
 
     // Level 3: Output ping-pong buffer
-    fm_t output_buffer[2][8][32];  // 2个buffer，每个8个lane
+    fm_t output_buffer[2][8][32];  // Two buffers with eight lanes each.
 
     unsigned int input_buffer_sel;
     unsigned int weight_buffer_sel;
@@ -260,7 +260,7 @@ struct multi_level_buffers_t {
 };
 
 // ============================================================================
-// Qwen-Normal版qkv_tile_kernel函数声明
+// Qwen-Normal qkv_tile_kernel declaration.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen(
@@ -278,7 +278,7 @@ extern "C" void qkv_tile_kernel_cc_qwen(
 );
 
 // ============================================================================
-// 16端口版本函数声明 - 专门用于16数据通道测试
+// 16-port variant for testing 16 data channels.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16ports(
@@ -300,7 +300,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16ports(
 );
 
 // ============================================================================
-// 五级流水线版本函数声明 - 计算核心与AXI接口完全分离
+// Five-stage pipeline variant with complete separation between compute and AXI interfaces.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_pipeline(
@@ -318,7 +318,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_pipeline(
 );
 
 // ============================================================================
-// Stream接口最终版本函数声明 - 基于用户关键洞察
+// Final streaming-interface variant.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_stream_final(
@@ -336,7 +336,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_stream_final(
 );
 
 // ============================================================================
-// 独立Stream接口版本函数声明 - 基于用户关键洞察
+// Independent streaming-interface variant.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_independent_stream(
@@ -354,7 +354,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_independent_stream(
 );
 
 // ============================================================================
-// 完全并行树形累加器版本函数声明 - 真正的4096个DSP
+// Fully parallel tree-accumulator variant using 4096 DSPs.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_parallel_tree(
@@ -372,7 +372,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_parallel_tree(
 );
 
 // ============================================================================
-// 优化架构版本函数声明 - 统一控制器管理规约
+// Optimized architecture variant with controller-managed reduction.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_optimized(
@@ -390,7 +390,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_optimized(
 );
 
 // ============================================================================
-// 16核心版本函数声明 - 实现4096个DSP目标
+// 16-core variant targeting 4096 DSPs.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_4096dsp(
@@ -412,7 +412,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_4096dsp(
 );
 
 // ============================================================================
-// 16核心高带宽版本函数声明 - 大容量BRAM/URAM缓存
+// High-bandwidth 16-core variant with large BRAM/URAM buffers.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache(
@@ -434,7 +434,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache(
 );
 
 // ============================================================================
-// 16核心高带宽版本V2函数声明 - 直接数组设计
+// High-bandwidth 16-core V2 variant using direct arrays.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_v2(
@@ -456,7 +456,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_v2(
 );
 
 // ============================================================================
-// 16核心简化缓存版本函数声明 - 基于成功4096DSP架构 + BRAM缓存
+// Simplified-cache 16-core variant based on the validated 4096-DSP architecture plus BRAM buffers.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_simple(
@@ -478,7 +478,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_simple(
 );
 
 // ============================================================================
-// 16核心缓存优化版本函数声明 - 片上大规模双缓存系统
+// Cache-optimized 16-core variant with large on-chip ping-pong buffers.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_optimized(
@@ -500,7 +500,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_optimized(
 );
 
 // ============================================================================
-// 16核心有效缓存优化版本函数声明 - 全局数组大缓存
+// Effective-cache 16-core variant with large global-array buffers.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_effective(
@@ -576,7 +576,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_cached(
 );
 
 // ============================================================================
-// 16核心BRAM优化V2版本函数声明 - 减少过度分区 + 保持4096 DSP
+// BRAM-optimized 16-core V2 variant that reduces over-partitioning while retaining 4096 DSPs.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_bram_opt_v2(
@@ -598,7 +598,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_bram_opt_v2(
 );
 
 // ============================================================================
-// 16核心BRAM端口优化版本函数声明 - 增加BRAM分区消除II违规
+// BRAM-port-optimized 16-core variant with additional partitioning to eliminate II violations.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_bram_port_opt(
@@ -620,7 +620,7 @@ extern "C" void qkv_tile_kernel_cc_qwen_16cores_bram_port_opt(
 );
 
 // ============================================================================
-// 计算-缓存分离架构函数声明
+// Compute/cache-decoupled architecture declaration.
 // ============================================================================
 
 extern "C" void qkv_tile_kernel_cc_qwen_16cores_cache_controller(

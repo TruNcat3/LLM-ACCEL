@@ -1,6 +1,6 @@
 #!/bin/bash
 # Phase D: Vitis 2022.2 sw_emu compile + link (control_cache_core + 2×V8-2_s)
-# 板卡/XRT 是 2022, 故切换到 Vitis 2022.2 + 平台 xilinx_u50_gen3x16_xdma_5_202210_1
+# The board/XRT stack is from 2022, so use Vitis 2022.2 and platform xilinx_u50_gen3x16_xdma_5_202210_1.
 set -e
 cd /home/wt/git/LLM-FPGA-CC
 PLATFORM=/opt/xilinx/platforms/xilinx_u50_gen3x16_xdma_5_202210_1/xilinx_u50_gen3x16_xdma_5_202210_1.xpfm
@@ -25,5 +25,5 @@ $VPP -l -t sw_emu --platform $PLATFORM --config conn_v8_2x2.cfg \
   build_swemu/control_cache_core.xo build_swemu/v8_2_s.xo \
   -o build_swemu/v8_2x2.xclbin 2>&1 | tee logs/vpp_link.log
 
-echo "=== sw_emu compile+link 完成 ==="
+echo "=== sw_emu compile and link complete ==="
 ls -la build_swemu/v8_2x2.xclbin

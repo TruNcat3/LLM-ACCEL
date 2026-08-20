@@ -1,6 +1,7 @@
-// host_accum: cc + V8-2_s 累积模式 sw_emu 测试
-// 4 op 做一个 16→64 reduction (4 chunk × INPUT_DIM=4): op0=overwrite, op1/2=accumulate, op3=accumulate+finalize
-// input=1, weight=1 → 每 chunk 贡献 4, 4 chunk 累积 = 16
+// host_accum: software-emulation test for cc + V8-2_s accumulation mode.
+// Four operations implement a 16-to-64 reduction (4 chunks x INPUT_DIM=4):
+// op0=overwrite, op1/2=accumulate, op3=accumulate+finalize.
+// With input=1 and weight=1, each chunk contributes 4 and four chunks total 16.
 #include "xcl2.hpp"
 #include <vector>
 #include <iostream>
@@ -15,10 +16,10 @@ int main(int argc, char** argv) {
 
     const unsigned NUM_TOKENS = 1, NUM_TILES = 16, INPUT_DIM = 16, OUTPUT_DIM = 64;
     const unsigned PKT_PER_TOKEN = 32, WT_PER_V82 = 64;   // D=16: 2 lane × 16 tile
-    unsigned NUM_CHUNKS = 16;  // reduction chunks (可配置 argv[2], 分段验证性能)
+    unsigned NUM_CHUNKS = 16;  // Reduction chunks; argv[2] selects staged performance tests.
     if (argc >= 3) NUM_CHUNKS = (unsigned)atoi(argv[2]);
     if (NUM_CHUNKS < 1) NUM_CHUNKS = 1;
-    if (NUM_CHUNKS > 512) NUM_CHUNKS = 512;  // cc MAX_OPS=512 上限
+    if (NUM_CHUNKS > 512) NUM_CHUNKS = 512;  // cc MAX_OPS=512 limit.
     const unsigned OUT_PER_OP = PKT_PER_TOKEN * OUTPUT_DIM;  // 8192
     const unsigned OP_TASK_STRIDE = 6;
 
@@ -28,25 +29,26 @@ int main(int argc, char** argv) {
     std::vector<int16_t> w1(NUM_CHUNKS * WT_PER_V82/4 * 32, 0x1000);
     std::vector<int16_t> w2(NUM_CHUNKS * WT_PER_V82/4 * 32, 0x1000);
     std::vector<int16_t> w3(NUM_CHUNKS * WT_PER_V82/4 * 32, 0x1000);
-    // op_program: 4 chunk 的累积序列
+    // op_program: accumulation sequence over the selected chunks.
     // op0: ctrl=0x00 (NONE, overwrite, no output)
     // op1: ctrl=0x40 (NONE|ACCUMULATE, no output)
     // op2: ctrl=0x40 (NONE|ACCUMULATE, no output)
     // op3: ctrl=0xC0 (NONE|ACCUMULATE|FINALIZE, accumulate + output)
-    // ctrl 序列: op0=overwrite(0x00), op1..14=accumulate(0x40), op15=accumulate+finalize(0xC0)
+    // Control sequence: op0=overwrite(0x00), middle operations=accumulate(0x40),
+    // and the final operation=accumulate+finalize(0xC0).
     std::vector<uint32_t> op_program(NUM_CHUNKS * OP_TASK_STRIDE, 0);
     for (unsigned op = 0; op < NUM_CHUNKS; op++) {
         unsigned base = op * OP_TASK_STRIDE;
         unsigned char ctrl;
-        if (op == 0)              ctrl = 0x00;              // 首步: overwrite
-        else if (op == NUM_CHUNKS-1) ctrl = 0x40 | 0x80;   // 末步: accumulate + finalize
-        else                      ctrl = 0x40;              // 中间: accumulate
+        if (op == 0)              ctrl = 0x00;              // First step: overwrite.
+        else if (op == NUM_CHUNKS-1) ctrl = 0x40 | 0x80;   // Final step: accumulate + finalize.
+        else                      ctrl = 0x40;              // Middle step: accumulate.
         op_program[base + 0] = ctrl;
         op_program[base + 1] = op * WT_PER_V82;   // weight_offset
         op_program[base + 2] = 0;                  // SRC_HBM
-        op_program[base + 3] = 0;                  // input_hbm_offset (同输入)
+        op_program[base + 3] = 0;                  // input_hbm_offset (same input).
         op_program[base + 4] = 0;                  // DST_HBM
-        op_program[base + 5] = 0;                  // output_hbm_offset (最终步写这里)
+        op_program[base + 5] = 0;                  // output_hbm_offset (final step writes here).
     }
     std::vector<int16_t> param(OUTPUT_DIM, 0);
 
@@ -93,13 +95,15 @@ int main(int argc, char** argv) {
     q_v0.finish(); q_cc.finish();
     q.enqueueMigrateMemObjects({hout_b}, CL_MIGRATE_MEM_OBJECT_HOST); q.finish();
 
-    // 校验: NUM_CHUNKS chunk × 4 = NUM_CHUNKS*4 (input=1, weight=1, NUM_CHUNKS 次累积)
+    // Verify NUM_CHUNKS chunks x 4 = NUM_CHUNKS*4 for unit input/weight.
     float expect_val = NUM_CHUNKS * (float)INPUT_DIM;
     bool pass = true; int bad = 0;
     for (unsigned a = 0; a < OUT_PER_OP; a++) {
         float v = hout[a] / 65536.0f;
         if (std::fabs(v - expect_val) > 0.5f) { pass = false; if (bad < 5) std::cout << "miss a=" << a << " v=" << v << " (expect " << expect_val << ")\n"; bad++; }
     }
-    std::cout << "累积 (" << NUM_CHUNKS << " chunk, " << expect_val << "-element reduction): sample=" << hout[0]/65536.0f << " (expect " << expect_val << ") " << (pass ? "✅" : "❌") << "\n";
+    std::cout << "Accumulation (" << NUM_CHUNKS << " chunks, " << expect_val
+              << "-element reduction): sample=" << hout[0]/65536.0f
+              << " (expect " << expect_val << ") " << (pass ? "PASS" : "FAIL") << "\n";
     return pass ? 0 : 1;
 }
