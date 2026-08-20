@@ -39,13 +39,26 @@ if [ "${1:-}" = "--worker" ]; then
     echo "host_log=${host_log}"
     echo "worker_pid=${worker_pid}"
     echo "interval_seconds=${interval_seconds}"
+    echo "completion_poll_seconds=60"
     echo "archive_output=${output_dir}"
     while worker_is_running; do
         echo "status_sample_begin=$(date -Is)"
         "${repo_root}/scripts/status_vitis_8x64_qwen3b_e2e.sh" \
             "${host_log}"
         echo "status_sample_end=$(date -Is)"
-        sleep "${interval_seconds}"
+        waited_seconds=0
+        while [ "${waited_seconds}" -lt "${interval_seconds}" ]; do
+            remaining_seconds=$((interval_seconds - waited_seconds))
+            sleep_seconds=60
+            if [ "${remaining_seconds}" -lt "${sleep_seconds}" ]; then
+                sleep_seconds="${remaining_seconds}"
+            fi
+            sleep "${sleep_seconds}"
+            waited_seconds=$((waited_seconds + sleep_seconds))
+            if ! worker_is_running; then
+                break
+            fi
+        done
     done
 
     echo "worker_exit_observed_at=$(date -Is)"
