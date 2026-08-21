@@ -14,6 +14,11 @@ controller_body="$({
         kernel/control_cache_8x64.cpp
 })"
 controller_wrapper="$(< kernel/control_cache_8x64_nk.cpp)"
+controller_storage_body="$({
+    sed -n \
+        '/cc8_global_buffer_t gbuf0;/,/const bool resident_layer_task =/p' \
+        kernel/control_cache_8x64.cpp
+})"
 initial_state_body="$({
     sed -n \
         '/void migrate_initial_model_state(/,/void ensure_persistent_auxiliary_state(/p' \
@@ -46,7 +51,9 @@ count_text() {
 }
 
 if [ -z "${host_body}" ] || [ -z "${controller_body}" ] ||
-   [ -z "${controller_wrapper}" ] || [ -z "${initial_state_body}" ]; then
+   [ -z "${controller_wrapper}" ] ||
+   [ -z "${controller_storage_body}" ] ||
+   [ -z "${initial_state_body}" ]; then
     echo "Cannot extract the coarse-task implementation bodies" >&2
     exit 66
 fi
@@ -125,8 +132,14 @@ require_text "${controller_wrapper}" \
 require_text "${controller_wrapper}" \
     '#pragma HLS interface m_axi port=kv_cache_v' \
     'controller V-cache HBM master'
+for bank in gbuf0 gbuf1 hidden0 hidden1; do
+    require_text "${controller_storage_body}" \
+        "#pragma HLS bind_storage variable=${bank}.block type=ram_2p impl=bram" \
+        "${bank} on-chip BRAM binding"
+done
 
 printf 'COARSE TASK RESIDENCY CONTRACT PASS '
 printf 'host_d2h_sites=1 resident_tasks=3 task18_to_task19=HBM_rebind '
 printf 'kv_task_migrations=0 kv_init_migrations=1 kv_axi_ports=2 '
+printf 'onchip_bram_banks=4 '
 printf 'controller_subgraphs=attention,ffn,final_norm\n'
