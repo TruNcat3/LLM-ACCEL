@@ -13,6 +13,12 @@ controller_body="$({
         '/const bool resident_layer_task =/,/#if CC8_RESIDENT_LAYER_ONLY/p' \
         kernel/control_cache_8x64.cpp
 })"
+controller_wrapper="$(< kernel/control_cache_8x64_nk.cpp)"
+initial_state_body="$({
+    sed -n \
+        '/void migrate_initial_model_state(/,/void ensure_persistent_auxiliary_state(/p' \
+        host/host_qwen_8x64.cpp
+})"
 
 require_text() {
     local body="$1"
@@ -39,7 +45,8 @@ count_text() {
     ' <<<"${body}"
 }
 
-if [ -z "${host_body}" ] || [ -z "${controller_body}" ]; then
+if [ -z "${host_body}" ] || [ -z "${controller_body}" ] ||
+   [ -z "${controller_wrapper}" ] || [ -z "${initial_state_body}" ]; then
     echo "Cannot extract the coarse-task implementation bodies" >&2
     exit 66
 fi
@@ -52,6 +59,10 @@ if [ "$(count_text "${host_body}" 'CL_MIGRATE_MEM_OBJECT_HOST')" -ne 1 ] ||
    [ "$(rg -c '^[[:space:]]*pack_feature\(' <<<"${host_body}")" -ne 1 ] ||
    [ "$(count_text "${host_body}" 'unpack_feature(')" -ne 1 ]; then
     echo "Host coarse-task migration or execution count regressed" >&2
+    exit 65
+fi
+if rg -q 'kv_cache_[kv]_(buffer|words)' <<<"${host_body}"; then
+    echo "Host coarse-task path must not migrate or materialize KV state" >&2
     exit 65
 fi
 require_text "${host_body}" \
@@ -95,6 +106,27 @@ do
     require_text "${controller_body}" "${invariant}" "${invariant}"
 done
 
+# KV is initialized in HBM once and then remains controller-owned throughout
+# the coarse task sequence.  The task body above must never name these Host
+# buffers, and the controller wrapper must retain two explicit AXI masters.
+require_text "${initial_state_body}" \
+    'buffers.push_back(kv_cache_k_buffer_);' \
+    'initial K-cache migration'
+require_text "${initial_state_body}" \
+    'buffers.push_back(kv_cache_v_buffer_);' \
+    'initial V-cache migration'
+if [ "$(count_text "${initial_state_body}" 'enqueueMigrateMemObjects(')" -ne 1 ]; then
+    echo "Persistent model state must use one initialization migration" >&2
+    exit 65
+fi
+require_text "${controller_wrapper}" \
+    '#pragma HLS interface m_axi port=kv_cache_k' \
+    'controller K-cache HBM master'
+require_text "${controller_wrapper}" \
+    '#pragma HLS interface m_axi port=kv_cache_v' \
+    'controller V-cache HBM master'
+
 printf 'COARSE TASK RESIDENCY CONTRACT PASS '
 printf 'host_d2h_sites=1 resident_tasks=3 task18_to_task19=HBM_rebind '
+printf 'kv_task_migrations=0 kv_init_migrations=1 kv_axi_ports=2 '
 printf 'controller_subgraphs=attention,ffn,final_norm\n'
