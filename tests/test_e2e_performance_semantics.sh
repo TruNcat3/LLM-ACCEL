@@ -108,6 +108,32 @@ full_stack_useful_mac="$(
 read -r full_stack_mac full_stack_tasks <<<"${full_stack_useful_mac}"
 full_stack_numeric_tolerance=$((32 * 36))
 
+# Derive the standard-shape numerator independently of the report generator.
+# P8/G2 has eight causal Prefill rows and one real D1 row. Q/K/V/O and the
+# three FFN matrices account for the dense work; attention counts only valid
+# causal QK/PV entries, never padded tile MACs.
+standard_hidden=2048
+standard_kv_channels=256
+standard_intermediate=11008
+standard_heads=16
+standard_head_dim=128
+standard_query_rows=9
+standard_prompt_context_sum=$((8 * 9 / 2))
+standard_decode_context_sum=9
+standard_dense_per_query=$((
+    2 * standard_hidden * standard_hidden +
+    2 * standard_hidden * standard_kv_channels +
+    3 * standard_hidden * standard_intermediate
+))
+standard_attention_per_context=$((2 * standard_heads * standard_head_dim))
+standard_mac_per_layer=$((
+    standard_query_rows * standard_dense_per_query +
+    (standard_prompt_context_sum + standard_decode_context_sum) *
+    standard_attention_per_context
+))
+derived_standard_l2_mac=$((2 * standard_mac_per_layer))
+derived_full_stack_mac=$((36 * standard_mac_per_layer))
+
 if [ "${sequence_batch}" != 1 ] || [ "${prompt}" != 8 ] ||
    [ "${sampled}" != 2 ] || [ "${decode_forwards}" != 1 ] ||
    [ "${prefill_blocks}" != 1 ] || [ "${layers}" != 2 ] ||
@@ -115,12 +141,16 @@ if [ "${sequence_batch}" != 1 ] || [ "${prompt}" != 8 ] ||
     echo "P8/G2/L2 workload semantics regressed" >&2
     exit 1
 fi
-if [ "${standard_useful_mac}" != 1387634688 ] ||
+if [ "${standard_dense_per_query}" -ne 77070336 ] ||
+   [ "${standard_mac_per_layer}" -ne 693817344 ] ||
+   [ "${derived_standard_l2_mac}" -ne 1387634688 ] ||
+   [ "${standard_useful_mac}" -ne "${derived_standard_l2_mac}" ] ||
    [ "${standard_numeric_tolerance}" != 64 ]; then
     echo "Standard-shape P8/G2/L2 accounting regressed" >&2
     exit 1
 fi
-if [ "${full_stack_mac}" != 24977424384 ] ||
+if [ "${derived_full_stack_mac}" -ne 24977424384 ] ||
+   [ "${full_stack_mac}" -ne "${derived_full_stack_mac}" ] ||
    [ "${full_stack_tasks}" != 146 ] ||
    [ "${full_stack_numeric_tolerance}" != 1152 ]; then
     echo "Standard-shape P8/G2/L36 accounting regressed" >&2
@@ -187,6 +217,6 @@ printf 'small_useful_mac=%s standard_useful_mac=%s tolerance=%s\n' \
     "${useful_mac}" "${standard_useful_mac}" \
     "${standard_numeric_tolerance}"
 printf 'E2E FULL-STACK SEMANTICS PASS '
-printf 'P8/G2/L36 query_rows=9 tasks=%s useful_mac=%s tolerance=%s\n' \
-    "${full_stack_tasks}" "${full_stack_mac}" \
+printf 'P8/G2/L36 query_rows=9 tasks=%s mac_per_layer=%s useful_mac=%s tolerance=%s\n' \
+    "${full_stack_tasks}" "${standard_mac_per_layer}" "${full_stack_mac}" \
     "${full_stack_numeric_tolerance}"

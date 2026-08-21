@@ -240,6 +240,15 @@ P8 layer gate:
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 2 | 10 | 2,319,441.4 | 11.597 ms | 119.652 | 58.424% |
 
+The standard-shape useful-work numerator is derived directly from the model
+dimensions. With hidden width 2,048, KV width 256, FFN width 11,008, 16 query
+heads, and head width 128, the seven dense matrices contribute 77,070,336 MAC
+per query row. P8 plus one real D1 has nine rows, while valid causal QK and PV
+contribute `2 * 16 * 128 * (1 + ... + 8 + 9) = 184,320` MAC per layer. The
+result is therefore 693,817,344 useful MAC per layer, 1,387,634,688 for L2,
+and 24,977,424,384 for L36. Vector operations and padded attention tiles are
+deliberately excluded from this numerator.
+
 `P8` is eight consecutive query rows from one sequence, not batch eight or
 eight generated tokens. The prompt forward supplies the first sampled token;
 the second comes from the D1 forward. Deterministic random Fix16 weights and
