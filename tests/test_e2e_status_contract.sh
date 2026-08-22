@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+status_script="$(realpath scripts/status_vitis_8x64_qwen3b_e2e.sh)"
+
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/llm-e2e-status.XXXXXX")"
 worker_pid=""
 cleanup() {
@@ -48,7 +50,8 @@ if ! pgrep -P "${worker_pid}" -f 'host_qwen_8x64' >/dev/null 2>&1; then
 fi
 
 status_output="$(
-    scripts/status_vitis_8x64_qwen3b_e2e.sh "${host_log}"
+    cd "${tmp_dir}"
+    "${status_script}" "$(basename "${host_log}")"
 )"
 if ! grep -q '^run_state=running_setup ' <<<"${status_output}" ||
    ! grep -Eq '^host_pid=[0-9]+ host_state=' <<<"${status_output}" ||
@@ -59,4 +62,4 @@ if ! grep -q '^run_state=running_setup ' <<<"${status_output}" ||
 fi
 
 printf '%s\n' \
-    'E2E STATUS CONTRACT PASS pre_xrt_host=recognized state=running_setup'
+    'E2E STATUS CONTRACT PASS pre_xrt_host=recognized relative_log=caller_resolved state=running_setup'

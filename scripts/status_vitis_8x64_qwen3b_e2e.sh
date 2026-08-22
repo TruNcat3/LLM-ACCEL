@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$(realpath "$0")")/.."
+script_path="$(realpath "$0")"
+repo_root="$(dirname "$(dirname "${script_path}")")"
+invocation_dir="$PWD"
 
 if [ "$#" -gt 1 ]; then
     echo "usage: $0 [HOST_LOG]" >&2
@@ -9,7 +11,11 @@ if [ "$#" -gt 1 ]; then
 fi
 
 if [ "$#" -eq 1 ]; then
-    host_log="$(realpath -m "$1")"
+    if [[ "$1" = /* ]]; then
+        host_log="$(realpath -m "$1")"
+    else
+        host_log="$(realpath -m "${invocation_dir}/$1")"
+    fi
 else
     host_log="$(
         find "$PWD/logs" -maxdepth 1 -type f \
@@ -19,6 +25,8 @@ else
         awk -F '\t' 'NF >= 2 { latest = $2 } END { print latest }'
     )"
 fi
+
+cd "${repo_root}"
 
 if [ -z "${host_log}" ] || [ ! -f "${host_log}" ]; then
     echo "Cannot find a Qwen2.5-3B E2E Host log" >&2
