@@ -322,6 +322,23 @@ launcher reads `KERNEL_CLK` from the XCLBIN into the Host log; the archiver
 uses that value by default and rejects an inconsistent manual frequency. The
 standalone reporter defaults an omitted XSim frequency to the stated target.
 
+Compare completed layer-count gates without manually transcribing ratios:
+
+```bash
+scripts/report_vitis_8x64_e2e_scaling.sh \
+  results/qwen3b-e2e-20260820/performance.tsv \
+  results/qwen3b-e2e-l2-20260821/performance.tsv \
+  results/qwen3b-e2e-l36-<date>/performance.tsv
+```
+
+The first report is the normalization baseline. The scaling reporter requires
+every row to pass Host, numerical, and artifact-identity validation and rejects
+different workloads, clocks, Host binaries, XCLBINs, or emulation
+configurations. It emits total-cycle and useful-MAC scaling, normalized cycles
+per exercised layer, useful throughput change, and efficiency change in
+percentage points. The per-layer field normalizes the common four-CU interval;
+it is not an isolated layer latency or a per-CU occupancy measurement.
+
 The report audits every `COARSE_TASK_PROGRESS` event: Task-18/19/20 opcode and
 phase, layer bounds, active query rows, group start/end, controller duration,
 output materialization, and non-final prompt-block release. It also rejects a
