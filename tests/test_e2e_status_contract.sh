@@ -30,6 +30,8 @@ printf '%s\n' \
     'prompt_tokens=8' \
     'generated_tokens=2' \
     'layers=2' \
+    'prompt_blocks=1' \
+    'decode_forwards=1' \
     'expected_coarse_tasks=10' > "${host_log}"
 
 # Keep a distinct launcher parent alive while its Host child is in the
@@ -54,6 +56,7 @@ status_output="$(
     "${status_script}" "$(basename "${host_log}")"
 )"
 if ! grep -q '^run_state=running_setup ' <<<"${status_output}" ||
+   ! grep -q '^progress_percent=0.000 workload_stage=prefill stage_tasks_completed=0 stage_tasks_expected=5$' <<<"${status_output}" ||
    ! grep -Eq '^host_pid=[0-9]+ host_state=' <<<"${status_output}" ||
    ! grep -q '^simulation_dir=NA$' <<<"${status_output}"; then
     echo "Status helper did not recognize a pre-XRT Host descendant" >&2
@@ -61,5 +64,20 @@ if ! grep -q '^run_state=running_setup ' <<<"${status_output}" ||
     exit 65
 fi
 
+for task in $(seq 1 5); do
+    printf 'COARSE_TASK_PROGRESS completed=%s total=5 op=fixture\n' \
+        "${task}" >> "${host_log}"
+done
+decode_status_output="$(
+    cd "${tmp_dir}"
+    "${status_script}" "$(basename "${host_log}")"
+)"
+if ! grep -q '^progress_percent=50.000 workload_stage=decode stage_tasks_completed=0 stage_tasks_expected=5$' \
+    <<<"${decode_status_output}"; then
+    echo "Status helper did not recognize the Prefill-to-Decode boundary" >&2
+    printf '%s\n' "${decode_status_output}" >&2
+    exit 65
+fi
+
 printf '%s\n' \
-    'E2E STATUS CONTRACT PASS pre_xrt_host=recognized relative_log=caller_resolved state=running_setup'
+    'E2E STATUS CONTRACT PASS pre_xrt_host=recognized relative_log=caller_resolved prefill=0/5 decode_boundary=5/10 state=running_setup'

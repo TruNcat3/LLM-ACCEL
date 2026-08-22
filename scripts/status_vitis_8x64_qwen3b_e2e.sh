@@ -85,6 +85,8 @@ generated_tokens="$(header_value generated_tokens)"
 layers="$(header_value layers)"
 expected_tasks="$(header_value expected_coarse_tasks)"
 expected_tasks="${expected_tasks:-0}"
+prompt_blocks="$(header_value prompt_blocks)"
+decode_forwards="$(header_value decode_forwards)"
 
 worker_pid_file="${host_log%.log}.pid"
 worker_pid=""
@@ -145,6 +147,33 @@ completed_tasks="$(
     awk '/^COARSE_TASK_PROGRESS / { count++ } END { print count + 0 }' \
         "${host_log}"
 )"
+progress_percent="NA"
+workload_stage="unknown"
+stage_tasks_completed="NA"
+stage_tasks_expected="NA"
+if [[ "${layers}" =~ ^[0-9]+$ ]] && [ "${layers}" -gt 0 ] &&
+   [[ "${prompt_blocks}" =~ ^[0-9]+$ ]] && [ "${prompt_blocks}" -gt 0 ] &&
+   [[ "${decode_forwards}" =~ ^[0-9]+$ ]] &&
+   [[ "${expected_tasks}" =~ ^[0-9]+$ ]] && [ "${expected_tasks}" -gt 0 ]; then
+    prompt_tasks=$((prompt_blocks * 2 * layers + 1))
+    decode_tasks=$((decode_forwards * (2 * layers + 1)))
+    progress_percent="$(awk \
+        -v completed="${completed_tasks}" -v expected="${expected_tasks}" \
+        'BEGIN { printf "%.3f", 100.0 * completed / expected }')"
+    if [ "${completed_tasks}" -lt "${prompt_tasks}" ]; then
+        workload_stage="prefill"
+        stage_tasks_completed="${completed_tasks}"
+        stage_tasks_expected="${prompt_tasks}"
+    elif [ "${completed_tasks}" -lt "${expected_tasks}" ]; then
+        workload_stage="decode"
+        stage_tasks_completed=$((completed_tasks - prompt_tasks))
+        stage_tasks_expected="${decode_tasks}"
+    else
+        workload_stage="post_inference"
+        stage_tasks_completed="${expected_tasks}"
+        stage_tasks_expected="${expected_tasks}"
+    fi
+fi
 numeric_steps="$(
     awk '/^QWEN_8X64_E2E_NUMERIC_STEP / { count++ } END { print count + 0 }' \
         "${host_log}"
@@ -223,6 +252,9 @@ printf 'run_state=%s started_at=%s profile=%s prompt_tokens=%s generated_tokens=
     "${prompt_tokens:-NA}" "${generated_tokens:-NA}" "${layers:-NA}"
 printf 'coarse_tasks_completed=%s coarse_tasks_expected=%s numeric_steps=%s\n' \
     "${completed_tasks}" "${expected_tasks}" "${numeric_steps}"
+printf 'progress_percent=%s workload_stage=%s stage_tasks_completed=%s stage_tasks_expected=%s\n' \
+    "${progress_percent}" "${workload_stage}" \
+    "${stage_tasks_completed}" "${stage_tasks_expected}"
 if [ -n "${last_task}" ]; then
     printf 'last_task=%s\n' "${last_task}"
 fi
