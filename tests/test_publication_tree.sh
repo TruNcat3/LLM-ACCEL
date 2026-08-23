@@ -134,6 +134,7 @@ done
 for identity in \
     'given-names: "Teng"' \
     'family-names: "Wang"' \
+    'email: "wangt635@ustc.edu.cn"' \
     'High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China'
 do
     if ! rg -F -q "${identity}" CITATION.cff; then
@@ -141,6 +142,11 @@ do
         exit 65
     fi
 done
+
+if ! rg -F -q 'email        = {wangt635@ustc.edu.cn},' README.md; then
+    echo "README BibTeX is missing the correspondence email" >&2
+    exit 65
+fi
 
 if ! rg -F -q 'PolyForm Noncommercial License 1.0.0' LICENSE ||
    ! rg -F -q 'CC BY-NC 4.0' LICENSES/CC-BY-NC-4.0.md; then

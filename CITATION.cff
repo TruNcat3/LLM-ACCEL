@@ -8,6 +8,7 @@ authors:
   - family-names: "Wang"
     given-names: "Teng"
     alias: "TruNcat3"
+    email: "wangt635@ustc.edu.cn"
     affiliation: "High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China"
 repository-code: "https://github.com/TruNcat3/LLM-ACCEL"
 url: "https://github.com/TruNcat3/LLM-ACCEL"
@@ -33,6 +34,7 @@ preferred-citation:
     - family-names: "Wang"
       given-names: "Teng"
       alias: "TruNcat3"
+      email: "wangt635@ustc.edu.cn"
       affiliation: "High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China"
   year: 2026
   repository-code: "https://github.com/TruNcat3/LLM-ACCEL"

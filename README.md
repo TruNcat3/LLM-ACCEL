@@ -204,6 +204,7 @@ If LLM-ACCEL contributes to academic work, cite the repository metadata in
   title        = {LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution},
   year         = {2026},
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
+  email        = {wangt635@ustc.edu.cn},
   url          = {https://github.com/TruNcat3/LLM-ACCEL},
   version      = {0.8.0}
 }
