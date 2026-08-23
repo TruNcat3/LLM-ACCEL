@@ -91,58 +91,34 @@ figure. A dash means that the variant has no root-level performance plot.
 
 | ID and implementation | Execution boundary | Source family | Root figure | Released evidence |
 | --- | --- | --- | --- | --- |
-| **R1 — Resident coarse-task (current)** | Controller executes Tasks 18/19/20; hidden and KV remain in HBM | [`kernel/`](kernel/), [`host/`](host/) | [E2E scaling](docs/assets/e2e-scaling.svg), [resources](docs/assets/resource-utilization.svg) | [P8 resident](results/q214-resident-fix-20260818/), [L1](results/qwen3b-e2e-20260820/), [L2](results/qwen3b-e2e-l2-20260821/) |
-| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | [P/D efficiency](docs/assets/pd-efficiency.svg) | [P/D 64--1024](results/q214-pd-20260811/) |
+| **R1 — Resident coarse-task (current)** | Controller executes Tasks 18/19/20; hidden and KV remain in HBM | [`kernel/`](kernel/), [`host/`](host/) | [R1 overview panels](docs/assets/results-overview.svg) | [P8 resident](results/q214-resident-fix-20260818/), [L1](results/qwen3b-e2e-20260820/), [L2](results/qwen3b-e2e-l2-20260821/) |
+| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | [D1 overview panel](docs/assets/results-overview.svg) | [P/D 64--1024](results/q214-pd-20260811/) |
 | **P1 — Small resident protocol profiles** | Reduced shapes test finite FIFOs, block tails, residency, and controller-owned KV | R1 kernels with small model profiles | — | [Coarse tasks](results/coarse-task-20260816/), [block prefill](results/block-prefill-20260817/) |
 | **S1 — Streaming split / V8-2_s** | Earlier control/cache plus fixed compute-core split; analytical full-layer projection only | [`cases/streaming-split/`](cases/streaming-split/) | — | [Design and evidence limits](cases/streaming-split/docs/design.md) |
 
 ## Key results
 
-All performance numbers below are derived from Vitis 2022.2 HW Emu CU traces
-at a modeled 200 MHz. They exclude Host embedding, LM-head/sampling, CPU golden
-checks, PCIe-inclusive request latency, and simulator wall time. They are not
-physical-board measurements.
+The root highlights only the current R1 mainline and one distinctive D1
+diagnostic. Performance values use Vitis 2022.2 HW-Emu CU traces modeled at
+200 MHz; resources are profile-matched HLS estimates. Neither is a
+physical-board measurement.
 
-### R1: standard-shape multi-layer composition
+![Selected R1 mainline results and the distinctive D1 Prefill/Decode shape diagnostic in one implementation-aware dashboard.](docs/assets/results-overview.svg)
 
-The P8/G2 gates execute one eight-token prompt followed by one real single-row
-decode forward. `P8` means eight query rows from one sequence—not batch eight.
-Both L1 and L2 pass 4,096/4,096 post-inference fixed-point values exactly and
-produce the same sampled-token sequence as the CPU oracle. L2 crosses the
-layer boundary in HBM without an intermediate Host hidden-state copy.
+The richest released R1 boundary is P8/G2/L2: one eight-token prompt and one
+real D1 forward across two layers and ten coarse tasks. It reaches 119.652
+useful GMAC/s and 58.424% modeled efficiency, with 4,096/4,096 oracle values
+exact and no intermediate Host hidden-state copy. The highest-utilization
+bounded R1 gate is the single-forward P8 Task-18/19/20 path at 189.285 GMAC/s
+and 92.424%; it is shown separately because its narrower workload is not an
+end-to-end generation request.
 
-![L1 to L2 HW-Emu scaling: cycles per layer fall while useful throughput and modeled efficiency rise.](docs/assets/e2e-scaling.svg)
-
-The L1 and L2 common four-CU intervals are 1,190,693 and 2,319,441.4 cycles.
-Doubling useful work increases cycles by 1.948x: cycles per layer fall 2.60%,
-useful throughput rises from 116.540 to 119.652 GMAC/s, and modeled useful-MAC
-efficiency rises from 56.904% to 58.424%. Raw, checksum-protected evidence is
-published for [L1](results/qwen3b-e2e-20260820/) and
-[L2](results/qwen3b-e2e-l2-20260821/).
-
-### D1: prefill and decode context scaling
-
-The earlier operator-level diagnostic evaluates one full eight-row prefill
-block and one single-row decode step at four KV lengths. It validates the
-datapath and exposes the expected decode underfill; it is not a full-prompt
-latency measurement or the coarse-task end-to-end boundary.
-
-![Modeled useful-MAC efficiency across context lengths for eight-row prefill and single-row decode.](docs/assets/pd-efficiency.svg)
-
-The complete cycle, latency, throughput, and precision tables are in the
-[P/D report](docs/q214-pd-length-hwemu.md), with raw profiles under
-[`results/q214-pd-20260811/`](results/q214-pd-20260811/).
-
-### R1: resource qualification
-
-![Profile-matched HLS resource estimates for the complete four-CU system.](docs/assets/resource-utilization.svg)
-
-The profile-matched Qwen2.5-3B candidate remains within whole-device HLS
-budgets: 48.661% BRAM18, 24.866% DSP, 47.605% FF, and 79.991% LUT. These are
-CSynth estimates, not routed utilization; the controller remains a placement
-risk because its LUT estimate is too large for a comfortable single-SLR fit.
-See the [resource gate](docs/coarse-task-runtime.md#resource-gate) for component
-counts, timing estimates, and provenance.
+D1 is retained for one specific architectural observation: an eight-row
+Prefill block reaches 94.812% modeled efficiency at context 64 while one-row
+Decode reaches 13.296%, exposing array underfill. Full plots, tables, timing
+boundaries, and raw evidence remain in the [experimental report](docs/experiments.md)
+and [evidence index](results/README.md). Host compute, PCIe-inclusive latency,
+and simulator wall time are excluded from all displayed HW-Emu intervals.
 
 ## Evidence ladder
 

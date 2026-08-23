@@ -15,6 +15,7 @@ required_files=(
     docs/usage.md
     docs/experiments.md
     results/README.md
+    docs/assets/results-overview.svg
     docs/assets/e2e-scaling.svg
     docs/assets/pd-efficiency.svg
     docs/assets/resource-utilization.svg
@@ -68,7 +69,8 @@ for design_id in R1 D1 P1 S1; do
     fi
 done
 
-if ! rg -F -q '[R1] P8/G2' docs/assets/e2e-scaling.svg ||
+if ! rg -F -q 'Selected results · implementation-aware overview' docs/assets/results-overview.svg ||
+   ! rg -F -q '[R1] P8/G2' docs/assets/e2e-scaling.svg ||
    ! rg -F -q '[D1] Query-block' docs/assets/pd-efficiency.svg ||
    ! rg -F -q '[R1] Whole-system' docs/assets/resource-utilization.svg; then
     echo "Root figures are not mapped to implementation IDs" >&2
@@ -82,6 +84,7 @@ if [ "${readme_lines}" -gt 260 ]; then
 fi
 
 for figure in \
+    docs/assets/results-overview.svg \
     docs/assets/e2e-scaling.svg \
     docs/assets/pd-efficiency.svg \
     docs/assets/resource-utilization.svg
@@ -89,6 +92,19 @@ do
     if ! rg -q '<title id="title">.+</title>' "${figure}" ||
        ! rg -q '<desc id="desc">.+</desc>' "${figure}"; then
         echo "Publication figure lacks accessible title/description: ${figure}" >&2
+        exit 65
+    fi
+done
+
+if [ "$(rg -c '^!\[' README.md)" -ne 1 ] ||
+   ! rg -F -q '](docs/assets/results-overview.svg)' README.md; then
+    echo "Root README must present exactly one consolidated result figure" >&2
+    exit 65
+fi
+
+for metric in '119.652' '58.424%' '189.285' '92.424%' '94.812%' '13.296%' '80.0%'; do
+    if ! rg -F -q "${metric}" docs/assets/results-overview.svg; then
+        echo "Consolidated result figure is missing released metric: ${metric}" >&2
         exit 65
     fi
 done

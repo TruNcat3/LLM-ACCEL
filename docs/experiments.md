@@ -216,6 +216,8 @@ The raw `profile_kernels.csv` files and validation logs are published under
 [`results/q214-pd-20260811/`](../results/q214-pd-20260811/), with the complete
 interpretation in [Q2.14 P/D sweep](q214-pd-length-hwemu.md).
 
+![D1 modeled useful-MAC efficiency across the four Prefill and Decode context lengths.](assets/pd-efficiency.svg)
+
 ## 9. Coarse-task resident runtime
 
 Tasks 18, 19, and 20 replace the operator-level host boundary with Attention,
@@ -242,6 +244,8 @@ P8 layer gate:
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 1 | 6 | 1,190,693 | 5.953 ms | 116.540 | 56.904% |
 | Vitis 2022.2 HW Emu CU trace | Common four-CU interval; Host computation excluded | P8/G2: one prefill and one real D1 forward | 1 | 2 | 10 | 2,319,441.4 | 11.597 ms | 119.652 | 58.424% |
+
+![R1 L1-to-L2 standard-shape HW-Emu scaling.](assets/e2e-scaling.svg)
 
 The standard-shape useful-work numerator is derived directly from the model
 dimensions. With hidden width 2,048, KV width 256, FFN width 11,008, 16 query
@@ -344,6 +348,8 @@ The combined results support three conclusions:
    estimate, so place-and-route remains a required gate. The earlier
    1,477-DSP/868,458-FF/697,305-LUT values remain preserved in the 2026-08-18
    historical release artifact rather than being rewritten in place.
+
+![R1 profile-matched whole-system HLS resource estimates.](assets/resource-utilization.svg)
 
 ## 11. Current experimental boundaries
 
