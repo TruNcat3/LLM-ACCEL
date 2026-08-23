@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="390" viewBox="0 0 960 390" role="img" aria-labelledby="title desc" font-family="DejaVu Sans">
+  <title id="title">Standard-shape P8/G2 multi-layer hardware-emulation scaling</title>
+  <desc id="desc">Cycles per layer decrease from 1.191 million at one layer to 1.160 million at two layers. Useful throughput increases from 116.540 to 119.652 GMAC per second and modeled efficiency increases from 56.904 to 58.424 percent.</desc>
+  <rect width="960" height="390" rx="16" fill="#0d1117"/>
+  <style>
+    .title{font-size:22px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.label{font-size:15px;font-weight:600;fill:#c9d1d9}.value{font-size:17px;font-weight:700;fill:#f0f6fc}.tick{font-size:12px;fill:#8b949e}.positive{font-size:15px;font-weight:600;fill:#3fb950}.grid{stroke:#30363d;stroke-width:1}.l1{fill:#58a6ff}.l2{fill:#3fb950}.accent{fill:#d2a8ff}
+  </style>
+  <text class="title" x="36" y="40">P8/G2 scales across controller-resident layers</text>
+  <text class="sub" x="36" y="64">Vitis 2022.2 HW Emu · common four-CU interval · modeled at 200 MHz</text>
+  <line class="grid" x1="36" y1="330" x2="924" y2="330"/>
+  <text class="label" x="80" y="96">Cycles per layer</text>
+  <rect class="l1" x="80" y="126" width="256" height="52" rx="7"/>
+  <rect class="l2" x="80" y="198" width="249" height="52" rx="7"/>
+  <text class="value" x="92" y="159">L1  1.191M</text>
+  <text class="value" x="92" y="231">L2  1.160M</text>
+  <text class="positive" x="80" y="286">−2.60% per layer</text>
+  <line class="grid" x1="420" y1="90" x2="420" y2="312"/>
+  <text class="label" x="468" y="96">Useful throughput</text>
+  <rect class="l1" x="468" y="126" width="207" height="52" rx="7"/>
+  <rect class="l2" x="468" y="198" width="213" height="52" rx="7"/>
+  <text class="value" x="480" y="159">L1  116.540 GMAC/s</text>
+  <text class="value" x="480" y="231">L2  119.652 GMAC/s</text>
+  <text class="positive" x="468" y="286">+2.67% throughput</text>
+  <rect class="accent" x="716" y="126" width="172" height="52" rx="7" opacity=".72"/>
+  <rect class="accent" x="716" y="198" width="177" height="52" rx="7"/>
+  <text class="value" x="730" y="159">56.904%</text>
+  <text class="value" x="730" y="231">58.424%</text>
+  <text class="tick" x="716" y="286">modeled useful-MAC efficiency</text>
+  <circle class="l1" cx="80" cy="356" r="6"/><text class="tick" x="94" y="361">1 layer · 6 tasks</text>
+  <circle class="l2" cx="250" cy="356" r="6"/><text class="tick" x="264" y="361">2 layers · 10 tasks</text>
+  <text class="tick" x="610" y="361">CPU oracle and Host compute excluded</text>
+</svg>

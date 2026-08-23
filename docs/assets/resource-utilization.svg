@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc" font-family="DejaVu Sans">
+  <title id="title">Profile-matched HLS resource estimates</title>
+  <desc id="desc">The complete controller, two compute units, and status sink use an estimated 48.661 percent BRAM18, 24.866 percent DSP, 47.605 percent flip flops, and 79.991 percent LUTs on the target device.</desc>
+  <rect width="960" height="360" rx="16" fill="#0d1117"/>
+  <style>
+    .title{font-size:22px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.label{font-size:16px;font-weight:600;fill:#c9d1d9}.value{font-size:15px;font-weight:700;fill:#f0f6fc}.track{fill:#21262d}.safe{fill:#3fb950}.mid{fill:#58a6ff}.risk{fill:#f0883e}.tick{font-size:12px;fill:#8b949e}.grid{stroke:#30363d;stroke-width:1}
+  </style>
+  <text class="title" x="36" y="40">Whole-system resource envelope</text>
+  <text class="sub" x="36" y="64">Profile-matched HLS CSynth · controller + 2 compute CUs + status sink · not routed</text>
+  <line class="grid" x1="205" y1="88" x2="205" y2="310"/><line class="grid" x1="545" y1="88" x2="545" y2="310"/><line class="grid" x1="885" y1="88" x2="885" y2="310"/>
+  <text class="tick" x="200" y="330">0%</text><text class="tick" x="535" y="330">50%</text><text class="tick" x="870" y="330">100%</text>
+  <text class="label" x="65" y="126">BRAM18</text><rect class="track" x="205" y="104" width="680" height="30" rx="6"/><rect class="mid" x="205" y="104" width="331" height="30" rx="6"/><text class="value" x="548" y="125">48.661% · 1,308</text>
+  <text class="label" x="65" y="181">DSP</text><rect class="track" x="205" y="159" width="680" height="30" rx="6"/><rect class="safe" x="205" y="159" width="169" height="30" rx="6"/><text class="value" x="386" y="180">24.866% · 1,480</text>
+  <text class="label" x="65" y="236">FF</text><rect class="track" x="205" y="214" width="680" height="30" rx="6"/><rect class="mid" x="205" y="214" width="324" height="30" rx="6"/><text class="value" x="541" y="235">47.605% · 829,923</text>
+  <text class="label" x="65" y="291">LUT</text><rect class="track" x="205" y="269" width="680" height="30" rx="6"/><rect class="risk" x="205" y="269" width="544" height="30" rx="6"/><text class="value" x="761" y="290">79.991% · 697,267</text>
+  <text class="tick" x="36" y="347">Placement warning: whole-device fit does not imply comfortable single-SLR routing.</text>
+</svg>

@@ -1,5 +1,8 @@
 # Q2.14 Multi-Length Prefill/Decode Hardware-Emulation Results
 
+[Documentation index](README.md) | [Experiments](experiments.md) |
+[Raw evidence](../results/q214-pd-20260811/) | [Repository](../README.md)
+
 ## Scope
 
 This experiment validates the Q2.14 online-softmax/FlashAttention path and the

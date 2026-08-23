@@ -1,5 +1,8 @@
 # Design Space and Alternatives
 
+[Documentation index](README.md) | [Architecture](architecture.md) |
+[Experiments](experiments.md) | [Repository](../README.md)
+
 This document records the architectural alternatives explored by LLM-ACCEL.
 The goal is to make the current implementation understandable as a sequence of
 measured choices rather than as the only possible design.

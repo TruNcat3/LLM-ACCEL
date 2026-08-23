@@ -1,5 +1,8 @@
 # Published Experimental Evidence
 
+[Repository](../README.md) | [Documentation](../docs/README.md) |
+[Experiments](../docs/experiments.md) | [License](../LICENSE)
+
 This directory contains compact, versioned evidence packages for the claims in
 the root README and the experimental report. Raw HW-Emu CU profiles, Host
 excerpts, HLS reports, derived TSV rows, and SHA-256 manifests are kept
@@ -57,3 +60,8 @@ Raw Host logs, CU profiles, and numeric rows are not silently rewritten when
 terminology is refined. A schema label may be clarified only when the artifact
 README records the change, its complete checksum manifest is regenerated, and
 the raw-to-derived-table verifier still reproduces every numeric value.
+
+Unless an artifact states otherwise, documentation, figures, and experimental
+evidence are licensed under
+[CC BY-NC 4.0](../LICENSES/CC-BY-NC-4.0.md). Attribution should name Teng Wang
+and LLM-ACCEL and identify any modifications.

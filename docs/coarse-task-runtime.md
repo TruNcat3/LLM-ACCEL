@@ -1,5 +1,8 @@
 # Controller-Resident Coarse-Task Runtime
 
+[Documentation index](README.md) | [Architecture](architecture.md) |
+[Experiments](experiments.md) | [Reproduction](usage.md)
+
 ## Motivation
 
 Operator-by-operator host orchestration exposes every intermediate tensor to

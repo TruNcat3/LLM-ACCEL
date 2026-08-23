@@ -1,5 +1,8 @@
 # Experimental Results
 
+[Documentation index](README.md) | [Evidence index](../results/README.md) |
+[Reproduction](usage.md) | [Repository](../README.md)
+
 ## 1. Reporting policy
 
 LLM-ACCEL separates evidence into four classes:
@@ -347,8 +350,10 @@ The combined results support three conclusions:
 - The coarse-task runtime now replays a prompt in blocks of up to eight
   consecutive query rows. A small two-layer prompt/decode HW-Emu contract is
   complete, and the standard-shape single-forward P8, P8/G2/L1, and
-  P8/G2/L2 gates are complete. Standard-shape 36-layer, multi-block, and
-  checkpoint-level runs remain open.
+  P8/G2/L2 gates are complete. A standard-shape P8/G2/L36 extension is running,
+  but it remains unpublished evidence until all 146 tasks, both numerical
+  checks, provenance capture, and archive checksums pass. Standard-shape
+  multi-block and checkpoint-level runs remain open.
 - The fixed-point random model validates deterministic arithmetic and protocol
   behavior; it is not an end-to-end checkpoint accuracy result.
 - A 36-layer value obtained by multiplying single-layer cycles would exclude
@@ -362,8 +367,9 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Extend the verified standard-shape P8/G2 gate from two to all 36 decoder
-   layers, preserving the post-inference oracle and common four-CU interval.
+1. Complete and archive the active 36-layer P8/G2 gate, preserving the
+   post-inference oracle, 146-task topology, source provenance, and common
+   four-CU interval.
 2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
 3. Reduce repeated Host task issue by packaging reusable task programs while

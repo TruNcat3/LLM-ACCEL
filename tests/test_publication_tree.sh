@@ -6,12 +6,18 @@ cd "$(dirname "$0")/.."
 required_files=(
     README.md
     CITATION.cff
+    LICENSE
+    LICENSES/CC-BY-NC-4.0.md
+    docs/README.md
     docs/architecture.md
     docs/design-space.md
     docs/coarse-task-runtime.md
     docs/usage.md
     docs/experiments.md
     results/README.md
+    docs/assets/e2e-scaling.svg
+    docs/assets/pd-efficiency.svg
+    docs/assets/resource-utilization.svg
 )
 for path in "${required_files[@]}"; do
     if [ ! -s "${path}" ]; then
@@ -45,7 +51,8 @@ for heading in \
     '## Architecture at a glance' \
     '## Key results' \
     '## Reproduce the core validation' \
-    '## Citation'
+    '## Citation' \
+    '## License'
 do
     if ! rg -F -q "${heading}" README.md; then
         echo "README is missing required section: ${heading}" >&2
@@ -53,12 +60,52 @@ do
     fi
 done
 
-for field in 'cff-version:' 'message:' 'title:' 'authors:' 'version:' 'date-released:'; do
+readme_lines="$(wc -l < README.md)"
+if [ "${readme_lines}" -gt 260 ]; then
+    echo "Root README exceeded the concise publication budget: ${readme_lines} lines" >&2
+    exit 65
+fi
+
+for figure in \
+    docs/assets/e2e-scaling.svg \
+    docs/assets/pd-efficiency.svg \
+    docs/assets/resource-utilization.svg
+do
+    if ! rg -q '<title id="title">.+</title>' "${figure}" ||
+       ! rg -q '<desc id="desc">.+</desc>' "${figure}"; then
+        echo "Publication figure lacks accessible title/description: ${figure}" >&2
+        exit 65
+    fi
+done
+
+if ! rg -F -q '@software{wang2026llmaccel,' README.md; then
+    echo "README is missing the canonical BibTeX tag" >&2
+    exit 65
+fi
+
+for field in 'cff-version:' 'message:' 'title:' 'authors:' 'version:' 'date-released:' 'license:'; do
     if ! rg -q "^${field}" CITATION.cff; then
         echo "CITATION.cff is missing field: ${field}" >&2
         exit 65
     fi
 done
+
+for identity in \
+    'given-names: "Teng"' \
+    'family-names: "Wang"' \
+    'High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China'
+do
+    if ! rg -F -q "${identity}" CITATION.cff; then
+        echo "CITATION.cff is missing author identity: ${identity}" >&2
+        exit 65
+    fi
+done
+
+if ! rg -F -q 'PolyForm Noncommercial License 1.0.0' LICENSE ||
+   ! rg -F -q 'CC BY-NC 4.0' LICENSES/CC-BY-NC-4.0.md; then
+    echo "Noncommercial license metadata is incomplete" >&2
+    exit 65
+fi
 
 mapfile -t markdown_files < <(
     find . -type f -name '*.md' -not -path './.git/*' -print | sort

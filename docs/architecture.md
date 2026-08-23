@@ -1,5 +1,8 @@
 # Architecture
 
+[Documentation index](README.md) | [Design space](design-space.md) |
+[Experiments](experiments.md) | [Repository](../README.md)
+
 ## 1. Design objective
 
 LLM-ACCEL is organized around one constraint: intermediate decoder-layer
