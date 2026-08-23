@@ -19,7 +19,8 @@ export VITIS_8X64_RESIDENT_VARIANT_TAG="${VITIS_8X64_RESIDENT_VARIANT_TAG:-block
 export VITIS_8X64_BUILD_EXACT_COMPUTE_XO="${VITIS_8X64_BUILD_EXACT_COMPUTE_XO:-1}"
 export VITIS_8X64_RESIDENT_SEED="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 export VITIS_8X64_HW_EMU_TIMEOUT="${VITIS_8X64_HW_EMU_TIMEOUT:-43200}"
-export VITIS_ENV_SCRIPT="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+export VITIS_ENV_SCRIPT
 
 if [ "${1:-}" = "--worker" ]; then
     worker_build_dir="${VITIS_8X64_BUILD_DIR:?missing VITIS_8X64_BUILD_DIR}"

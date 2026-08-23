@@ -3,7 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 build_dir="${Q214_PAYLOAD_GOLDEN_BUILD_DIR:-/tmp/llm_accel_q214_payload_golden}"
 seed=20260718
 

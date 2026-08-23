@@ -25,7 +25,8 @@ emconfig="${build_dir}/emconfig.json"
 seed="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 token_count="${VITIS_8X64_DIAG_QUERY_TOKENS:-2}"
 timeout_seconds="${VITIS_8X64_HW_EMU_TIMEOUT:-21600}"
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 
 if [ "${1:-}" = "--worker" ]; then
     for input in "${env_script}" "${host_exe}" "${xclbin}" "${emconfig}"; do

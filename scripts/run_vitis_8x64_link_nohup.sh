@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-source /home/hepc/env/vitis_env_22.sh >/dev/null 2>&1
+source scripts/setup_environment.sh >/dev/null
 target="${TARGET:-hw_emu}"
 
 min_available_gib="${VITIS_MIN_AVAILABLE_GIB:-50}"

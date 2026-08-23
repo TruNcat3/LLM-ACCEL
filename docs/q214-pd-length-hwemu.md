@@ -1,7 +1,8 @@
 # Q2.14 Multi-Length Prefill/Decode Hardware-Emulation Results
 
 [Documentation index](README.md) | [Experiments](experiments.md) |
-[Raw evidence](../results/q214-pd-20260811/) | [Repository](../README.md)
+[Setup](environment.md) | [Raw evidence](../results/q214-pd-20260811/) |
+[Repository](../README.md)
 
 ## Scope
 

@@ -54,7 +54,8 @@ line_has_keys() {
     done
 }
 min_available_gib="${VITIS_MIN_AVAILABLE_GIB:-80}"
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 host_exe="${build_dir}/host_qwen_8x64.exe"
 xclbin="${build_dir}/qwen_8x64_dual.xclbin"
 emconfig="${build_dir}/emconfig.json"

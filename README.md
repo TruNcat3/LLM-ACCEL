@@ -4,7 +4,8 @@
 execution.**
 
 [Architecture](docs/architecture.md) | [Design space](docs/design-space.md) |
-[Experiments](docs/experiments.md) | [Reproduction](docs/usage.md) |
+[Experiments](docs/experiments.md) | [Setup](docs/environment.md) |
+[Reproduction](docs/usage.md) |
 [Evidence](results/README.md) | [Citation](#citation) | [License](LICENSE)
 
 LLM-ACCEL investigates how a model-aware controller and regular stream-only
@@ -142,7 +143,9 @@ The reference environment is Ubuntu 20.04 with Vitis, Vivado, Vitis HLS, and
 XRT 2022.2. The smallest useful validation path is:
 
 ```bash
-export VITIS_ENV_SCRIPT=/path/to/vitis_env_22.sh
+# Resolve the reference toolchain and verify HLS/Host prerequisites first.
+source scripts/setup_environment.sh
+scripts/check_environment.sh hls
 
 # Fixed-point packet semantics.
 make test_q214_payload_golden
@@ -157,13 +160,14 @@ make test_publication_release
 
 Building the exact multi-kernel image and reproducing the standard P8, P/D,
 or P8/G2 experiments requires profile-specific XOs and long-running HW Emu.
-Follow [Usage and Reproduction](docs/usage.md) rather than copying commands from
-an archived result.
+Follow [Environment Setup](docs/environment.md), then
+[Usage and Reproduction](docs/usage.md), rather than copying commands from an
+archived result.
 
 ## Repository guide
 
 - [`docs/`](docs/README.md) — reading paths for architecture, design choices,
-  experiments, and reproduction.
+  environment setup, experiments, and reproduction.
 - [`kernel/`](kernel/) and [`include/`](include/) — controller, unified compute,
   status sink, fixed-point types, packet ABI, and pipeline parameters.
 - [`host/`](host/) — XRT runtime, deterministic random models, and out-of-band

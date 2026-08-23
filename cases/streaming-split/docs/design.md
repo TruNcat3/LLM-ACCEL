@@ -1,5 +1,9 @@
 # Case 2: Streaming Split Architecture (cc + V8-2_s)
 
+[Case overview](../README.md) | [Environment](../../../docs/environment.md) |
+[Main architecture](../../../docs/architecture.md) |
+[Repository](../../../README.md)
+
 ## Overview
 
 A **separated streaming architecture** where a model-aware control/cache

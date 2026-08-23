@@ -72,7 +72,7 @@ endif
 .PHONY: help
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
-.PHONY: hls_csim_nk test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan test_qwen3b_e2e_launcher_contract test_coarse_task_residency_contract test_e2e_progress_contract test_e2e_status_contract test_e2e_performance_semantics test_e2e_scaling_report test_result_installer_contract test_qwen3b_source_snapshot test_publication_tree test_publication_release verify_result_checksums regenerate_root_checksums verify_q214_pd_release verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csim_nk check_environment test_environment_contract test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan test_qwen3b_e2e_launcher_contract test_coarse_task_residency_contract test_e2e_progress_contract test_e2e_status_contract test_e2e_performance_semantics test_e2e_scaling_report test_result_installer_contract test_qwen3b_source_snapshot test_publication_tree test_publication_release verify_result_checksums regenerate_root_checksums verify_q214_pd_release verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
 .PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
 .PHONY: hls_csim_closed_loop_8x64_resident_prefill_block hls_cosim_closed_loop_8x64_resident_prefill_block
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
@@ -83,6 +83,8 @@ endif
 
 help:
 	@echo "Dual-8x64 Qwen accelerator build entry points"
+	@echo "  make check_environment ENV_MODE=publication|hls|hw-emu|board"
+	@echo "  make test_environment_contract"
 	@echo "  make hls_csim_compute"
 	@echo "  make hls_csynth_compute"
 	@echo "  make hls_cosim_compute"
@@ -182,10 +184,17 @@ test_result_installer_contract:
 test_qwen3b_source_snapshot:
 	tests/test_qwen3b_source_snapshot.sh
 
+check_environment:
+	scripts/check_environment.sh $${ENV_MODE:-publication}
+
+test_environment_contract:
+	tests/test_environment_contract.sh
+
 test_publication_tree:
 	tests/test_publication_tree.sh
 
-test_publication_release: test_qwen3b_e2e_plan \
+test_publication_release: test_environment_contract \
+		test_qwen3b_e2e_plan \
 		test_qwen3b_e2e_launcher_contract \
 		test_coarse_task_residency_contract \
 		test_e2e_progress_contract \

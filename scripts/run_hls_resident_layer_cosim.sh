@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-source /home/hepc/env/vitis_env_22.sh >/dev/null 2>&1
+source scripts/setup_environment.sh >/dev/null
 
 export CC8_NK_TASK_STREAM_DEPTH="${CC8_NK_TASK_STREAM_DEPTH:-2}"
 export CC8_NK_DATA_STREAM_DEPTH="${CC8_NK_DATA_STREAM_DEPTH:-2}"

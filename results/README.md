@@ -1,7 +1,8 @@
 # Published Experimental Evidence
 
 [Repository](../README.md) | [Documentation](../docs/README.md) |
-[Experiments](../docs/experiments.md) | [License](../LICENSE)
+[Experiments](../docs/experiments.md) | [Setup](../docs/environment.md) |
+[License](../LICENSE)
 
 This directory contains compact, versioned evidence packages for the claims in
 the root README and the experimental report. Raw HW-Emu CU profiles, Host
@@ -48,11 +49,19 @@ represented as a published result.
 
 ## Integrity
 
-Run the repository helper from the project root:
+Run the repository helper from the project root after the `hls` preflight.
+The aggregate gate compiles Host-only contracts but launches neither synthesis
+nor simulation:
 
 ```bash
+source scripts/setup_environment.sh
+scripts/check_environment.sh hls
 make test_publication_release
 ```
+
+For evidence checks on a machine without AMD/Xilinx tools, use
+`scripts/check_environment.sh publication`, `make test_publication_tree`, and
+`make verify_result_checksums` instead.
 
 The verifier accepts both historical repository-root-relative manifests and
 the archive-relative manifests emitted by the current atomic E2E archiver.

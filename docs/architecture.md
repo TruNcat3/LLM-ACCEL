@@ -1,7 +1,8 @@
 # Architecture
 
 [Documentation index](README.md) | [Design space](design-space.md) |
-[Experiments](experiments.md) | [Repository](../README.md)
+[Experiments](experiments.md) | [Setup](environment.md) |
+[Repository](../README.md)
 
 ## 1. Design objective
 

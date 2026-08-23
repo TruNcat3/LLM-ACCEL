@@ -9,6 +9,7 @@ required_files=(
     LICENSE
     LICENSES/CC-BY-NC-4.0.md
     docs/README.md
+    docs/environment.md
     docs/architecture.md
     docs/design-space.md
     docs/coarse-task-runtime.md
@@ -28,6 +29,8 @@ for path in "${required_files[@]}"; do
 done
 
 required_executables=(
+    scripts/check_environment.sh
+    scripts/setup_environment.sh
     scripts/archive_vitis_8x64_e2e_run.sh
     scripts/install_vitis_8x64_e2e_result.sh
     scripts/regenerate_root_checksums.sh
@@ -39,6 +42,7 @@ required_executables=(
     scripts/verify_qwen3b_e2e_release.sh
     scripts/verify_vitis_8x64_e2e_progress.sh
     scripts/verify_result_checksums.sh
+    tests/test_environment_contract.sh
 )
 for path in "${required_executables[@]}"; do
     if [ ! -x "${path}" ]; then

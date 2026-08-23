@@ -1,7 +1,7 @@
 # LLM-ACCEL Documentation
 
-[Repository](../README.md) | [Evidence index](../results/README.md) |
-[License](../LICENSE)
+[Repository](../README.md) | [Setup](environment.md) |
+[Evidence index](../results/README.md) | [License](../LICENSE)
 
 The documentation is organized by question rather than by implementation
 history. Start with the shortest path that matches your goal.
@@ -19,9 +19,11 @@ history. Start with the shortest path that matches your goal.
 
 ## Reproduce the work
 
+- [Environment Setup](environment.md) defines the supported toolchain, host
+  dependencies, platform variables, resource guards, and four preflight modes.
 - [Usage and Reproduction](usage.md) is the authoritative command reference
-  for CSim, finite-buffer RTL CoSim, XO export, HW Emu, profile selection,
-  artifact inspection, and release checks.
+  after environment preflight: profiles, CSim, finite-buffer RTL CoSim, XO
+  export, HW Emu, artifact inspection, and release checks.
 - [Published Experimental Evidence](../results/README.md) indexes immutable
   result packages and the precise claim supported by each package.
 

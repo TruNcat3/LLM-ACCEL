@@ -14,7 +14,8 @@ esac
 
 # This flow is intentionally hw_emu-only.  The resident layer must pass the
 # complete functional/performance loop before it is promoted to TARGET=hw.
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 profile="${VITIS_8X64_MODEL_PROFILE:-qwen-layer}"
 fifo_depth="${CC8_WEIGHT_TILE_FIFO_DEPTH:-2}"
 load_ii="${CC8_WEIGHT_TILE_LOAD_II:-2}"

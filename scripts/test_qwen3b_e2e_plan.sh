@@ -3,7 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 build_dir="${QWEN3B_PLAN_BUILD_DIR:-/tmp/llm_accel_qwen3b_plan}"
 if [ ! -r "${env_script}" ]; then
     echo "Missing Vitis environment script: ${env_script}" >&2

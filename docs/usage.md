@@ -1,26 +1,25 @@
 # Usage and Reproduction
 
 [Documentation index](README.md) | [Architecture](architecture.md) |
-[Experiments](experiments.md) | [Repository](../README.md)
+[Experiments](experiments.md) | [Setup](environment.md) |
+[Repository](../README.md)
 
-## 1. Toolchain
+## 1. Prepare and verify the environment
 
-The recorded experiments use:
-
-- Ubuntu 20.04;
-- Vitis, Vivado, and Vitis HLS 2022.2;
-- XRT 2022.2;
-- platform `xilinx_u50_gen3x16_xdma_5_202210_1` for Vitis integration.
-
-Set the environment script without modifying repository files:
+Complete [Environment Setup](environment.md) before selecting a profile or
+launching a build. The normal HLS/Host handoff is:
 
 ```bash
-export VITIS_ENV_SCRIPT=/path/to/vitis_env_22.sh
-source "$VITIS_ENV_SCRIPT"
+source scripts/setup_environment.sh
+scripts/check_environment.sh hls
 ```
 
-The scripts default to `/home/hepc/env/vitis_env_22.sh` when the variable is
-not supplied.
+Use `scripts/check_environment.sh hw-emu` before a linked Vitis build or XSim
+run. Use `publication` for documentation/checksum inspection and `board` for
+XRT device-node checks. The setup helper resolves standard paths or honors
+explicit `VITIS_ENV_SCRIPT`, `XILINX_XRT`, `DEVICE`, and `XPLATFORM` values.
+All public launchers share this resolver; no repository command requires a
+site-private environment path.
 
 ## 2. Repository profiles
 
@@ -541,15 +540,24 @@ package separately records sequence batch, sampled outputs, and the single
 real D1 forward.
 
 The publication tree and every versioned result package can be checked without
-launching any Xilinx tool:
+launching synthesis or simulation. The lightweight command is:
 
 ```bash
+scripts/check_environment.sh publication
+make test_publication_tree
+make verify_result_checksums
+```
+
+The complete release gate also compiles Host-only planning and arithmetic
+contracts against the HLS/XRT headers. It therefore requires the `hls`
+preflight, although it still launches neither Vitis synthesis nor XSim:
+
+```bash
+source scripts/setup_environment.sh
+scripts/check_environment.sh hls
 make test_publication_release
 
 # The constituent checks can also be run independently.
-make test_publication_tree
-make verify_result_checksums
-
 # Release maintainers stage the complete candidate before rebuilding the root
 # manifest. The generator refuses unstaged or untracked release files.
 git add -A
@@ -591,29 +599,32 @@ self-contained and does not depend on the Case 1 source files.
 
 ```bash
 cd cases/streaming-split
+source ../../scripts/setup_environment.sh
+../../scripts/check_environment.sh hls
+mkdir -p build
 
 # Compile both kernels (sw_emu)
-v++ -c -t sw_emu --platform $PLATFORM -I include \
+v++ -c -t sw_emu --platform "${XPLATFORM}" -I include \
   --hls.clock 300000000:control_cache_core \
   -k control_cache_core kernel/control_cache_core.cpp -o build/cc.xo
 
-v++ -c -t sw_emu --platform $PLATFORM -I include \
+v++ -c -t sw_emu --platform "${XPLATFORM}" -I include \
   --hls.clock 300000000:qkv_tile_kernel_cc_qwen_small_core_v8_2_s \
   -k qkv_tile_kernel_cc_qwen_small_core_v8_2_s \
   kernel/qkv_tile_kernel_cc_qwen_small_core_v8_2_s.cpp -o build/v82.xo
 
 # Link with 4-PC weight connectivity
-v++ -l -t sw_emu --platform $PLATFORM --config conn_v8_2x2.cfg \
+v++ -l -t sw_emu --platform "${XPLATFORM}" --config conn_v8_2x2.cfg \
   --kernel_frequency 300 build/cc.xo build/v82.xo -o build/v8_2x2.xclbin
 
 # Build and run hosts
-g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
+g++ -std=c++14 -O2 -I"${XILINX_XRT}/include" -I./include \
   host/host_v8_2x2.cpp host/xcl2.cpp -o build/host_v8_2x2 \
-  -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
+  -L"${XILINX_XRT}/lib" -lOpenCL -lpthread
 
-g++ -std=c++14 -O2 -I/opt/xilinx/xrt/include -I./include \
+g++ -std=c++14 -O2 -I"${XILINX_XRT}/include" -I./include \
   host/host_accum.cpp host/xcl2.cpp -o build/host_accum \
-  -L/usr/lib/x86_64-linux-gnu -lOpenCL -lpthread
+  -L"${XILINX_XRT}/lib" -lOpenCL -lpthread
 
 # 7-op integrated layer (Q/K/V/O/Gate/Up/Down)
 XCL_EMULATION_MODE=sw_emu ./build/host_v8_2x2 build/v8_2x2.xclbin

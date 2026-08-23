@@ -1,7 +1,8 @@
 # Controller-Resident Coarse-Task Runtime
 
 [Documentation index](README.md) | [Architecture](architecture.md) |
-[Experiments](experiments.md) | [Reproduction](usage.md)
+[Experiments](experiments.md) | [Setup](environment.md) |
+[Reproduction](usage.md)
 
 ## Motivation
 
@@ -139,7 +140,8 @@ The build helper accepts both the standard `qwen-layer` profile and the small
 two-layer contract profile:
 
 ```bash
-source /home/hepc/env/vitis_env_22.sh
+source scripts/setup_environment.sh
+scripts/check_environment.sh hw-emu
 
 # Closed-loop CSim or RTL CoSim with source-fingerprint protection.
 make hls_csim_closed_loop_8x64_composed_layer

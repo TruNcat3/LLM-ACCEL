@@ -15,7 +15,8 @@ esac
 # Dedicated hw_emu image for the staged block-prefill layer.  It retains the
 # projection/vector operators used by the host plus CC8_OP_ATTN_PREFILL_BLOCK,
 # while pruning decode, resident-layer, and diagnostic-attention schedulers.
-env_script="${VITIS_ENV_SCRIPT:-/home/hepc/env/vitis_env_22.sh}"
+source scripts/setup_environment.sh >/dev/null
+env_script="${VITIS_ENV_SCRIPT}"
 profile="${VITIS_8X64_MODEL_PROFILE:-qwen-layer}"
 fifo_depth="${CC8_WEIGHT_TILE_FIFO_DEPTH:-2}"
 load_ii="${CC8_WEIGHT_TILE_LOAD_II:-2}"
