@@ -11,14 +11,14 @@ project.
 
 ## Evidence index
 
-| Artifact | Workload | Evidence source | Timed scope | Primary supported claim |
-| --- | --- | --- | --- | --- |
-| [`q214-pd-20260811/`](q214-pd-20260811/) | Standard Qwen layer, P/D contexts 64--1024 | Vitis 2022.2 HW Emu CU profiles | Host-orchestrated operator-level controller intervals | Context scaling and useful-MAC efficiency of the diagnostic datapath |
-| [`coarse-task-20260816/`](coarse-task-20260816/) | Small two-layer Task-18/19/20 and serial P2/G3 | RTL CoSim, HW Emu, HLS CSynth | Common four-CU modeled interval | Cross-task/cross-layer HBM residency and controller-owned KV |
-| [`block-prefill-20260817/`](block-prefill-20260817/) | Small P8, P16, P11 tail, and P8/G2 | RTL CoSim, HW Emu, HLS CSynth | Common four-CU modeled interval | 1--8-row block semantics, causal KV state, and finite-FIFO closure |
-| [`q214-resident-fix-20260818/`](q214-resident-fix-20260818/) | Standard Qwen-shaped P8 Task 18 -> 19 -> 20 | Vitis 2022.2 HW Emu CU profile and fixed-point oracle | Common four-CU modeled interval | 16,384-value numerical closure with no intermediate Host copy |
-| [`qwen3b-e2e-20260820/`](qwen3b-e2e-20260820/) | Standard-shape Qwen2.5-3B P8/G2/L1 composition | Vitis 2022.2 HW Emu CU profile, fixed-point oracle, and HLS CSynth | Common four-CU modeled interval | Six-task Prefill-plus-real-D1 closure: 4,096 values exact, 1,190,693 cycles, and 56.904% modeled useful-MAC efficiency |
-| [`qwen3b-e2e-l2-20260821/`](qwen3b-e2e-l2-20260821/) | Standard-shape Qwen2.5-3B P8/G2/L2 composition | Vitis 2022.2 HW Emu CU profile, fixed-point oracle, and HLS CSynth | Common four-CU modeled interval | Ten-task cross-layer Prefill-plus-real-D1 closure: 4,096 values exact, 2,319,441.4 cycles, and 58.424% modeled useful-MAC efficiency |
+| Design | Artifact | Workload | Evidence source | Timed scope | Primary supported claim |
+| --- | --- | --- | --- | --- | --- |
+| D1 | [`q214-pd-20260811/`](q214-pd-20260811/) | Standard Qwen layer, P/D contexts 64--1024 | Vitis 2022.2 HW Emu CU profiles | Host-orchestrated operator-level controller intervals | Context scaling and useful-MAC efficiency of the diagnostic datapath |
+| P1 | [`coarse-task-20260816/`](coarse-task-20260816/) | Small two-layer Task-18/19/20 and serial P2/G3 | RTL CoSim, HW Emu, HLS CSynth | Common four-CU modeled interval | Cross-task/cross-layer HBM residency and controller-owned KV |
+| P1 | [`block-prefill-20260817/`](block-prefill-20260817/) | Small P8, P16, P11 tail, and P8/G2 | RTL CoSim, HW Emu, HLS CSynth | Common four-CU modeled interval | 1--8-row block semantics, causal KV state, and finite-FIFO closure |
+| R1 | [`q214-resident-fix-20260818/`](q214-resident-fix-20260818/) | Standard Qwen-shaped P8 Task 18 -> 19 -> 20 | Vitis 2022.2 HW Emu CU profile and fixed-point oracle | Common four-CU modeled interval | 16,384-value numerical closure with no intermediate Host copy |
+| R1 | [`qwen3b-e2e-20260820/`](qwen3b-e2e-20260820/) | Standard-shape Qwen2.5-3B P8/G2/L1 composition | Vitis 2022.2 HW Emu CU profile, fixed-point oracle, and HLS CSynth | Common four-CU modeled interval | Six-task Prefill-plus-real-D1 closure: 4,096 values exact, 1,190,693 cycles, and 56.904% modeled useful-MAC efficiency |
+| R1 | [`qwen3b-e2e-l2-20260821/`](qwen3b-e2e-l2-20260821/) | Standard-shape Qwen2.5-3B P8/G2/L2 composition | Vitis 2022.2 HW Emu CU profile, fixed-point oracle, and HLS CSynth | Common four-CU modeled interval | Ten-task cross-layer Prefill-plus-real-D1 closure: 4,096 values exact, 2,319,441.4 cycles, and 58.424% modeled useful-MAC efficiency |
 
 The Qwen2.5-3B packages are bounded one- and two-layer generation-path gates
 using deterministic random Fix16 weights and tied embeddings. Together they

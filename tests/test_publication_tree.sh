@@ -49,6 +49,7 @@ done
 for heading in \
     '## Research contributions' \
     '## Architecture at a glance' \
+    '## Implementation variants and evidence map' \
     '## Key results' \
     '## Reproduce the core validation' \
     '## Citation' \
@@ -59,6 +60,20 @@ do
         exit 65
     fi
 done
+
+for design_id in R1 D1 P1 S1; do
+    if ! rg -q "\\*\\*${design_id} —" README.md; then
+        echo "README is missing implementation ID: ${design_id}" >&2
+        exit 65
+    fi
+done
+
+if ! rg -F -q '[R1] P8/G2' docs/assets/e2e-scaling.svg ||
+   ! rg -F -q '[D1] Query-block' docs/assets/pd-efficiency.svg ||
+   ! rg -F -q '[R1] Whole-system' docs/assets/resource-utilization.svg; then
+    echo "Root figures are not mapped to implementation IDs" >&2
+    exit 65
+fi
 
 readme_lines="$(wc -l < README.md)"
 if [ "${readme_lines}" -gt 260 ]; then

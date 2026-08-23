@@ -7,6 +7,9 @@ This document records the architectural alternatives explored by LLM-ACCEL.
 The goal is to make the current implementation understandable as a sequence of
 measured choices rather than as the only possible design.
 
+The root [implementation and evidence map](../README.md#implementation-variants-and-evidence-map)
+assigns stable IDs R1, D1, P1, and S1 to these source and measurement boundaries.
+
 ## 1. Kernel partitioning
 
 | Candidate | Advantages | Disadvantages | Status |

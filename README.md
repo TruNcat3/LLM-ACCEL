@@ -84,6 +84,18 @@ The production task contract is `Task 18 = Attention`, `Task 19 = FFN`, and
 memory hierarchy and packet ABI, and the [design-space study](docs/design-space.md)
 for alternatives.
 
+## Implementation variants and evidence map
+
+Stable design IDs identify the exact execution boundary behind every root
+figure. A dash means that the variant has no root-level performance plot.
+
+| ID and implementation | Execution boundary | Source family | Root figure | Released evidence |
+| --- | --- | --- | --- | --- |
+| **R1 — Resident coarse-task (current)** | Controller executes Tasks 18/19/20; hidden and KV remain in HBM | [`kernel/`](kernel/), [`host/`](host/) | [E2E scaling](docs/assets/e2e-scaling.svg), [resources](docs/assets/resource-utilization.svg) | [P8 resident](results/q214-resident-fix-20260818/), [L1](results/qwen3b-e2e-20260820/), [L2](results/qwen3b-e2e-l2-20260821/) |
+| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | [P/D efficiency](docs/assets/pd-efficiency.svg) | [P/D 64--1024](results/q214-pd-20260811/) |
+| **P1 — Small resident protocol profiles** | Reduced shapes test finite FIFOs, block tails, residency, and controller-owned KV | R1 kernels with small model profiles | — | [Coarse tasks](results/coarse-task-20260816/), [block prefill](results/block-prefill-20260817/) |
+| **S1 — Streaming split / V8-2_s** | Earlier control/cache plus fixed compute-core split; analytical full-layer projection only | [`cases/streaming-split/`](cases/streaming-split/) | — | [Design and evidence limits](cases/streaming-split/docs/design.md) |
+
 ## Key results
 
 All performance numbers below are derived from Vitis 2022.2 HW Emu CU traces
@@ -91,7 +103,7 @@ at a modeled 200 MHz. They exclude Host embedding, LM-head/sampling, CPU golden
 checks, PCIe-inclusive request latency, and simulator wall time. They are not
 physical-board measurements.
 
-### Standard-shape multi-layer composition
+### R1: standard-shape multi-layer composition
 
 The P8/G2 gates execute one eight-token prompt followed by one real single-row
 decode forward. `P8` means eight query rows from one sequence—not batch eight.
@@ -108,7 +120,7 @@ efficiency rises from 56.904% to 58.424%. Raw, checksum-protected evidence is
 published for [L1](results/qwen3b-e2e-20260820/) and
 [L2](results/qwen3b-e2e-l2-20260821/).
 
-### Prefill and decode context scaling
+### D1: prefill and decode context scaling
 
 The earlier operator-level diagnostic evaluates one full eight-row prefill
 block and one single-row decode step at four KV lengths. It validates the
@@ -121,7 +133,7 @@ The complete cycle, latency, throughput, and precision tables are in the
 [P/D report](docs/q214-pd-length-hwemu.md), with raw profiles under
 [`results/q214-pd-20260811/`](results/q214-pd-20260811/).
 
-### Resource qualification
+### R1: resource qualification
 
 ![Profile-matched HLS resource estimates for the complete four-CU system.](docs/assets/resource-utilization.svg)
 
