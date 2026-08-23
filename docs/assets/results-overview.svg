@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc" font-family="DejaVu Sans">
-  <title id="title">Selected LLM-ACCEL results mapped to R1 and D1 implementations</title>
-  <desc id="desc">A four-panel overview showing the most complete released R1 generation gate, the highest-utilization bounded R1 gate, the distinctive D1 prefill-versus-decode shape effect, and the R1 profile-matched HLS resource envelope.</desc>
+  <title id="title">Selected results from the current R1 resident coarse-task implementation</title>
+  <desc id="desc">A four-panel R1 overview showing the most complete released generation gate, the highest-utilization bounded gate, cross-layer amortization from one to two layers, and the profile-matched HLS resource envelope.</desc>
   <rect width="1200" height="650" rx="18" fill="#0d1117"/>
   <style>
-    .title{font-size:24px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.card{fill:#161b22;stroke:#30363d;stroke-width:1}.tag{font-size:12px;font-weight:700;fill:#0d1117}.head{font-size:17px;font-weight:700;fill:#f0f6fc}.scope{font-size:13px;fill:#8b949e}.metric{font-size:31px;font-weight:700;fill:#f0f6fc}.unit{font-size:14px;font-weight:600;fill:#c9d1d9}.value{font-size:15px;font-weight:700;fill:#f0f6fc}.note{font-size:12px;fill:#8b949e}.label{font-size:13px;font-weight:600;fill:#c9d1d9}.grid{stroke:#30363d;stroke-width:1}.track{fill:#21262d}.blue{fill:#58a6ff}.green{fill:#3fb950}.purple{fill:#d2a8ff}.orange{fill:#f0883e}.linep{stroke:#3fb950;stroke-width:4}.lined{stroke:#58a6ff;stroke-width:4}
+    .title{font-size:24px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.card{fill:#161b22;stroke:#30363d;stroke-width:1}.tag{font-size:12px;font-weight:700;fill:#0d1117}.head{font-size:17px;font-weight:700;fill:#f0f6fc}.scope{font-size:13px;fill:#8b949e}.metric{font-size:31px;font-weight:700;fill:#f0f6fc}.unit{font-size:14px;font-weight:600;fill:#c9d1d9}.value{font-size:15px;font-weight:700;fill:#f0f6fc}.positive{font-size:14px;font-weight:700;fill:#3fb950}.note{font-size:12px;fill:#8b949e}.label{font-size:13px;font-weight:600;fill:#c9d1d9}.grid{stroke:#30363d;stroke-width:1}.track{fill:#21262d}.blue{fill:#58a6ff}.green{fill:#3fb950}.purple{fill:#d2a8ff}.orange{fill:#f0883e}
   </style>
-  <text class="title" x="30" y="38">Selected results · implementation-aware overview</text>
-  <text class="sub" x="30" y="62">R1 is the current resident coarse-task mainline; D1 is retained only for its operator-level shape diagnostic</text>
+  <text class="title" x="30" y="38">Selected R1 results · current mainline overview</text>
+  <text class="sub" x="30" y="62">All four panels use the resident coarse-task implementation; historical diagnostics remain in the detailed report</text>
 
   <rect class="card" x="28" y="82" width="558" height="230" rx="12"/>
   <rect class="green" x="50" y="102" width="42" height="24" rx="12"/><text class="tag" x="63" y="119">R1</text>
@@ -15,8 +15,8 @@
   <text class="metric" x="50" y="195">119.652</text><text class="unit" x="205" y="194">useful GMAC/s</text>
   <text class="metric" x="342" y="195">58.424%</text><text class="unit" x="342" y="216">modeled efficiency</text>
   <line class="grid" x1="50" y1="236" x2="562" y2="236"/>
-  <text class="label" x="50" y="263">L1 → L2 cycles/layer</text><text class="value" x="225" y="263">1.191M → 1.160M</text>
-  <text class="note" x="50" y="289">−2.60% per layer · 4,096/4,096 values exact · hidden/KV stay resident</text>
+  <text class="label" x="50" y="263">Common four-CU interval</text><text class="value" x="245" y="263">2.319M cycles · 11.597 ms</text>
+  <text class="note" x="50" y="289">4,096/4,096 values exact · hidden/KV stay resident across both layers</text>
 
   <rect class="card" x="614" y="82" width="558" height="230" rx="12"/>
   <rect class="green" x="636" y="102" width="42" height="24" rx="12"/><text class="tag" x="649" y="119">R1</text>
@@ -29,16 +29,15 @@
   <text class="note" x="636" y="289">16,384/16,384 values exact · not a generation request or board result</text>
 
   <rect class="card" x="28" y="336" width="558" height="286" rx="12"/>
-  <rect class="blue" x="50" y="356" width="42" height="24" rx="12"/><text class="tag" x="63" y="373">D1</text>
-  <text class="head" x="106" y="374">Distinctive shape diagnostic</text>
-  <text class="scope" x="50" y="402">Operator-level Q2.14 intervals · KV context 64 → 1024</text>
-  <text class="label" x="50" y="449">Prefill · 8 rows</text>
-  <line class="linep" x1="184" y1="444" x2="510" y2="444"/><circle class="green" cx="184" cy="444" r="7"/><circle class="green" cx="510" cy="444" r="7"/>
-  <text class="value" x="174" y="474">94.812%</text><text class="value" x="463" y="474">72.310%</text>
-  <text class="label" x="50" y="527">Decode · 1 row</text>
-  <line class="lined" x1="184" y1="522" x2="510" y2="522"/><circle class="blue" cx="184" cy="522" r="7"/><circle class="blue" cx="510" cy="522" r="7"/>
-  <text class="value" x="174" y="552">13.296%</text><text class="value" x="463" y="552">11.607%</text>
-  <text class="note" x="50" y="596">Feature: quantifies M=8 Prefill versus M=1 Decode underfill; not E2E latency</text>
+  <rect class="green" x="50" y="356" width="42" height="24" rx="12"/><text class="tag" x="63" y="373">R1</text>
+  <text class="head" x="106" y="374">Cross-layer amortization</text>
+  <text class="scope" x="50" y="402">Same Host, xclbin, and emulation configuration · L1 → L2</text>
+  <text class="label" x="50" y="447">Cycles / layer</text><text class="value" x="190" y="447">1.191M → 1.160M</text><text class="positive" x="466" y="447">−2.60%</text>
+  <line class="grid" x1="50" y1="466" x2="562" y2="466"/>
+  <text class="label" x="50" y="500">Useful GMAC/s</text><text class="value" x="190" y="500">116.540 → 119.652</text><text class="positive" x="466" y="500">+2.67%</text>
+  <line class="grid" x1="50" y1="519" x2="562" y2="519"/>
+  <text class="label" x="50" y="553">Efficiency</text><text class="value" x="190" y="553">56.904% → 58.424%</text><text class="positive" x="466" y="553">+1.520 pp</text>
+  <text class="note" x="50" y="596">Feature: useful work doubles while modeled cycles rise only 1.948x</text>
 
   <rect class="card" x="614" y="336" width="558" height="286" rx="12"/>
   <rect class="green" x="636" y="356" width="42" height="24" rx="12"/><text class="tag" x="649" y="373">R1</text>

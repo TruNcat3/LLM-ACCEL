@@ -92,18 +92,17 @@ figure. A dash means that the variant has no root-level performance plot.
 | ID and implementation | Execution boundary | Source family | Root figure | Released evidence |
 | --- | --- | --- | --- | --- |
 | **R1 — Resident coarse-task (current)** | Controller executes Tasks 18/19/20; hidden and KV remain in HBM | [`kernel/`](kernel/), [`host/`](host/) | [R1 overview panels](docs/assets/results-overview.svg) | [P8 resident](results/q214-resident-fix-20260818/), [L1](results/qwen3b-e2e-20260820/), [L2](results/qwen3b-e2e-l2-20260821/) |
-| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | [D1 overview panel](docs/assets/results-overview.svg) | [P/D 64--1024](results/q214-pd-20260811/) |
+| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | — | [P/D 64--1024](results/q214-pd-20260811/) |
 | **P1 — Small resident protocol profiles** | Reduced shapes test finite FIFOs, block tails, residency, and controller-owned KV | R1 kernels with small model profiles | — | [Coarse tasks](results/coarse-task-20260816/), [block prefill](results/block-prefill-20260817/) |
 | **S1 — Streaming split / V8-2_s** | Earlier control/cache plus fixed compute-core split; analytical full-layer projection only | [`cases/streaming-split/`](cases/streaming-split/) | — | [Design and evidence limits](cases/streaming-split/docs/design.md) |
 
 ## Key results
 
-The root highlights only the current R1 mainline and one distinctive D1
-diagnostic. Performance values use Vitis 2022.2 HW-Emu CU traces modeled at
-200 MHz; resources are profile-matched HLS estimates. Neither is a
-physical-board measurement.
+The root highlights only the current R1 mainline. Performance values use Vitis
+2022.2 HW-Emu CU traces modeled at 200 MHz; resources are profile-matched HLS
+estimates. Neither is a physical-board measurement.
 
-![Selected R1 mainline results and the distinctive D1 Prefill/Decode shape diagnostic in one implementation-aware dashboard.](docs/assets/results-overview.svg)
+![Four selected result views from the current R1 resident coarse-task implementation.](docs/assets/results-overview.svg)
 
 The richest released R1 boundary is P8/G2/L2: one eight-token prompt and one
 real D1 forward across two layers and ten coarse tasks. It reaches 119.652
@@ -113,9 +112,9 @@ bounded R1 gate is the single-forward P8 Task-18/19/20 path at 189.285 GMAC/s
 and 92.424%; it is shown separately because its narrower workload is not an
 end-to-end generation request.
 
-D1 is retained for one specific architectural observation: an eight-row
-Prefill block reaches 94.812% modeled efficiency at context 64 while one-row
-Decode reaches 13.296%, exposing array underfill. Full plots, tables, timing
+From L1 to L2, useful work doubles while modeled cycles increase by 1.948x:
+cycles per layer fall 2.60%, throughput rises 2.67%, and efficiency rises
+1.520 percentage points. Historical D1/P1/S1 plots, full tables, timing
 boundaries, and raw evidence remain in the [experimental report](docs/experiments.md)
 and [evidence index](results/README.md). Host compute, PCIe-inclusive latency,
 and simulator wall time are excluded from all displayed HW-Emu intervals.

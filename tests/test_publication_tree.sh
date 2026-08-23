@@ -69,7 +69,7 @@ for design_id in R1 D1 P1 S1; do
     fi
 done
 
-if ! rg -F -q 'Selected results · implementation-aware overview' docs/assets/results-overview.svg ||
+if ! rg -F -q 'Selected R1 results · current mainline overview' docs/assets/results-overview.svg ||
    ! rg -F -q '[R1] P8/G2' docs/assets/e2e-scaling.svg ||
    ! rg -F -q '[D1] Query-block' docs/assets/pd-efficiency.svg ||
    ! rg -F -q '[R1] Whole-system' docs/assets/resource-utilization.svg; then
@@ -102,7 +102,13 @@ if [ "$(rg -c '^!\[' README.md)" -ne 1 ] ||
     exit 65
 fi
 
-for metric in '119.652' '58.424%' '189.285' '92.424%' '94.812%' '13.296%' '80.0%'; do
+if [ "$(rg -o '>R1<' docs/assets/results-overview.svg | wc -l)" -ne 4 ] ||
+   rg -q '>D1<' docs/assets/results-overview.svg; then
+    echo "Consolidated root figure must contain exactly four R1 panels" >&2
+    exit 65
+fi
+
+for metric in '119.652' '58.424%' '189.285' '92.424%' '1.948x' '+2.67%' '+1.520 pp' '80.0%'; do
     if ! rg -F -q "${metric}" docs/assets/results-overview.svg; then
         echo "Consolidated result figure is missing released metric: ${metric}" >&2
         exit 65
