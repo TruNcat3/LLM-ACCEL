@@ -189,6 +189,10 @@ The full-shape wrapper keeps large temporary HLS/Vitis products outside the
 repository and owns long jobs with `tmux`:
 
 ```bash
+# Optional: keep the complete build and tool scratch on a large filesystem.
+export VITIS_8X64_QWEN3B_WORK_ROOT=/fast-scratch/$USER/llm-accel-qwen3b
+export VITIS_8X64_QWEN3B_TMP_ROOT=$VITIS_8X64_QWEN3B_WORK_ROOT/tmp
+
 # Synthesize qwen2.5-3b compute/controller/status XOs, link the four-CU
 # HW-Emu image, and compile the matching Host. The compute XO is rebuilt for
 # MAX_SEQ_LEN=2048; reusing the 96-position qwen-layer XO is not safe.

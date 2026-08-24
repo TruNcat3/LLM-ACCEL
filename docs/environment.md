@@ -128,8 +128,14 @@ desired high-capacity filesystem:
 
 ```bash
 export VITIS_8X64_QWEN3B_WORK_ROOT=/fast-scratch/$USER/llm-accel-qwen3b
-export VITIS_8X64_HLS_PROJECT_ROOT=/fast-scratch/$USER/llm-accel-hls
+export VITIS_8X64_QWEN3B_TMP_ROOT=/fast-scratch/$USER/llm-accel-qwen3b/tmp
 ```
+
+The Qwen build launcher forwards both paths, the selected device, thread
+count, and resource thresholds explicitly into its tmux worker. This avoids a
+long-lived tmux server silently reusing stale environment values. `TMPDIR` is
+also bound to `VITIS_8X64_QWEN3B_TMP_ROOT`, so the 100-GiB capacity guard is
+checked on the filesystem that actually owns build scratch data.
 
 Generated XO, xclbin, waveform, executable, checkpoint, and build-tree files
 are intentionally excluded from Git. A released evidence package records the
