@@ -175,6 +175,52 @@ fi
     "${host_log}" "${prompt_tokens}" "${generated_tokens}" \
     "${layers}" "${block_size}" >/dev/null
 
+task_program_report="$(
+    "${repo_root}/scripts/verify_host_task_program_trace.sh" "${host_log}"
+)"
+task_program_value() {
+    local field="$1"
+    awk -F '\t' -v field="${field}" \
+        '$1 == field { value = $2 } END { print value }' \
+        <<<"${task_program_report}"
+}
+host_task_program_contract="$(
+    task_program_value host_task_program_contract
+)"
+host_task_program_evidence="$(
+    task_program_value host_task_program_evidence
+)"
+host_task_program_pair_trace_verified="$(
+    task_program_value host_task_program_pair_trace_verified
+)"
+host_task_program_progress_records="$(
+    task_program_value host_task_program_progress_records
+)"
+if [ "${host_task_program_progress_records}" -ne "${expected_tasks}" ]; then
+    echo "Host task-program trace does not cover the complete workload" >&2
+    exit 65
+fi
+binary_has_static_contract=0
+if rg -a -q -- 'static_descriptor_v1' "${host_exe}"; then
+    binary_has_static_contract=1
+fi
+if [ "${host_task_program_contract}" = "static_descriptor_v1" ]; then
+    if [ "${binary_has_static_contract}" -ne 1 ] ||
+       [ "${host_task_program_pair_trace_verified}" != "1" ]; then
+        echo "Static Host task-program binary/trace evidence is incomplete" >&2
+        exit 65
+    fi
+elif [ "${host_task_program_contract}" = "legacy_equivalent_sequence" ]; then
+    if [ "${binary_has_static_contract}" -ne 0 ] ||
+       [ "${host_task_program_pair_trace_verified}" != "0" ]; then
+        echo "Legacy Host task-program classification contradicts the binary" >&2
+        exit 65
+    fi
+else
+    echo "Unsupported Host task-program classification" >&2
+    exit 65
+fi
+
 numeric_summary="$(
     awk '/^QWEN_8X64_E2E_NUMERIC_VERIFY / { last = $0 } END { print last }' \
         "${host_log}"
@@ -290,7 +336,7 @@ if [ -n "${archive_dir}" ]; then
     for file in \
         build.raw.log checksums.sha256 host.evidence.log host.raw.log manifest.tsv \
         performance.tsv profile_kernels.csv hls_resources.tsv \
-        source_manifest.tsv build_source_equivalence.tsv
+        source_manifest.tsv
     do
         if [ ! -s "${archive_dir}/${file}" ]; then
             echo "Release archive is missing ${file}" >&2
@@ -298,6 +344,15 @@ if [ -n "${archive_dir}" ]; then
         fi
     done
     (cd "${archive_dir}" && sha256sum --check checksums.sha256)
+    archived_build_source_equivalence_included="$(
+        awk -F '\t' '$1 == "build_source_equivalence_included" { value = $2 } END { print value }' \
+            "${archive_dir}/manifest.tsv"
+    )"
+    if [ "${archived_build_source_equivalence_included}" != "0" ] &&
+       [ "${archived_build_source_equivalence_included}" != "1" ]; then
+        echo "Archived build/source equivalence flag is malformed" >&2
+        exit 65
+    fi
     archived_build_sha="$(
         awk -F '\t' '$1 == "build_log_sha256" { value = $2 } END { print value }' \
             "${archive_dir}/manifest.tsv"
@@ -335,31 +390,39 @@ if [ -n "${archive_dir}" ]; then
         echo "Archived source snapshot does not match the current worktree" >&2
         exit 65
     fi
-    "${repo_root}/scripts/report_qwen3b_build_source_equivalence.sh" \
-        "${archive_dir}/build.raw.log" "${source_root}" \
-        > "${build_source_equivalence_file}"
-    if ! cmp -s "${build_source_equivalence_file}" \
-        "${archive_dir}/build_source_equivalence.tsv"; then
-        echo "Archived build/release source equivalence is not reproducible" >&2
-        exit 65
+    if [ "${archived_build_source_equivalence_included}" = "1" ]; then
+        if [ ! -s "${archive_dir}/build_source_equivalence.tsv" ]; then
+            echo "Release archive is missing build_source_equivalence.tsv" >&2
+            exit 66
+        fi
+        if [ "${host_task_program_contract}" = "static_descriptor_v1" ]; then
+            "${repo_root}/scripts/report_qwen3b_build_source_equivalence.sh" \
+                "${archive_dir}/build.raw.log" "${source_root}" \
+                > "${build_source_equivalence_file}"
+            if ! cmp -s "${build_source_equivalence_file}" \
+                "${archive_dir}/build_source_equivalence.tsv"; then
+                echo "Archived build-time source equivalence is not reproducible" >&2
+                exit 65
+            fi
+        fi
+        awk -F '\t' '
+            NR == 1 {
+                if ($1 != "path" || $2 != "role" ||
+                    $3 != "build_source_sha256" ||
+                    $4 != "release_source_sha256" || $5 != "result") exit 1
+                next
+            }
+            {
+                if (NF != 5 || seen[$1]++ || $3 != $4 || $5 != "MATCH") exit 1
+                if ($2 != "build_input" && $2 != "build_harness") exit 1
+                count++
+            }
+            END { exit count >= 30 ? 0 : 1 }
+        ' "${archive_dir}/build_source_equivalence.tsv" || {
+            echo "Archived build/release source equivalence is malformed" >&2
+            exit 65
+        }
     fi
-    awk -F '\t' '
-        NR == 1 {
-            if ($1 != "path" || $2 != "role" ||
-                $3 != "build_source_sha256" ||
-                $4 != "release_source_sha256" || $5 != "result") exit 1
-            next
-        }
-        {
-            if (NF != 5 || seen[$1]++ || $3 != $4 || $5 != "MATCH") exit 1
-            if ($2 != "build_input" && $2 != "build_harness") exit 1
-            count++
-        }
-        END { exit count >= 30 ? 0 : 1 }
-    ' "${archive_dir}/build_source_equivalence.tsv" || {
-        echo "Archived build/release source equivalence is malformed" >&2
-        exit 65
-    }
     for pair in \
         'profile:qwen2.5-3b' \
         "prompt_tokens:${prompt_tokens}" \
@@ -380,8 +443,6 @@ if [ -n "${archive_dir}" ]; then
         'source_snapshot_included:1' \
         'source_snapshot_scope:archive_time_release_candidate_worktree' \
         'binary_identity_scope:launch_recorded_and_archive_recomputed_sha256' \
-        'build_source_equivalence_included:1' \
-        'build_source_equivalence_scope:exact_build_inputs_and_build_harness_vs_release_worktree' \
         'build_log_included:1' \
         'build_log_scope:complete_HLS_XO_link_Host_stdout_stderr'
     do
@@ -397,6 +458,63 @@ if [ -n "${archive_dir}" ]; then
             exit 65
         fi
     done
+    if [ "${host_task_program_contract}" = "static_descriptor_v1" ]; then
+        for pair in \
+            'build_source_equivalence_included:1' \
+            'build_source_equivalence_scope:build_time_sha256_manifest_vs_release_worktree'
+        do
+            key="${pair%%:*}"
+            expected="${pair#*:}"
+            actual="$(
+                awk -F '\t' -v key="${key}" \
+                    '$1 == key { value = $2 } END { print value }' \
+                    "${archive_dir}/manifest.tsv"
+            )"
+            if [ "${actual}" != "${expected}" ]; then
+                echo "Static Host build provenance mismatch: ${key}" >&2
+                exit 65
+            fi
+        done
+    elif [ "${archived_build_source_equivalence_included}" = "0" ]; then
+        unavailable_reason="$(
+            awk -F '\t' '$1 == "build_source_equivalence_unavailable_reason" { value = $2 } END { print value }' \
+                "${archive_dir}/manifest.tsv"
+        )"
+        if [ "${unavailable_reason}" != \
+             "legacy_unversioned_host_predates_build_time_source_manifest" ]; then
+            echo "Legacy Host archive lacks an honest source-provenance limitation" >&2
+            exit 65
+        fi
+    fi
+    archived_task_program_contract="$(
+        awk -F '\t' '$1 == "host_task_program_contract" { value = $2 } END { print value }' \
+            "${archive_dir}/manifest.tsv"
+    )"
+    if [ -z "${archived_task_program_contract}" ]; then
+        if [ "${host_task_program_contract}" != "legacy_equivalent_sequence" ]; then
+            echo "Static Host archive lacks task-program provenance" >&2
+            exit 65
+        fi
+    else
+        for pair in \
+            "host_task_program_contract:${host_task_program_contract}" \
+            "host_task_program_evidence:${host_task_program_evidence}" \
+            "host_task_program_pair_trace_verified:${host_task_program_pair_trace_verified}" \
+            "host_task_program_progress_records:${host_task_program_progress_records}"
+        do
+            key="${pair%%:*}"
+            expected="${pair#*:}"
+            actual="$(
+                awk -F '\t' -v key="${key}" \
+                    '$1 == key { value = $2 } END { print value }' \
+                    "${archive_dir}/manifest.tsv"
+            )"
+            if [ "${actual}" != "${expected}" ]; then
+                echo "Release archive Host task-program mismatch: ${key}" >&2
+                exit 65
+            fi
+        done
+    fi
 fi
 
-echo "QWEN3B_E2E_RELEASE PASS profile=qwen2.5-3b workload=P${prompt_tokens}+G${generated_tokens} layers=${layers} tasks=${expected_tasks} numerical_full_prefix=PASS max_raw_error=${max_error} tolerance=${tolerance}"
+echo "QWEN3B_E2E_RELEASE PASS profile=qwen2.5-3b workload=P${prompt_tokens}+G${generated_tokens} layers=${layers} tasks=${expected_tasks} host_task_program=${host_task_program_contract} pair_trace_verified=${host_task_program_pair_trace_verified} numerical_full_prefix=PASS max_raw_error=${max_error} tolerance=${tolerance}"

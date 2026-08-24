@@ -72,6 +72,14 @@ controller, validate its status record, and advance to the next descriptor.
 Only a program marked for final materialization performs a hidden-state D2H
 transfer.
 
+Runtime provenance is part of the result contract. A binary built with this
+executor emits `host_task_program=static_descriptor_v1`; its archive is valid
+only when every `COARSE_TASK_PROGRESS` record carries and passes the descriptor
+pair checks (`1 -> 0` for Attention/final norm and `0 -> 1` for FFN). A
+completed pre-versioning run is explicitly classified as
+`legacy_equivalent_sequence` with pair-trace verification disabled, preventing
+an older Host sequence from being mistaken for evidence of the new executor.
+
 [`include/host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp)
 is standard C++14 and can be tested without XRT or HLS. Its unit test freezes
 the L2, released-P8, and D1 task counts, validates every adjacent HBM boundary,

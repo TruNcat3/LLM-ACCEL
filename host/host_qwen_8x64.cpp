@@ -8546,6 +8546,10 @@ int main(int argc, const char* argv[]) {
         }
 
         const command_line_t command = parse_command_line(argc, argv);
+        std::cout
+            << "host_task_program="
+            << llm_accel::kCoarseTaskProgramContract
+            << std::endl;
         model_shape_t shape;
         if (!parse_profile(command.profile, shape)) {
             throw std::runtime_error("unknown --profile " + command.profile);

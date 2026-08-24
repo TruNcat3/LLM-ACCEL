@@ -38,7 +38,9 @@ trees are intentionally excluded.
   external memory.
 - **Static Host task programs.** Explicit Attention, FFN, and final-norm
   descriptors compose each forward while hidden state and KV remain resident
-  across tasks, query blocks, and layers.
+  across tasks, query blocks, and layers. Completed runs identify this
+  executor as `static_descriptor_v1` and validate every HBM ping-pong pair in
+  the task progress trace.
 - **Shape-aware evidence.** Prefill and single-row decode use explicit useful
   work, timing-boundary, and active-row definitions rather than conflating
   query-block height with batch size.
@@ -208,7 +210,7 @@ If LLM-ACCEL contributes to academic work, cite the repository metadata in
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
   email        = {wangt635@ustc.edu.cn},
   url          = {https://github.com/TruNcat3/LLM-ACCEL},
-  version      = {0.9.0}
+  version      = {0.9.1}
 }
 ```
 

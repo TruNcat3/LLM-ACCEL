@@ -83,6 +83,20 @@ host_validation_ms="$(tsv_value "${performance}" host_validation_ms)"
 host_exe_sha="$(tsv_value "${performance}" host_exe_sha256)"
 xclbin_sha="$(tsv_value "${performance}" xclbin_sha256)"
 emconfig_sha="$(tsv_value "${performance}" emconfig_sha256)"
+host_task_program_contract="$(
+    manifest_value host_task_program_contract
+)"
+host_task_program_evidence="$(
+    manifest_value host_task_program_evidence
+)"
+host_task_program_pair_trace_verified="$(
+    manifest_value host_task_program_pair_trace_verified
+)"
+if [ -z "${host_task_program_contract}" ]; then
+    host_task_program_contract=legacy_equivalent_sequence
+    host_task_program_evidence=archive_predates_runtime_contract_metadata
+    host_task_program_pair_trace_verified=0
+fi
 
 for value in \
     "${profile}" "${sequence_batch}" "${prompt_tokens}" \
@@ -122,7 +136,11 @@ printf '| Prefill blocks | %s |\n' "${prefill_blocks}"
 printf '| Sampled output tokens | %s |\n' "${sampled_tokens}"
 printf '| Real D1 decode forwards | %s |\n' "${decode_forwards}"
 printf '| Decoder layers exercised | %s |\n' "${layers}"
-printf '| Host-visible coarse tasks | %s |\n\n' "${tasks}"
+printf '| Host-visible coarse tasks | %s |\n' "${tasks}"
+printf '| Host task-program contract | `%s` |\n' \
+    "${host_task_program_contract}"
+printf '| Runtime HBM pair trace verified | %s |\n\n' \
+    "${host_task_program_pair_trace_verified}"
 printf '`P%s` means %s consecutive query rows from one sequence, not batch ' \
     "${block_rows}" "${block_rows}"
 printf '%s and not %s generated tokens in parallel. ' \
@@ -191,6 +209,15 @@ printf -- '- Accelerator compute: `%s`.\n' \
     "$(manifest_value accelerator_compute_scope)"
 printf -- '- CPU golden: `%s`.\n' "$(manifest_value cpu_golden_scope)"
 printf -- '- Intermediate hidden copy: none; KV owner: controller/HBM.\n'
+printf -- '- Host task program: `%s`; evidence: `%s`.\n' \
+    "${host_task_program_contract}" "${host_task_program_evidence}"
+if [ "$(manifest_value build_source_equivalence_included)" = "1" ]; then
+    printf -- '- Build/source proof: `%s`.\n' \
+        "$(manifest_value build_source_equivalence_scope)"
+else
+    printf -- '- Build/source proof unavailable: `%s`.\n' \
+        "$(manifest_value build_source_equivalence_unavailable_reason)"
+fi
 printf -- '- Trace scope: `%s`; physical-board measurement: `%s`.\n\n' \
     "$(manifest_value trace_scope)" \
     "$(manifest_value physical_board_measurement)"

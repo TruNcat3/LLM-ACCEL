@@ -132,8 +132,14 @@ while [ "${queue_index}" -lt "${#source_queue[@]}" ]; do
     )
 done
 
-printf "INFO: [HLS 200-10] In directory '%s'\n" "${repo_root}" \
-    > "${equivalence_log}"
+printf 'build_source_manifest_begin=1\n' > "${equivalence_log}"
+while IFS=$'\t' read -r path sha bytes role; do
+    [ "${path}" = "path" ] && continue
+    printf 'build_source\t%s\t%s\t%s\t%s\n' \
+        "${path}" "${sha}" "${bytes}" "${role}" \
+        >> "${equivalence_log}"
+done < "${first}"
+printf 'build_source_manifest_end=1\n' >> "${equivalence_log}"
 scripts/report_qwen3b_build_source_equivalence.sh \
     "${equivalence_log}" "${repo_root}" > "${equivalence_report}"
 awk -F '\t' '
@@ -153,6 +159,11 @@ awk -F '\t' '
     echo "Self-contained build/release source equivalence test failed" >&2
     exit 65
 }
+if ! rg -q $'^build_source\t' "${equivalence_log}" ||
+   ! rg -q '^build_source_manifest_end=1$' "${equivalence_log}"; then
+    echo "Build-time source manifest fixture is incomplete" >&2
+    exit 65
+fi
 
 # The build harness passes its private output root through the historical
 # VITIS_8X64_BUILD_DIR name.  The publication Makefile must honor that alias;
@@ -172,4 +183,4 @@ if [[ "${entrypoint_dry_run}" != *"mkdir -p ${entrypoint_build_dir}"* ]] ||
     exit 65
 fi
 
-echo "QWEN3B SOURCE SNAPSHOT PASS files=$(($(wc -l < "${first}") - 1)) local_include_closure=${#visited_sources[@]} release_entrypoint_alias=PASS scope=release_candidate_worktree"
+echo "QWEN3B SOURCE SNAPSHOT PASS files=$(($(wc -l < "${first}") - 1)) local_include_closure=${#visited_sources[@]} build_time_manifest=PASS release_entrypoint_alias=PASS scope=release_candidate_worktree"

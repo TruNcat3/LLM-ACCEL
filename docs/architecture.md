@@ -169,6 +169,13 @@ prefill/decode shape changes program data rather than adding a new scheduling
 branch. The program builder and its continuity checks live in
 [`include/host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp).
 
+The executing binary emits `host_task_program=static_descriptor_v1`. Release
+archives accept that label only when every completed progress record also
+proves the expected HBM pair transition: Attention and final normalization use
+`1 -> 0`, while FFN uses `0 -> 1`. Older unversioned runs remain usable as
+datapath evidence but are labeled `legacy_equivalent_sequence`; they are not
+presented as execution evidence for the static descriptor implementation.
+
 Norm coefficients and the position-indexed RoPE table are persistent model
 state. The host initializes all layer rows and positions once; individual
 Tasks 18--20 do not migrate auxiliary tensors. Task 18 reads the selected RoPE

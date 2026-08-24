@@ -379,8 +379,10 @@ The combined results support three conclusions:
    four-CU interval.
 2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
-3. Reduce repeated Host task issue by packaging reusable task programs while
-   preserving the explicit Task-18/19/20 boundary and controller-owned state.
+3. Extend the verified `static_descriptor_v1` Host program from one
+   controller launch per descriptor to bounded multi-descriptor submission,
+   while preserving the explicit Task-18/19/20 boundary and controller-owned
+   state.
 4. Add accelerator-side vocabulary projection or quantify the Host LM-head
    boundary separately from the decoder-stack measurement.
 5. After functional closure, evaluate multi-request row batching for M=1

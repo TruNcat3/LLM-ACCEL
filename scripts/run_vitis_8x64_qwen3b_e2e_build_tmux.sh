@@ -25,6 +25,13 @@ if [ "${2:-}" = "--worker" ]; then
     echo "work_root=${root}"
     echo "compute_profile=qwen2.5-3b"
     echo "threads=${threads}"
+    echo "build_source_manifest_begin=1"
+    while IFS=$'\t' read -r path sha bytes role; do
+        [ "${path}" = "path" ] && continue
+        printf 'build_source\t%s\t%s\t%s\t%s\n' \
+            "${path}" "${sha}" "${bytes}" "${role}"
+    done < <(scripts/report_qwen3b_source_snapshot.sh "$PWD")
+    echo "build_source_manifest_end=1"
     # MAX_SEQ_LEN contributes to the compute service-loop bound. A qwen-layer
     # XO is only compiled for 96 positions and can stop reading before a
     # long-context qwen2.5-3b Task 18 emits last_task. Build the compute XO

@@ -115,6 +115,31 @@ if ! rg -q '^finished_at=' "${host_log}" ||
     echo "Host log does not contain complete E2E PASS evidence" >&2
     exit 65
 fi
+
+"${repo_root}/scripts/verify_vitis_8x64_e2e_progress.sh" \
+    "${host_log}" "${prompt_tokens}" "${generated_tokens}" \
+    "${layers}" "${block_size}" >/dev/null
+task_program_report="$(
+    "${repo_root}/scripts/verify_host_task_program_trace.sh" "${host_log}"
+)"
+task_program_value() {
+    local field="$1"
+    awk -F '\t' -v field="${field}" \
+        '$1 == field { value = $2 } END { print value }' \
+        <<<"${task_program_report}"
+}
+host_task_program_contract="$(
+    task_program_value host_task_program_contract
+)"
+host_task_program_evidence="$(
+    task_program_value host_task_program_evidence
+)"
+host_task_program_pair_trace_verified="$(
+    task_program_value host_task_program_pair_trace_verified
+)"
+host_task_program_progress_records="$(
+    task_program_value host_task_program_progress_records
+)"
 if [ "${verify_e2e_golden}" = "1" ]; then
     numeric_verify_line="$(rg '^QWEN_8X64_E2E_NUMERIC_VERIFY ' "${host_log}" | tail -n 1 || true)"
     profile_line="$(rg '^QWEN_8X64_E2E_PROFILE ' "${host_log}" | tail -n 1 || true)"
@@ -292,13 +317,21 @@ if [ "${profile}" = "qwen2.5-3b" ] &&
 fi
 
 build_source_equivalence_included=0
-if [ "${profile}" = "qwen2.5-3b" ] &&
+build_source_equivalence_unavailable_reason=""
+if [ "${host_task_program_contract}" = "static_descriptor_v1" ] &&
+   [ "${profile}" = "qwen2.5-3b" ] &&
    [ -n "${build_log}" ] &&
    [ -x "${repo_root}/scripts/report_qwen3b_build_source_equivalence.sh" ]; then
+    if ! rg -q $'^build_source\t' "${build_log}"; then
+        echo "Static Host release requires a build-time source manifest" >&2
+        exit 65
+    fi
     "${repo_root}/scripts/report_qwen3b_build_source_equivalence.sh" \
         "${build_log}" "${source_root}" \
         > "${temp_dir}/build_source_equivalence.tsv"
     build_source_equivalence_included=1
+elif [ "${host_task_program_contract}" = "legacy_equivalent_sequence" ]; then
+    build_source_equivalence_unavailable_reason=legacy_unversioned_host_predates_build_time_source_manifest
 fi
 
 {
@@ -323,6 +356,14 @@ fi
         'decoder_layers_final_norm_rope_online_attention_kv'
     printf 'cpu_golden_scope\t%s\n' \
         'post_inference_validation_only'
+    printf 'host_task_program_contract\t%s\n' \
+        "${host_task_program_contract}"
+    printf 'host_task_program_evidence\t%s\n' \
+        "${host_task_program_evidence}"
+    printf 'host_task_program_pair_trace_verified\t%s\n' \
+        "${host_task_program_pair_trace_verified}"
+    printf 'host_task_program_progress_records\t%s\n' \
+        "${host_task_program_progress_records}"
     printf 'target_mhz\t%s\n' "${target_mhz}"
     printf 'xsim_mhz\t%s\n' "${xsim_mhz}"
     printf 'release_nonfinal_blocks\t%s\n' "${release_nonfinal}"
@@ -344,7 +385,10 @@ fi
         "${build_source_equivalence_included}"
     if [ "${build_source_equivalence_included}" = "1" ]; then
         printf 'build_source_equivalence_scope\t%s\n' \
-            'exact_build_inputs_and_build_harness_vs_release_worktree'
+            'build_time_sha256_manifest_vs_release_worktree'
+    elif [ -n "${build_source_equivalence_unavailable_reason}" ]; then
+        printf 'build_source_equivalence_unavailable_reason\t%s\n' \
+            "${build_source_equivalence_unavailable_reason}"
     fi
     printf 'build_log_included\t%s\n' \
         "$([ -n "${build_log}" ] && printf 1 || printf 0)"

@@ -20,22 +20,47 @@ if [ ! -d "${release_root}" ]; then
 fi
 release_root="$(realpath "${release_root}")"
 
-# Vitis HLS records the source working directory before reading any design
-# file.  This is the authoritative source root of the already-completed build,
-# rather than an assumed sibling-repository path.
-build_root="$(
-    awk -F "'" '
-        /INFO: \[HLS [^]]*\] In directory '\''/ {
-            print $2
-            exit
-        }
-    ' "${build_log}"
-)"
-if [ -z "${build_root}" ] || [ ! -d "${build_root}" ]; then
-    echo "Cannot recover the HLS build source root from the build log" >&2
-    exit 65
+declare -A recorded_sha=()
+declare -A recorded_role=()
+recorded_count=0
+while IFS=$'\t' read -r marker path sha bytes role; do
+    [ "${marker}" = "build_source" ] || continue
+    if [ -z "${path}" ] || [ -n "${recorded_sha[${path}]:-}" ] ||
+       ! [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] ||
+       ! [[ "${bytes}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Malformed build-time source manifest entry: ${path:-missing}" >&2
+        exit 65
+    fi
+    recorded_sha["${path}"]="${sha}"
+    recorded_role["${path}"]="${role}"
+    recorded_count=$((recorded_count + 1))
+done < "${build_log}"
+
+build_root=""
+if [ "${recorded_count}" -eq 0 ]; then
+    # Compatibility path for already-published pre-manifest builds. This can
+    # compare only the still-live build tree and must not be described as a
+    # build-time content proof by a new archive.
+    build_root="$(
+        awk -F "'" '
+            /INFO: \[HLS [^]]*\] In directory '\''/ {
+                print $2
+                exit
+            }
+        ' "${build_log}"
+    )"
+    if [ -z "${build_root}" ] || [ ! -d "${build_root}" ]; then
+        echo "Build log has neither a source manifest nor a live HLS source root" >&2
+        exit 65
+    fi
+    build_root="$(realpath "${build_root}")"
+else
+    if ! rg -q '^build_source_manifest_begin=1$' "${build_log}" ||
+       ! rg -q '^build_source_manifest_end=1$' "${build_log}"; then
+        echo "Build-time source manifest is not delimited" >&2
+        exit 65
+    fi
 fi
-build_root="$(realpath "${build_root}")"
 
 snapshot="$(mktemp "${TMPDIR:-/tmp}/qwen3b-release-source.XXXXXX.tsv")"
 cleanup() {
@@ -53,12 +78,21 @@ while IFS=$'\t' read -r path release_sha bytes role; do
         build_input|build_harness) ;;
         *) continue ;;
     esac
-    build_path="${build_root}/${path}"
-    if [ ! -s "${build_path}" ]; then
-        echo "Build source is missing equivalence input: ${path}" >&2
-        exit 66
+    if [ "${recorded_count}" -gt 0 ]; then
+        build_sha="${recorded_sha[${path}]:-}"
+        if [ -z "${build_sha}" ] ||
+           [ "${recorded_role[${path}]}" != "${role}" ]; then
+            echo "Build-time manifest omits or mislabels: ${path}" >&2
+            exit 65
+        fi
+    else
+        build_path="${build_root}/${path}"
+        if [ ! -s "${build_path}" ]; then
+            echo "Build source is missing equivalence input: ${path}" >&2
+            exit 66
+        fi
+        build_sha="$(sha256sum "${build_path}" | awk '{ print $1 }')"
     fi
-    build_sha="$(sha256sum "${build_path}" | awk '{ print $1 }')"
     if [ "${build_sha}" != "${release_sha}" ]; then
         echo "Build/release source mismatch: ${path}" >&2
         exit 65

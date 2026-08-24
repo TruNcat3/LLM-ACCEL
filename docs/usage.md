@@ -110,6 +110,7 @@ stack followed by final RMSNorm:
 # Fast, tool-independent check of descriptor ordering, task counts, and HBM
 # ping-pong continuity. The publication gate also runs this test.
 make test_coarse_task_program
+make test_host_task_program_trace_contract
 make test_coarse_task_residency_contract
 
 # Task 18 -> Task 19, standard Qwen layer dimensions by default.

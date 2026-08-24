@@ -13,6 +13,7 @@ namespace llm_accel {
 constexpr std::uint32_t kCoarseAttentionOp = 18;
 constexpr std::uint32_t kCoarseFfnOp = 19;
 constexpr std::uint32_t kCoarseFinalNormOp = 20;
+constexpr char kCoarseTaskProgramContract[] = "static_descriptor_v1";
 
 // One descriptor is one Host-issued controller invocation. Input/output pairs
 // name the two HBM-resident hidden-state ping-pong regions:

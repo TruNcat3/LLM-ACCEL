@@ -24,7 +24,17 @@ printf '%s\t%s\n' \
     host_inference_compute_scope embedding_plus_lm_head_argmax \
     accelerator_compute_scope decoder_layers_final_norm_rope_online_attention_kv \
     cpu_golden_scope post_inference_validation_only \
+    host_task_program_contract static_descriptor_v1 \
+    host_task_program_evidence runtime_metadata_plus_progress_pair_trace \
+    host_task_program_pair_trace_verified 1 \
+    host_task_program_progress_records 10 \
+    build_source_equivalence_included 1 \
+    build_source_equivalence_scope build_time_sha256_manifest_vs_release_worktree \
     > "${source_archive}/manifest.tsv"
+printf '%s\n' \
+    $'path\trole\tbuild_source_sha256\trelease_source_sha256\tresult' \
+    $'fixture.cpp\tbuild_input\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\tMATCH' \
+    > "${source_archive}/build_source_equivalence.tsv"
 printf '%s\n' \
     'Compute Units: Running Time and Stalls' \
     'Compute Unit, Running Time (us), Intra-Kernel Dataflow Stalls (%), External Memory Stalls (%), External Stream Stalls (%)' \
@@ -39,7 +49,7 @@ printf '%b\n%b\n' "${performance_header}" "${performance_row}" \
 
 (
     cd "${source_archive}"
-    sha256sum host.raw.log manifest.tsv performance.tsv profile_kernels.csv \
+    sha256sum build_source_equivalence.tsv host.raw.log manifest.tsv performance.tsv profile_kernels.csv \
         > checksums.sha256
 )
 
@@ -51,11 +61,13 @@ install_output="$(
 destination="${results_root}/contract-result"
 if [ ! -s "${destination}/README.md" ] ||
    [ ! -s "${destination}/checksums.sha256" ] ||
-   [ "$(find "${destination}" -type f | wc -l)" -ne 6 ] ||
+   [ "$(find "${destination}" -type f | wc -l)" -ne 7 ] ||
    [[ "${install_output}" != *"result_package=${destination}"* ]] ||
    ! rg -q '^# small P8/G2/L2 End-to-End Hardware-Emulation Evidence$' \
         "${destination}/README.md" ||
    ! rg -q 'not batch 8 and not 8 generated tokens in parallel' \
+        "${destination}/README.md" ||
+   ! rg -q 'Host task-program contract | `static_descriptor_v1`' \
         "${destination}/README.md"; then
     echo "Atomic result installer output contract failed" >&2
     exit 65
@@ -74,4 +86,4 @@ if [ "${overwrite_status}" -ne 73 ]; then
     exit 65
 fi
 
-echo 'RESULT INSTALLER CONTRACT PASS files=6 readme=rendered checksums=complete overwrite=refused'
+echo 'RESULT INSTALLER CONTRACT PASS files=7 readme=rendered checksums=complete overwrite=refused'

@@ -24,6 +24,8 @@ initial_state_body="$({
         '/void migrate_initial_model_state(/,/void ensure_persistent_auxiliary_state(/p' \
         host/host_qwen_8x64.cpp
 })"
+task_program_header="$(< include/host_coarse_task_program.hpp)"
+host_source="$(< host/host_qwen_8x64.cpp)"
 
 require_text() {
     local body="$1"
@@ -57,6 +59,13 @@ if [ -z "${host_body}" ] || [ -z "${controller_body}" ] ||
     echo "Cannot extract the coarse-task implementation bodies" >&2
     exit 66
 fi
+
+require_text "${task_program_header}" \
+    'kCoarseTaskProgramContract[] = "static_descriptor_v1";' \
+    'stable Host task-program runtime contract'
+require_text "${host_source}" \
+    '<< llm_accel::kCoarseTaskProgramContract' \
+    'Host emits its task-program contract from the executing binary'
 
 # The Host may migrate the initial embedding block to the device and the final
 # materialized hidden state back.  It must not migrate a Task-18 intermediate
@@ -137,7 +146,7 @@ for bank in gbuf0 gbuf1 hidden0 hidden1; do
 done
 
 printf 'COARSE TASK RESIDENCY CONTRACT PASS '
-printf 'host_d2h_sites=1 host_task_program=static_descriptor_sequence '
+printf 'host_d2h_sites=1 host_task_program=static_descriptor_v1 '
 printf 'task18_to_task19=HBM_rebind '
 printf 'kv_task_migrations=0 kv_init_migrations=1 kv_axi_ports=2 '
 printf 'onchip_bram_banks=4 '
