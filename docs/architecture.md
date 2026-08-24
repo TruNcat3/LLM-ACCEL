@@ -155,8 +155,19 @@ subgraph.
 
 This task granularity supports host-level composition across layers, requests,
 and sampling policy while keeping PCIe out of intermediate-tensor and KV-cache
-traffic. Task descriptors carry tensor addresses/handles and shape metadata;
-controller status records completion and the next valid residency state.
+traffic. The Host builds a static descriptor array before launch. Each entry
+carries an operation ID, layer, position, active query-row count, and input and
+output HBM-pair IDs. It deliberately carries no weight, KV-cache, or
+controller-local intermediate address. A compile-time assertion binds the
+descriptor operation IDs to the controller ABI, and the 64-byte controller
+status records completion after each entry.
+
+For every layer, the descriptor program alternates `B -> A` for Task 18 and
+`A -> B` for Task 19. Optional Task 20 performs the final `B -> A` transition.
+The Host executor is one generic descriptor loop, so changing layer count or
+prefill/decode shape changes program data rather than adding a new scheduling
+branch. The program builder and its continuity checks live in
+[`include/host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp).
 
 Norm coefficients and the position-indexed RoPE table are persistent model
 state. The host initializes all layer rows and positions once; individual

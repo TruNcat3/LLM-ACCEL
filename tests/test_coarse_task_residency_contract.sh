@@ -62,7 +62,7 @@ fi
 # materialized hidden state back.  It must not migrate a Task-18 intermediate
 # before Task 19 consumes the same HBM-resident buffer pair.
 if [ "$(count_text "${host_body}" 'CL_MIGRATE_MEM_OBJECT_HOST')" -ne 1 ] ||
-   [ "$(count_text "${host_body}" 'execute_bound_resident_task(')" -ne 3 ] ||
+   [ "$(count_text "${host_body}" 'execute_bound_resident_task(')" -ne 1 ] ||
    [ "$(rg -c '^[[:space:]]*pack_feature\(' <<<"${host_body}")" -ne 1 ] ||
    [ "$(count_text "${host_body}" 'unpack_feature(')" -ne 1 ]; then
     echo "Host coarse-task migration or execution count regressed" >&2
@@ -73,28 +73,26 @@ if rg -q 'kv_cache_[kv]_(buffer|words)' <<<"${host_body}"; then
     exit 65
 fi
 require_text "${host_body}" \
-    'bind_controller_data_ports(0, 1, 2, 3);' \
-    'Task 18 reads input pair 2/3 and writes pair 0/1'
+    'llm_accel::build_coarse_decoder_program(' \
+    'Host task sequence is built as an explicit static program'
 require_text "${host_body}" \
-    'bind_controller_data_ports(2, 3, 0, 1);' \
-    'Task 19 consumes the Task-18 HBM result by buffer rebinding'
+    'for (const llm_accel::coarse_task_descriptor_t& task :' \
+    'Host issues the static descriptors through one generic task loop'
 require_text "${host_body}" \
-    'if (materialize_output) {' \
+    'const unsigned int output0 = task.output_pair * 2;' \
+    'descriptor output pair selects the HBM-resident destination'
+require_text "${host_body}" \
+    'const unsigned int input0 = task.input_pair * 2;' \
+    'descriptor input pair selects the HBM-resident source'
+require_text "${host_body}" \
+    'if (program.materialize_output) {' \
     'D2H is conditional on an explicitly materialized final output'
+require_text "${host_body}" \
+    'program.final_output_pair * 2;' \
+    'final Host output follows the descriptor-program terminal pair'
 require_text "${host_body}" \
     'result.output_migration_ms =' \
     'only the final materialization is profiled as an output migration'
-
-attention_line="$(rg -n -F 'kOpAttentionSublayer,' <<<"${host_body}" | head -n 1 | cut -d: -f1)"
-ffn_line="$(rg -n -F 'kOpFfnSublayer,' <<<"${host_body}" | head -n 1 | cut -d: -f1)"
-d2h_line="$(rg -n -F 'CL_MIGRATE_MEM_OBJECT_HOST' <<<"${host_body}" | cut -d: -f1)"
-if [ -z "${attention_line}" ] || [ -z "${ffn_line}" ] ||
-   [ -z "${d2h_line}" ] ||
-   [ "${attention_line}" -ge "${ffn_line}" ] ||
-   [ "${ffn_line}" -ge "${d2h_line}" ]; then
-    echo "Host coarse-task execution/migration ordering regressed" >&2
-    exit 65
-fi
 
 # Each Host-visible task is a controller-resident subgraph, not an operator
 # callback loop.  These sites jointly cover on-chip hidden/wide storage,
@@ -139,7 +137,8 @@ for bank in gbuf0 gbuf1 hidden0 hidden1; do
 done
 
 printf 'COARSE TASK RESIDENCY CONTRACT PASS '
-printf 'host_d2h_sites=1 resident_tasks=3 task18_to_task19=HBM_rebind '
+printf 'host_d2h_sites=1 host_task_program=static_descriptor_sequence '
+printf 'task18_to_task19=HBM_rebind '
 printf 'kv_task_migrations=0 kv_init_migrations=1 kv_axi_ports=2 '
 printf 'onchip_bram_banks=4 '
 printf 'controller_subgraphs=attention,ffn,final_norm\n'

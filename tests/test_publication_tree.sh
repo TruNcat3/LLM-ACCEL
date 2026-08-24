@@ -20,6 +20,8 @@ required_files=(
     docs/assets/e2e-scaling.svg
     docs/assets/pd-efficiency.svg
     docs/assets/resource-utilization.svg
+    include/host_coarse_task_program.hpp
+    tests/coarse_task_program_tb.cpp
 )
 for path in "${required_files[@]}"; do
     if [ ! -s "${path}" ]; then

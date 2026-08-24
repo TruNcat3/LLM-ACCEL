@@ -1,4 +1,5 @@
 #include "xcl2.hpp"
+#include "host_coarse_task_program.hpp"
 
 #include <ap_fixed.h>
 #include <ap_int.h>
@@ -88,6 +89,19 @@ enum operator_kind_t {
     kOpFfnSublayer = 19,
     kOpFinalNorm = 20
 };
+
+static_assert(
+    unsigned(kOpAttentionSublayer) == llm_accel::kCoarseAttentionOp,
+    "Host/controller Attention task ABI drift"
+);
+static_assert(
+    unsigned(kOpFfnSublayer) == llm_accel::kCoarseFfnOp,
+    "Host/controller FFN task ABI drift"
+);
+static_assert(
+    unsigned(kOpFinalNorm) == llm_accel::kCoarseFinalNormOp,
+    "Host/controller final-norm task ABI drift"
+);
 
 struct alignas(64) word512_t {
     int16_t value[kValuesPerWord];
@@ -1285,8 +1299,19 @@ public:
         result.attention_controller_ms = 0.0;
         result.ffn_controller_ms = 0.0;
         result.layer_count = layer_count;
-        result.task_count =
-            2 * layer_count + (include_final_norm ? 1u : 0u);
+        const llm_accel::coarse_task_program_t program =
+            llm_accel::build_coarse_decoder_program(
+                layer_begin,
+                layer_count,
+                position,
+                hidden.rows,
+                shape_.num_layers,
+                shape_.max_seq_len,
+                kMaxTokensPerLaunch,
+                include_final_norm,
+                materialize_output
+            );
+        result.task_count = unsigned(program.tasks.size());
         unsigned int completed_tasks = 0;
         const auto host_begin = std::chrono::steady_clock::now();
         std::vector<cl::Memory> initial_inputs = {
@@ -1312,20 +1337,47 @@ public:
             event_milliseconds(initial_input_event);
 
         try {
-            for (unsigned int layer_offset = 0;
-                 layer_offset < layer_count;
-                 layer_offset++) {
-                const unsigned int layer = layer_begin + layer_offset;
-
-                // Task A: input pair 2/3 -> attention residual pair 0/1.
-                bind_controller_data_ports(0, 1, 2, 3);
-                result.attention_status = execute_bound_resident_task(
-                    kOpAttentionSublayer,
-                    layer,
-                    position,
-                    hidden.rows
+            for (const llm_accel::coarse_task_descriptor_t& task :
+                 program.tasks) {
+                const unsigned int output0 = task.output_pair * 2;
+                const unsigned int output1 = output0 + 1;
+                const unsigned int input0 = task.input_pair * 2;
+                const unsigned int input1 = input0 + 1;
+                bind_controller_data_ports(
+                    output0,
+                    output1,
+                    input0,
+                    input1
                 );
-                result.attention_controller_ms += last_controller_ms_;
+
+                const operator_kind_t op =
+                    static_cast<operator_kind_t>(task.op);
+                const decoded_status_t status = execute_bound_resident_task(
+                    op,
+                    task.layer,
+                    task.position,
+                    task.query_tokens
+                );
+                check_status(op, status);
+
+                switch (task.op) {
+                case llm_accel::kCoarseAttentionOp:
+                    result.attention_status = status;
+                    result.attention_controller_ms += last_controller_ms_;
+                    break;
+                case llm_accel::kCoarseFfnOp:
+                    result.ffn_status = status;
+                    result.ffn_controller_ms += last_controller_ms_;
+                    break;
+                case llm_accel::kCoarseFinalNormOp:
+                    result.final_norm_status = status;
+                    result.final_norm_controller_ms = last_controller_ms_;
+                    break;
+                default:
+                    throw std::runtime_error(
+                        "unsupported Host coarse-task descriptor"
+                    );
+                }
                 result.status_kernel_ms = add_profiled_milliseconds(
                     result.status_kernel_ms,
                     last_status_kernel_ms_
@@ -1334,94 +1386,27 @@ public:
                     result.status_migration_ms,
                     last_status_migration_ms_
                 );
-                check_status(
-                    kOpAttentionSublayer,
-                    result.attention_status
-                );
                 completed_tasks++;
                 std::cout
                     << "COARSE_TASK_PROGRESS"
                     << " completed=" << completed_tasks
                     << " total=" << result.task_count
-                    << " op=" << unsigned(kOpAttentionSublayer)
-                    << " phase=attention"
-                    << " layer=" << layer
-                    << " position=" << position
-                    << " query_tokens=" << hidden.rows
-                    << " controller_ms=" << last_controller_ms_
-                    << std::endl;
-
-                // Task B consumes pair 0/1 directly and writes pair 2/3.
-                // The completed hidden state therefore remains in the same
-                // device pair for the next layer's Task A.
-                bind_controller_data_ports(2, 3, 0, 1);
-                result.ffn_status = execute_bound_resident_task(
-                    kOpFfnSublayer,
-                    layer,
-                    position,
-                    hidden.rows
-                );
-                result.ffn_controller_ms += last_controller_ms_;
-                result.status_kernel_ms = add_profiled_milliseconds(
-                    result.status_kernel_ms,
-                    last_status_kernel_ms_
-                );
-                result.status_migration_ms = add_profiled_milliseconds(
-                    result.status_migration_ms,
-                    last_status_migration_ms_
-                );
-                check_status(kOpFfnSublayer, result.ffn_status);
-                completed_tasks++;
-                std::cout
-                    << "COARSE_TASK_PROGRESS"
-                    << " completed=" << completed_tasks
-                    << " total=" << result.task_count
-                    << " op=" << unsigned(kOpFfnSublayer)
-                    << " phase=ffn"
-                    << " layer=" << layer
-                    << " position=" << position
-                    << " query_tokens=" << hidden.rows
+                    << " op=" << task.op
+                    << " phase="
+                    << llm_accel::coarse_task_phase_name(task.op)
+                    << " layer=" << task.layer
+                    << " position=" << task.position
+                    << " query_tokens=" << task.query_tokens
+                    << " input_pair=" << task.input_pair
+                    << " output_pair=" << task.output_pair
                     << " controller_ms=" << last_controller_ms_
                     << std::endl;
             }
 
-            unsigned int final_output0 = 2;
-            unsigned int final_output1 = 3;
-            if (include_final_norm) {
-                bind_controller_data_ports(0, 1, 2, 3);
-                result.final_norm_status = execute_bound_resident_task(
-                    kOpFinalNorm,
-                    0,
-                    position,
-                    hidden.rows
-                );
-                result.final_norm_controller_ms = last_controller_ms_;
-                result.status_kernel_ms = add_profiled_milliseconds(
-                    result.status_kernel_ms,
-                    last_status_kernel_ms_
-                );
-                result.status_migration_ms = add_profiled_milliseconds(
-                    result.status_migration_ms,
-                    last_status_migration_ms_
-                );
-                check_status(kOpFinalNorm, result.final_norm_status);
-                completed_tasks++;
-                std::cout
-                    << "COARSE_TASK_PROGRESS"
-                    << " completed=" << completed_tasks
-                    << " total=" << result.task_count
-                    << " op=" << unsigned(kOpFinalNorm)
-                    << " phase=final_norm"
-                    << " layer=0"
-                    << " position=" << position
-                    << " query_tokens=" << hidden.rows
-                    << " controller_ms=" << last_controller_ms_
-                    << std::endl;
-                final_output0 = 0;
-                final_output1 = 1;
-            }
-
-            if (materialize_output) {
+            if (program.materialize_output) {
+                const unsigned int final_output0 =
+                    program.final_output_pair * 2;
+                const unsigned int final_output1 = final_output0 + 1;
                 std::vector<cl::Memory> final_outputs = {
                     data_buffers_[final_output0],
                     data_buffers_[final_output1]
@@ -1479,9 +1464,10 @@ public:
             std::chrono::duration<double, std::milli>(
                 host_end - host_begin
             ).count();
-        if (materialize_output) {
-            const unsigned int host_output0 = include_final_norm ? 0 : 2;
-            const unsigned int host_output1 = include_final_norm ? 1 : 3;
+        if (program.materialize_output) {
+            const unsigned int host_output0 =
+                program.final_output_pair * 2;
+            const unsigned int host_output1 = host_output0 + 1;
             result.output = unpack_feature(
                 data_words_[host_output0],
                 data_words_[host_output1],

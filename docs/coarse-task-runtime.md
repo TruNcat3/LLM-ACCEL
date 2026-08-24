@@ -51,6 +51,34 @@ The host still chooses the task sequence and layer index. This keeps request,
 sampling, and model-level policy in software while removing host round trips
 inside each subgraph.
 
+### Static Host task program
+
+The sequence is materialized as a small Host-side descriptor program before
+any controller invocation. A descriptor contains only stable orchestration
+metadata:
+
+| Field | Meaning |
+| --- | --- |
+| `op` | Task 18, 19, or 20 |
+| `layer` | Decoder-layer index; zero for the model-level final norm |
+| `position` | First sequence position for this query block |
+| `query_tokens` | One decode row or one to eight prefill rows |
+| `input_pair` / `output_pair` | HBM hidden-state ping-pong pair, encoded as 0 or 1 |
+
+The descriptor does not contain raw weight or KV-cache addresses. Those remain
+part of persistent controller state and the fixed XRT kernel binding. The Host
+uses one generic issue loop to bind the selected HBM pair, invoke the
+controller, validate its status record, and advance to the next descriptor.
+Only a program marked for final materialization performs a hidden-state D2H
+transfer.
+
+[`include/host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp)
+is standard C++14 and can be tested without XRT or HLS. Its unit test freezes
+the L2, released-P8, and D1 task counts, validates every adjacent HBM boundary,
+and rejects sequence overflow. The separate source contract verifies that the
+production Host uses this builder and does not migrate KV state within the
+task loop.
+
 ## Generation composition and task count
 
 Let `P` be the prompt length, `B <= 8` the active-query-row block size, `G`

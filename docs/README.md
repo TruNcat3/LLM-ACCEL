@@ -30,8 +30,9 @@ history. Start with the shortest path that matches your goal.
 ## Study a subsystem
 
 - [Controller-Resident Coarse-Task Runtime](coarse-task-runtime.md) documents
-  Task 18/19/20, HBM hidden-state ping-pong, controller-owned KV, generation
-  composition, numerical gates, and the current resource envelope.
+  the static Host descriptor program, Task 18/19/20, HBM hidden-state
+  ping-pong, controller-owned KV, generation composition, numerical gates,
+  and the current resource envelope.
 - [Q2.14 Multi-Length P/D HW-Emu Results](q214-pd-length-hwemu.md) documents
   the operator-level context-length experiment, its precision checks, and its
   narrower timing boundary.

@@ -36,8 +36,9 @@ trees are intentionally excluded.
 - **Online attention.** Tiled QK updates a running maximum and normalization
   sum before tiled PV accumulation; the score matrix is never materialized in
   external memory.
-- **Controller-resident composition.** Coarse Attention, FFN, and final-norm
-  tasks retain hidden state and KV across tasks, query blocks, and layers.
+- **Static Host task programs.** Explicit Attention, FFN, and final-norm
+  descriptors compose each forward while hidden state and KV remain resident
+  across tasks, query blocks, and layers.
 - **Shape-aware evidence.** Prefill and single-row decode use explicit useful
   work, timing-boundary, and active-row definitions rather than conflating
   query-block height with batch size.
@@ -81,9 +82,10 @@ sequenceDiagram
 ```
 
 The production task contract is `Task 18 = Attention`, `Task 19 = FFN`, and
-`Task 20 = final RMSNorm`. See the [architecture](docs/architecture.md) for the
-memory hierarchy and packet ABI, and the [design-space study](docs/design-space.md)
-for alternatives.
+`Task 20 = final RMSNorm`. The Host builds an explicit descriptor sequence;
+the controller expands each descriptor into its static resident subgraph. See
+the [architecture](docs/architecture.md) for the memory hierarchy and packet
+ABI, and the [design-space study](docs/design-space.md) for alternatives.
 
 ## Implementation variants and evidence map
 
@@ -206,7 +208,7 @@ If LLM-ACCEL contributes to academic work, cite the repository metadata in
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
   email        = {wangt635@ustc.edu.cn},
   url          = {https://github.com/TruNcat3/LLM-ACCEL},
-  version      = {0.8.0}
+  version      = {0.9.0}
 }
 ```
 

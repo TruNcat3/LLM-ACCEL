@@ -183,10 +183,14 @@ The selected target keeps intermediate tensors and KV state in HBM/on-chip
 buffers while allowing the host to combine several task types into complete
 prefill and decode inference. End-to-end reporting must include both the
 common four-CU modeled interval and the Host-observed task-sequence latency.
-The current generate path realizes this boundary for blockwise prompt and
-single-token decode traversal. The block-prefill extension groups each prompt into
-one-to-eight-row coarse-task blocks while leaving decode at one row. The next
-runtime step is to reduce host task-issue overhead further without turning the
+The current generate path realizes this boundary as an explicit static Host
+descriptor program for blockwise prompt and single-token decode traversal.
+Descriptors select Tasks 18/19/20, layer and position metadata, and one of two
+HBM hidden-state pairs; they never expose controller-owned KV or local
+intermediates. The block-prefill extension groups each prompt into
+one-to-eight-row coarse-task blocks while leaving decode at one row. A future
+optimization may batch descriptor submission to reduce launch overhead, but it
+must preserve the same residency and status contract rather than turning the
 controller into a dynamic whole-model interpreter.
 
 ## 11. Evaluation principles
