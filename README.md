@@ -1,6 +1,6 @@
 # LLM-ACCEL
 
-**A streaming FPGA research prototype for controller-resident LLM decoder
+**A streaming FPGA Accelerator for controller-resident LLM 
 execution.**
 
 [Architecture](docs/architecture.md) | [Design space](docs/design-space.md) |
