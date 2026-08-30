@@ -193,9 +193,9 @@ archived result.
 Completed evidence includes finite-buffer RTL CoSim, standard-dimension P8
 Attention/FFN/final-norm execution, multi-length P/D diagnostics, and
 standard-shape P8/G2 L1 and L2 generation-path gates with controller-owned KV.
-The full 36-layer HW-Emu extension is an active experiment and is not reported
-as a completed correctness result. The protocol reaches all 146 coarse tasks,
-but the final numerical gate remains open.
+The full 36-layer HW-Emu extension completed all 146 coarse tasks, but it is not
+reported as a completed correctness result because the final numerical gate
+remains open.
 
 The checkpoint diagnostic is complete through layers 0--2 and localizes the
 first strict mismatch to layer 3 Attention. The production path remains
