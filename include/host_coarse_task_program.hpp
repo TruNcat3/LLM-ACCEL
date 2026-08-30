@@ -31,6 +31,10 @@ struct coarse_task_descriptor_t {
 
 struct coarse_task_program_t {
     std::vector<coarse_task_descriptor_t> tasks;
+    unsigned int layer_begin = 0;
+    unsigned int layer_count = 0;
+    unsigned int position = 0;
+    unsigned int query_tokens = 0;
     unsigned int final_output_pair = 0;
     bool materialize_output = true;
 };
@@ -72,6 +76,10 @@ inline coarse_task_program_t build_coarse_decoder_program(
     }
 
     coarse_task_program_t program;
+    program.layer_begin = layer_begin;
+    program.layer_count = layer_count;
+    program.position = position;
+    program.query_tokens = query_tokens;
     program.tasks.reserve(2 * layer_count + (include_final_norm ? 1u : 0u));
     program.materialize_output = materialize_output;
 

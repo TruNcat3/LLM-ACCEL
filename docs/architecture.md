@@ -169,6 +169,15 @@ prefill/decode shape changes program data rather than adding a new scheduling
 branch. The program builder and its continuity checks live in
 [`include/host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp).
 
+The runtime exposes this boundary as two separate operations:
+`build_coarse_decoder_program()` creates the immutable descriptor vector, while
+`accelerator_t::run_coarse_task_program()` validates its shape and HBM-pair
+continuity before issuing each descriptor. The legacy
+`run_composed_decoder_stack()` helper remains as a compatibility wrapper that
+builds this program and delegates to the generic executor. This is the
+extension point for prompt blocks, D1 requests, and future controller-resident
+subgraphs without adding a Host-side operator scheduler.
+
 The executing binary emits `host_task_program=static_descriptor_v1`. Release
 archives accept that label only when every completed progress record also
 proves the expected HBM pair transition: Attention and final normalization use

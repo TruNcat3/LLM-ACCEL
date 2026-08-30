@@ -445,11 +445,21 @@ struct composed_layer_result_t {
     double status_kernel_ms = 0.0;
     double status_migration_ms = 0.0;
     double output_migration_ms = 0.0;
+    double checkpoint_migration_ms = 0.0;
     double profiled_sequence_ms = -1.0;
     double host_elapsed_ms = -1.0;
     unsigned int layer_count = 0;
     unsigned int task_count = 0;
+    unsigned int completed_task_count = 0;
+    unsigned int checkpoint_count = 0;
+    bool checkpoint_pass = true;
+    bool checkpoint_stopped_early = false;
 };
+
+using composed_checkpoint_callback_t = std::function<bool(
+    const llm_accel::coarse_task_descriptor_t&,
+    const tensor_t&
+)>;
 
 struct composed_task_diagnostic_result_t {
     tensor_t output;
@@ -1269,27 +1279,51 @@ public:
         return result;
     }
 
-    composed_layer_result_t run_composed_decoder_stack(
+    composed_layer_result_t run_coarse_task_program(
         const tensor_t& hidden,
-        unsigned int layer_begin,
-        unsigned int layer_count,
-        unsigned int position,
-        bool include_final_norm,
-        bool materialize_output = true
+        const llm_accel::coarse_task_program_t& program,
+        const composed_checkpoint_callback_t& checkpoint_callback = {}
     ) {
         if (
             hidden.rows == 0 ||
             hidden.rows > kMaxTokensPerLaunch ||
             hidden.cols != shape_.hidden_size ||
-            layer_count == 0 ||
-            layer_begin >= shape_.num_layers ||
-            layer_begin + layer_count > shape_.num_layers ||
-            position >= shape_.max_seq_len ||
-            position + hidden.rows > shape_.max_seq_len
+            program.tasks.empty() ||
+            program.layer_count == 0 ||
+            program.layer_begin >= shape_.num_layers ||
+            program.layer_begin + program.layer_count > shape_.num_layers ||
+            program.query_tokens != hidden.rows ||
+            program.position >= shape_.max_seq_len ||
+            program.position + hidden.rows > shape_.max_seq_len ||
+            program.final_output_pair > 1 ||
+            program.tasks.front().input_pair != 1 ||
+            program.tasks.back().output_pair != program.final_output_pair
         ) {
             throw std::runtime_error(
-                "composed decoder stack input shape mismatch"
+                "coarse task program input shape mismatch"
             );
+        }
+
+        for (std::size_t index = 0; index < program.tasks.size(); index++) {
+            const llm_accel::coarse_task_descriptor_t& task =
+                program.tasks[index];
+            if (
+                task.input_pair > 1 ||
+                task.output_pair > 1 ||
+                task.query_tokens != hidden.rows ||
+                task.position != program.position ||
+                task.position + task.query_tokens > shape_.max_seq_len ||
+                task.layer >= shape_.num_layers ||
+                (task.op != llm_accel::kCoarseAttentionOp &&
+                 task.op != llm_accel::kCoarseFfnOp &&
+                 task.op != llm_accel::kCoarseFinalNormOp) ||
+                (index > 0 &&
+                 program.tasks[index - 1].output_pair != task.input_pair)
+            ) {
+                throw std::runtime_error(
+                    "coarse task program descriptor or HBM boundary mismatch"
+                );
+            }
         }
 
         ensure_persistent_auxiliary_state();
@@ -1298,19 +1332,7 @@ public:
         composed_layer_result_t result;
         result.attention_controller_ms = 0.0;
         result.ffn_controller_ms = 0.0;
-        result.layer_count = layer_count;
-        const llm_accel::coarse_task_program_t program =
-            llm_accel::build_coarse_decoder_program(
-                layer_begin,
-                layer_count,
-                position,
-                hidden.rows,
-                shape_.num_layers,
-                shape_.max_seq_len,
-                kMaxTokensPerLaunch,
-                include_final_norm,
-                materialize_output
-            );
+        result.layer_count = program.layer_count;
         result.task_count = unsigned(program.tasks.size());
         unsigned int completed_tasks = 0;
         const auto host_begin = std::chrono::steady_clock::now();
@@ -1401,9 +1423,51 @@ public:
                     << " output_pair=" << task.output_pair
                     << " controller_ms=" << last_controller_ms_
                     << std::endl;
-            }
 
-            if (program.materialize_output) {
+                if (checkpoint_callback) {
+                    std::vector<cl::Memory> checkpoint_outputs = {
+                        data_buffers_[output0],
+                        data_buffers_[output1]
+                    };
+                    cl::Event checkpoint_event;
+                    check_cl(
+                        transfer_queue_.enqueueMigrateMemObjects(
+                            checkpoint_outputs,
+                            CL_MIGRATE_MEM_OBJECT_HOST,
+                            nullptr,
+                            &checkpoint_event
+                        ),
+                        "migrate composed checkpoint output"
+                    );
+                    check_cl(
+                        transfer_queue_.finish(),
+                        "finish composed checkpoint output migration"
+                    );
+                    result.checkpoint_migration_ms =
+                        add_profiled_milliseconds(
+                            result.checkpoint_migration_ms,
+                            event_milliseconds(checkpoint_event)
+                        );
+                    const tensor_t checkpoint = unpack_feature(
+                        data_words_[output0],
+                        data_words_[output1],
+                        hidden.rows,
+                        shape_.hidden_size
+                    );
+                    result.checkpoint_count++;
+                    if (!checkpoint_callback(task, checkpoint)) {
+                        result.checkpoint_pass = false;
+                        result.checkpoint_stopped_early = true;
+                        break;
+                    }
+                }
+            }
+            result.completed_task_count = completed_tasks;
+
+            if (
+                program.materialize_output &&
+                !result.checkpoint_stopped_early
+            ) {
                 const unsigned int final_output0 =
                     program.final_output_pair * 2;
                 const unsigned int final_output1 = final_output0 + 1;
@@ -1460,11 +1524,18 @@ public:
             result.profiled_sequence_ms,
             result.output_migration_ms
         );
+        result.profiled_sequence_ms = add_profiled_milliseconds(
+            result.profiled_sequence_ms,
+            result.checkpoint_migration_ms
+        );
         result.host_elapsed_ms =
             std::chrono::duration<double, std::milli>(
                 host_end - host_begin
             ).count();
-        if (program.materialize_output) {
+        if (
+            program.materialize_output &&
+            !result.checkpoint_stopped_early
+        ) {
             const unsigned int host_output0 =
                 program.final_output_pair * 2;
             const unsigned int host_output1 = host_output0 + 1;
@@ -1476,6 +1547,48 @@ public:
             );
         }
         return result;
+    }
+
+    composed_layer_result_t run_composed_decoder_stack(
+        const tensor_t& hidden,
+        unsigned int layer_begin,
+        unsigned int layer_count,
+        unsigned int position,
+        bool include_final_norm,
+        bool materialize_output = true,
+        const composed_checkpoint_callback_t& checkpoint_callback = {}
+    ) {
+        if (
+            hidden.rows == 0 ||
+            hidden.rows > kMaxTokensPerLaunch ||
+            hidden.cols != shape_.hidden_size ||
+            layer_count == 0 ||
+            layer_begin >= shape_.num_layers ||
+            layer_begin + layer_count > shape_.num_layers ||
+            position >= shape_.max_seq_len ||
+            position + hidden.rows > shape_.max_seq_len
+        ) {
+            throw std::runtime_error(
+                "composed decoder stack input shape mismatch"
+            );
+        }
+        const llm_accel::coarse_task_program_t program =
+            llm_accel::build_coarse_decoder_program(
+                layer_begin,
+                layer_count,
+                position,
+                hidden.rows,
+                shape_.num_layers,
+                shape_.max_seq_len,
+                kMaxTokensPerLaunch,
+                include_final_norm,
+                materialize_output
+            );
+        return run_coarse_task_program(
+            hidden,
+            program,
+            checkpoint_callback
+        );
     }
 
     decoded_status_t run_mm_wave_profile(
@@ -4963,6 +5076,141 @@ tensor_t golden_prefill_decoder_layer_sequence(
     return golden_residual(post_attention, down);
 }
 
+bool run_composed_prefill_checkpoint_verification(
+    const model_shape_t& shape,
+    const model_data_t& model,
+    accelerator_t& accelerator,
+    const std::vector<unsigned int>& token_ids,
+    unsigned int layer_count
+) {
+    if (
+        token_ids.empty() ||
+        token_ids.size() > kMaxTokensPerLaunch ||
+        layer_count == 0 ||
+        layer_count > shape.num_layers
+    ) {
+        throw std::runtime_error(
+            "prefill checkpoint verification requires 1..8 tokens and a valid layer count"
+        );
+    }
+
+    tensor_t hidden(unsigned(token_ids.size()), shape.hidden_size);
+    for (unsigned int row = 0; row < token_ids.size(); row++) {
+        const tensor_t embedding = model.embedding(token_ids[row]);
+        std::copy(
+            embedding.values.begin(),
+            embedding.values.end(),
+            hidden.values.begin() + std::size_t(row) * shape.hidden_size
+        );
+    }
+
+    tensor_t expected_hidden = hidden;
+    tensor_t expected_layer_output;
+    bool have_expected_layer_output = false;
+    unsigned int compared_checkpoints = 0;
+    unsigned int first_failed_layer = layer_count;
+    std::string first_failed_phase = "none";
+
+    const composed_checkpoint_callback_t callback =
+        [&](const llm_accel::coarse_task_descriptor_t& task,
+            const tensor_t& actual) {
+            tensor_t expected;
+            if (task.op == llm_accel::kCoarseAttentionOp) {
+                expected_layer_output =
+                    golden_prefill_decoder_layer_sequence(
+                        shape,
+                        model,
+                        expected_hidden,
+                        task.layer,
+                        task.position,
+                        &expected
+                    );
+                have_expected_layer_output = true;
+            } else if (task.op == llm_accel::kCoarseFfnOp) {
+                if (!have_expected_layer_output) {
+                    throw std::runtime_error(
+                        "FFN checkpoint arrived without an attention golden"
+                    );
+                }
+                expected = expected_layer_output;
+            } else if (task.op == llm_accel::kCoarseFinalNormOp) {
+                expected = golden_rmsnorm(
+                    expected_hidden,
+                    model.final_norm_row()
+                );
+            } else {
+                throw std::runtime_error(
+                    "unsupported checkpoint task descriptor"
+                );
+            }
+
+            const std::string phase =
+                llm_accel::coarse_task_phase_name(task.op);
+            const std::string name =
+                "prefill_checkpoint_layer_" +
+                std::to_string(task.layer) + "_" + phase;
+            const bool pass = compare_tensors(name, actual, expected, 0);
+            compared_checkpoints++;
+            std::cout
+                << "QWEN_8X64_PREFILL_CHECKPOINT"
+                << " checkpoint=" << compared_checkpoints
+                << " layer=" << task.layer
+                << " phase=" << phase
+                << " query_tokens=" << task.query_tokens
+                << " tolerance=0"
+                << " " << (pass ? "PASS" : "FAIL")
+                << std::endl;
+
+            if (!pass) {
+                first_failed_layer = task.layer;
+                first_failed_phase = phase;
+                return false;
+            }
+            if (task.op == llm_accel::kCoarseFfnOp) {
+                expected_hidden = expected_layer_output;
+                have_expected_layer_output = false;
+            }
+            return true;
+        };
+
+    const composed_layer_result_t actual =
+        accelerator.run_composed_decoder_stack(
+            hidden,
+            0,
+            layer_count,
+            0,
+            true,
+            false,
+            callback
+        );
+    const unsigned int expected_checkpoints = 2 * layer_count + 1;
+    const bool pass =
+        actual.checkpoint_pass &&
+        !actual.checkpoint_stopped_early &&
+        actual.completed_task_count == expected_checkpoints &&
+        actual.checkpoint_count == expected_checkpoints;
+    std::cout
+        << "QWEN_8X64_PREFILL_CHECKPOINT_VERIFY"
+        << " tokens=" << token_ids.size()
+        << " layers=" << layer_count
+        << " completed_tasks=" << actual.completed_task_count
+        << " expected_tasks=" << expected_checkpoints
+        << " checkpoints=" << actual.checkpoint_count
+        << " first_failed_layer=";
+    if (first_failed_layer == layer_count) {
+        std::cout << "none";
+    } else {
+        std::cout << first_failed_layer;
+    }
+    std::cout
+        << " first_failed_phase=" << first_failed_phase
+        << " checkpoint_host_copy=1"
+        << " kv_cache_owner=controller"
+        << " " << (pass ? "PASS" : "FAIL")
+        << "\n";
+    return pass;
+}
+
 tensor_t golden_e2e_sequence_final_hidden(
     const model_shape_t& shape,
     const model_data_t& model,
@@ -8363,7 +8611,7 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
 void print_usage(const char* executable) {
     std::cout
         << "Usage: " << executable << " [options]\n"
-        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-attention|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-prefill-sequence|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax|diagnose-q214-payload-golden\n"
+        << "  --mode plan|inspect|run|generate|verify-random|verify-decode-smoke|verify-resident-layer|verify-composed-layer|verify-composed-prefill-attention|verify-composed-prefill-block|verify-composed-prefill-stack|verify-composed-prefill-checkpoints|verify-composed-prefill-sequence|verify-composed-stack|verify-nop|verify-nop-ctrl-only|verify-nop-ctrl-enqueue-only|profile-mm-wave|profile-attention|profile-attention-pd|profile-attention-block|profile-attention-sublayer|profile-ffn-sublayer|profile-prefill-block|profile-prefill-vector|diagnose-prefill-softmax|diagnose-q214-payload-golden\n"
         << "  --prefill-start N   First P-stage position (resume support)\n"
         << "  --profile small|medium|qwen-layer|qwen-layer-long|qwen2.5-3b\n"
         << "  --xclbin <file>          Required for run/generate\n"
@@ -8574,6 +8822,7 @@ int main(int argc, const char* argv[]) {
             command.mode != "verify-composed-prefill-attention" &&
             command.mode != "verify-composed-prefill-block" &&
             command.mode != "verify-composed-prefill-stack" &&
+            command.mode != "verify-composed-prefill-checkpoints" &&
             command.mode != "verify-composed-prefill-sequence" &&
             command.mode != "verify-composed-stack" &&
             command.mode != "verify-nop" &&
@@ -8683,6 +8932,7 @@ int main(int argc, const char* argv[]) {
                 command.mode == "verify-composed-prefill-attention" ||
                 command.mode == "verify-composed-prefill-block" ||
                 command.mode == "verify-composed-prefill-stack" ||
+                command.mode == "verify-composed-prefill-checkpoints" ||
                 command.mode == "verify-composed-prefill-sequence" ||
                 command.mode == "verify-composed-stack" ||
                 command.mode == "verify-nop" ||
@@ -8825,6 +9075,19 @@ int main(int argc, const char* argv[]) {
                 command.random_seed,
                 command.attention_position,
                 command.prefill_block_size
+            ) ? 0 : 1;
+        }
+        if (command.mode == "verify-composed-prefill-checkpoints") {
+            const unsigned int diagnostic_layers =
+                command.layer_count == 0 ?
+                shape.num_layers :
+                command.layer_count;
+            return run_composed_prefill_checkpoint_verification(
+                shape,
+                model,
+                accelerator,
+                command.tokens,
+                diagnostic_layers
             ) ? 0 : 1;
         }
         if (command.mode == "verify-composed-prefill-sequence") {

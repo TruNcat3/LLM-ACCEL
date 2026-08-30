@@ -124,6 +124,11 @@ boundaries, and raw evidence remain in the [experimental report](docs/experiment
 and [evidence index](results/README.md). Host compute, PCIe-inclusive latency,
 and simulator wall time are excluded from all displayed HW-Emu intervals.
 
+The latest checkpoint-localization package adds diagnostic-only Host readback
+after every coarse task. It is bit-exact through layer 2 and finds the first
+one-unit divergence at layer 3 Attention; it is not a full 36-layer correctness
+claim. See the [checkpoint package](results/qwen3b-checkpoint-20260830/).
+
 ## Evidence ladder
 
 The project separates claims by evidence level:
@@ -189,7 +194,12 @@ Completed evidence includes finite-buffer RTL CoSim, standard-dimension P8
 Attention/FFN/final-norm execution, multi-length P/D diagnostics, and
 standard-shape P8/G2 L1 and L2 generation-path gates with controller-owned KV.
 The full 36-layer HW-Emu extension is an active experiment and is not reported
-as a completed result.
+as a completed correctness result. The protocol reaches all 146 coarse tasks,
+but the final numerical gate remains open.
+
+The checkpoint diagnostic is complete through layers 0--2 and localizes the
+first strict mismatch to layer 3 Attention. The production path remains
+intermediate-copy free; checkpoint readback is a deliberate debugging mode.
 
 Checkpoint-level accuracy, accelerator-side LM-head/sampling, complete
 multi-block standard prompts, post-route frequency/power, PCIe-inclusive
@@ -210,7 +220,7 @@ If LLM-ACCEL contributes to academic work, cite the repository metadata in
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
   email        = {wangt635@ustc.edu.cn},
   url          = {https://github.com/TruNcat3/LLM-ACCEL},
-  version      = {0.9.1}
+  version      = {0.10.0}
 }
 ```
 

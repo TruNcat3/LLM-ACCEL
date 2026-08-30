@@ -87,6 +87,13 @@ and rejects sequence overflow. The separate source contract verifies that the
 production Host uses this builder and does not migrate KV state within the
 task loop.
 
+The concrete runtime separates descriptor construction from execution:
+`build_coarse_decoder_program()` fills the static metadata and
+`accelerator_t::run_coarse_task_program()` validates and issues it. The existing
+`run_composed_decoder_stack()` API is a compatibility wrapper around those two
+steps. This lets future prompt-block or D1 programs reuse the same controller
+and preserve HBM/KV ownership without adding a Host-side operator scheduler.
+
 ## Generation composition and task count
 
 Let `P` be the prompt length, `B <= 8` the active-query-row block size, `G`
@@ -249,6 +256,7 @@ mixing old RTL with a new testbench.
 | Standard Qwen2.5-3B layer-shape 8-row HW Emu | PASS, Task 18/19/20, 16,384 values exact, 651,621 cycles, no intermediate Host copy |
 | Standard-shape Qwen2.5-3B P8/G2/L1 HW Emu | PASS, six tasks, two forwards, 4,096 values exact, one real D1 forward |
 | Standard-shape Qwen2.5-3B P8/G2/L2 HW Emu | PASS, ten tasks, two forwards, 4,096 values exact, cross-layer HBM residency |
+| Standard-shape P8 checkpoint localization HW Emu | PASS through layer 2; first one-unit divergence at layer 3 Attention, diagnostic Host readback |
 
 The original one-row RTL CoSim records three passing transactions with
 minimum/average/maximum latency of 1,204/2,664/4,497 cycles. The current Q2.14

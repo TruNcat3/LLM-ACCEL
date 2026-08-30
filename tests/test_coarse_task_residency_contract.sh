@@ -5,7 +5,7 @@ cd "$(dirname "$(realpath "$0")")/.."
 
 host_body="$({
     sed -n \
-        '/composed_layer_result_t run_composed_decoder_stack(/,/decoded_status_t run_mm_wave_profile(/p' \
+        '/composed_layer_result_t run_coarse_task_program(/,/decoded_status_t run_mm_wave_profile(/p' \
         host/host_qwen_8x64.cpp
 })"
 controller_body="$({
@@ -70,10 +70,10 @@ require_text "${host_source}" \
 # The Host may migrate the initial embedding block to the device and the final
 # materialized hidden state back.  It must not migrate a Task-18 intermediate
 # before Task 19 consumes the same HBM-resident buffer pair.
-if [ "$(count_text "${host_body}" 'CL_MIGRATE_MEM_OBJECT_HOST')" -ne 1 ] ||
+if [ "$(count_text "${host_body}" 'CL_MIGRATE_MEM_OBJECT_HOST')" -ne 2 ] ||
    [ "$(count_text "${host_body}" 'execute_bound_resident_task(')" -ne 1 ] ||
    [ "$(rg -c '^[[:space:]]*pack_feature\(' <<<"${host_body}")" -ne 1 ] ||
-   [ "$(count_text "${host_body}" 'unpack_feature(')" -ne 1 ]; then
+   [ "$(count_text "${host_body}" 'unpack_feature(')" -ne 2 ]; then
     echo "Host coarse-task migration or execution count regressed" >&2
     exit 65
 fi
@@ -94,7 +94,7 @@ require_text "${host_body}" \
     'const unsigned int input0 = task.input_pair * 2;' \
     'descriptor input pair selects the HBM-resident source'
 require_text "${host_body}" \
-    'if (program.materialize_output) {' \
+    'program.materialize_output' \
     'D2H is conditional on an explicitly materialized final output'
 require_text "${host_body}" \
     'program.final_output_pair * 2;' \

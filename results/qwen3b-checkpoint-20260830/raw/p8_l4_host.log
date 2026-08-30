@@ -1,0 +1,63 @@
+started_at=2026-08-29T16:52:34+08:00
+gate=qwen3b_prefill_checkpoint_localization
+target=hw_emu
+profile=qwen2.5-3b
+prompt_tokens=8
+layers=4
+expected_checkpoints=9
+seed=20260718
+numeric_tolerance=0
+checkpoint_host_copy=1
+checkpoint_copy_scope=diagnostic_only_excluded_from_production_path
+timeout_seconds=172800
+host_exe=/tmp/host_qwen_8x64_checkpoint.exe
+host_exe_sha256=c12086aea3513066713cb7b61518aa3abf5b2e32d333d92f067e3de5ca0159a9
+xclbin_sha256=adf21bc4cc20d5bec514e69bfbdb28e12e9572a33f1071c090f5003e4d904076
+emconfig_sha256=696c863021ad86e4740c840916408d9fdae97a9bbaadaefe1e43a1f0f79116ac
+host_task_program=static_descriptor_v1
+using reproducible random Fix16 model seed=20260718
+Found Platform
+Platform Name: Xilinx
+INFO: Reading ./qwen_8x64_dual.xclbin
+Loading: './qwen_8x64_dual.xclbin'
+INFO: [HW-EMU 05] Path of the simulation directory : /tmp/.run/2826088/hw_em/device0/binary_0/behav_waveform/xsim
+
+ server socket name is	/tmp/wt/device0_0_2826088
+INFO: [HW-EMU 01] Hardware emulation runs simulation underneath. Using a large data set will result in long simulation times. It is recommended that a small dataset is used for faster execution. The flow uses approximate models for Global memories and interconnect and hence the performance data generated is approximate.
+configuring embedded scheduler mode
+scheduler config ert(1), dataflow(0), slots(16), cudma(0), cuisr(0), cdma(0), cus(4)
+programmed xilinx_u50_gen3x16_xdma_5_202210_1 for profile qwen2.5-3b
+QWEN_8X64_SETUP_PROFILE timing_domain=host_wall model_initialization_ms=90437.4 accelerator_initialization_ms=56195 total_setup_ms=146632 weight_preload=1
+COARSE_TASK_PROGRESS completed=1 total=9 op=18 phase=attention layer=0 position=0 query_tokens=8 input_pair=1 output_pair=0 controller_ms=1.75822e+06
+RANDOM prefill_checkpoint_layer_0_attention PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=1 layer=0 phase=attention query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=2 total=9 op=19 phase=ffn layer=0 position=0 query_tokens=8 input_pair=0 output_pair=1 controller_ms=8.08595e+06
+RANDOM prefill_checkpoint_layer_0_ffn PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=2 layer=0 phase=ffn query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=3 total=9 op=18 phase=attention layer=1 position=0 query_tokens=8 input_pair=1 output_pair=0 controller_ms=1.74821e+06
+RANDOM prefill_checkpoint_layer_1_attention PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=3 layer=1 phase=attention query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=4 total=9 op=19 phase=ffn layer=1 position=0 query_tokens=8 input_pair=0 output_pair=1 controller_ms=7.61381e+06
+RANDOM prefill_checkpoint_layer_1_ffn PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=4 layer=1 phase=ffn query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=5 total=9 op=18 phase=attention layer=2 position=0 query_tokens=8 input_pair=1 output_pair=0 controller_ms=1.59718e+06
+RANDOM prefill_checkpoint_layer_2_attention PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=5 layer=2 phase=attention query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=6 total=9 op=19 phase=ffn layer=2 position=0 query_tokens=8 input_pair=0 output_pair=1 controller_ms=7.61082e+06
+RANDOM prefill_checkpoint_layer_2_ffn PASS values=16384 max_raw_error=0 tolerance=0
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=6 layer=2 phase=ffn query_tokens=8 tolerance=0 PASS
+COARSE_TASK_PROGRESS completed=7 total=9 op=18 phase=attention layer=3 position=0 query_tokens=8 input_pair=1 output_pair=0 controller_ms=1.61117e+06
+  mismatch row=5 col=41 actual_raw=-5116 expected_raw=-5115 error=1
+  mismatch row=5 col=94 actual_raw=22253 expected_raw=22254 error=1
+  mismatch row=5 col=117 actual_raw=28859 expected_raw=28858 error=1
+  mismatch row=5 col=175 actual_raw=-21900 expected_raw=-21901 error=1
+RANDOM prefill_checkpoint_layer_3_attention FAIL values=16384 max_raw_error=1 tolerance=0 mismatches=22
+QWEN_8X64_PREFILL_CHECKPOINT checkpoint=7 layer=3 phase=attention query_tokens=8 tolerance=0 FAIL
+QWEN_8X64_PREFILL_CHECKPOINT_VERIFY tokens=8 layers=4 completed_tasks=7 expected_tasks=9 checkpoints=7 first_failed_layer=3 first_failed_phase=attention checkpoint_host_copy=1 kv_cache_owner=controller FAIL
+
+ socket connect is not established/broken 
+INFO: [HW-EMU 06-0] Waiting for the simulator process to exit
+INFO: [HW-EMU 06-1] All the simulator processes exited successfully
+INFO: [HW-EMU 07-0] Please refer the path "/tmp/.run/2826088/hw_em/device0/binary_0/behav_waveform/xsim/simulate.log" for more detailed simulation infos, errors and warnings.
+finished_at=2026-08-30T01:16:33+08:00
+host_exit_status=1

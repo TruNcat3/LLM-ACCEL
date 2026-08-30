@@ -210,6 +210,12 @@ VITIS_8X64_E2E_LAYERS=1 \
 VITIS_8X64_E2E_LAYERS=2 \
   scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 
+# Diagnose the earliest layer-local numerical divergence. This mode intentionally
+# copies each task output to Host and is not a production performance path.
+VITIS_8X64_CHECKPOINT_HOST_EXE=/tmp/host_qwen_8x64_checkpoint.exe \
+VITIS_8X64_CHECKPOINT_LAYERS=3 \
+  scripts/run_vitis_8x64_qwen3b_checkpoint_hwemu_tmux.sh
+
 # Full 36-layer extension of the same contract: random deterministic Fix16
 # weights and 146 coarse tasks. This is the launcher default and is expected
 # to take much longer under RTL HW Emu.
@@ -522,6 +528,7 @@ The published standard experiments use deterministic seeds:
 | Standard Qwen-layer P8 Task 18/19/20 | 20260718 | 16,384 values exact; 651,621 cycles; intermediate_host_copy=0 |
 | Standard-shape Qwen2.5-3B P8/G2/L1 | 20260718 | 6/6 tasks; 2/2 CPU-golden steps; 4,096 values exact; 1,190,693 cycles |
 | Standard-shape Qwen2.5-3B P8/G2/L2 | 20260718 | 10/10 tasks; 2/2 CPU-golden steps; 4,096 values exact; 2,319,441.4 cycles |
+| Standard-shape P8 checkpoint localization | 20260718 | layers 0--2 exact; first layer-3 Attention divergence is 22 values with max raw error 1 |
 
 The 8-row block run must also report 48 attention MM tasks and 1536 completed
 packets.

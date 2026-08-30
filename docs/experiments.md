@@ -55,6 +55,7 @@ use sequence batch one; decode remains one active row per forward (`D1`).
 | Standard Qwen-layer coarse-task HW Emu | P8 Task 18 -> 19 -> 20, controller-owned KV and hidden state | PASS, 16,384 values exact, 651,621 cycles |
 | Standard-shape generation-path HW Emu | Qwen2.5-3B P8/G2/L1, one prefill plus one real D1 forward | PASS, six tasks, two CPU-golden steps, 4,096 values exact |
 | Standard-shape multi-layer generation HW Emu | Qwen2.5-3B P8/G2/L2, cross-layer prefill plus real D1 | PASS, ten tasks, two CPU-golden steps, 4,096 values exact |
+| Standard-shape checkpoint localization HW Emu | Qwen2.5-3B P8, per-task Host readback, layers 0--2/0--3 | PASS through layer 2; first one-unit divergence at layer 3 Attention |
 
 The 8-row block run completes 48 attention MM tasks and 1536 result packets. Its
 final hidden checksum is `0xb72a92cb5224f0c7`.
@@ -374,9 +375,9 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Complete and archive the active 36-layer P8/G2 gate, preserving the
-   post-inference oracle, 146-task topology, source provenance, and common
-   four-CU interval.
+1. Resolve the first layer-3 Attention fixed-point divergence, then rerun the
+   checkpoint gate before treating the 36-layer final mismatch as a model-level
+   issue.
 2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
 3. Extend the verified `static_descriptor_v1` Host program from one
