@@ -375,9 +375,10 @@ The combined results support three conclusions:
 
 ## 12. Next experiments
 
-1. Resolve the first layer-3 Attention fixed-point divergence, then rerun the
-   checkpoint gate before treating the 36-layer final mismatch as a model-level
-   issue.
+1. Propagate the layer-3 one-LSB divergence through later checkpoints under an
+   explicit tolerance while retaining strict error metrics. Treat any growth
+   beyond the bound as numerical instability before interpreting the 36-layer
+   final mismatch as a model-level issue.
 2. Exercise standard-shape multi-block prompts and checkpoint-packed weights,
    including cross-block and cross-position KV state.
 3. Extend the verified `static_descriptor_v1` Host program from one

@@ -475,6 +475,7 @@ struct command_line_t {
     std::string profile_op = "q";
     std::vector<unsigned int> tokens{0};
     unsigned int layer_count = 0;
+    int checkpoint_tolerance = 0;
     unsigned int max_new_tokens = 0;
     unsigned int prefill_block_size = kMaxTokensPerLaunch;
     unsigned int profile_wave = 0;
@@ -496,6 +497,7 @@ struct command_line_t {
     bool hardware_softmax = false;
     bool resident_layer = false;
     bool coarse_tasks = false;
+    bool checkpoint_continue_on_failure = false;
     bool verify_e2e_golden = false;
     bool tie_embeddings = false;
     bool skip_weight_preload = false;
@@ -5081,13 +5083,16 @@ bool run_composed_prefill_checkpoint_verification(
     const model_data_t& model,
     accelerator_t& accelerator,
     const std::vector<unsigned int>& token_ids,
-    unsigned int layer_count
+    unsigned int layer_count,
+    int checkpoint_tolerance,
+    bool checkpoint_continue_on_failure
 ) {
     if (
         token_ids.empty() ||
         token_ids.size() > kMaxTokensPerLaunch ||
         layer_count == 0 ||
-        layer_count > shape.num_layers
+        layer_count > shape.num_layers ||
+        checkpoint_tolerance < 0
     ) {
         throw std::runtime_error(
             "prefill checkpoint verification requires 1..8 tokens and a valid layer count"
@@ -5108,6 +5113,8 @@ bool run_composed_prefill_checkpoint_verification(
     tensor_t expected_layer_output;
     bool have_expected_layer_output = false;
     unsigned int compared_checkpoints = 0;
+    unsigned int rounding_checkpoints = 0;
+    bool all_checkpoints_pass = true;
     unsigned int first_failed_layer = layer_count;
     std::string first_failed_phase = "none";
 
@@ -5149,7 +5156,38 @@ bool run_composed_prefill_checkpoint_verification(
             const std::string name =
                 "prefill_checkpoint_layer_" +
                 std::to_string(task.layer) + "_" + phase;
-            const bool pass = compare_tensors(name, actual, expected, 0);
+            unsigned int strict_mismatches = 0;
+            int maximum_error = 0;
+            if (
+                actual.rows == expected.rows &&
+                actual.cols == expected.cols
+            ) {
+                for (std::size_t i = 0; i < actual.values.size(); i++) {
+                    const int error = std::abs(
+                        int(actual.values[i]) - int(expected.values[i])
+                    );
+                    maximum_error = std::max(maximum_error, error);
+                    if (error != 0) {
+                        strict_mismatches++;
+                    }
+                }
+            } else {
+                strict_mismatches = std::numeric_limits<unsigned int>::max();
+                maximum_error = std::numeric_limits<int>::max();
+            }
+            const bool pass = compare_tensors(
+                name,
+                actual,
+                expected,
+                checkpoint_tolerance
+            );
+            const char* classification =
+                strict_mismatches == 0 ?
+                    "bit_exact" :
+                    (pass ? "rounding_within_tolerance" : "out_of_tolerance");
+            if (pass && strict_mismatches != 0) {
+                rounding_checkpoints++;
+            }
             compared_checkpoints++;
             std::cout
                 << "QWEN_8X64_PREFILL_CHECKPOINT"
@@ -5157,18 +5195,24 @@ bool run_composed_prefill_checkpoint_verification(
                 << " layer=" << task.layer
                 << " phase=" << phase
                 << " query_tokens=" << task.query_tokens
-                << " tolerance=0"
+                << " strict_mismatches=" << strict_mismatches
+                << " max_raw_error=" << maximum_error
+                << " acceptance_tolerance=" << checkpoint_tolerance
+                << " classification=" << classification
                 << " " << (pass ? "PASS" : "FAIL")
                 << std::endl;
 
-            if (!pass) {
-                first_failed_layer = task.layer;
-                first_failed_phase = phase;
-                return false;
-            }
             if (task.op == llm_accel::kCoarseFfnOp) {
                 expected_hidden = expected_layer_output;
                 have_expected_layer_output = false;
+            }
+            if (!pass) {
+                all_checkpoints_pass = false;
+                if (first_failed_layer == layer_count) {
+                    first_failed_layer = task.layer;
+                    first_failed_phase = phase;
+                }
+                return checkpoint_continue_on_failure;
             }
             return true;
         };
@@ -5185,6 +5229,7 @@ bool run_composed_prefill_checkpoint_verification(
         );
     const unsigned int expected_checkpoints = 2 * layer_count + 1;
     const bool pass =
+        all_checkpoints_pass &&
         actual.checkpoint_pass &&
         !actual.checkpoint_stopped_early &&
         actual.completed_task_count == expected_checkpoints &&
@@ -5196,6 +5241,10 @@ bool run_composed_prefill_checkpoint_verification(
         << " completed_tasks=" << actual.completed_task_count
         << " expected_tasks=" << expected_checkpoints
         << " checkpoints=" << actual.checkpoint_count
+        << " acceptance_tolerance=" << checkpoint_tolerance
+        << " rounding_checkpoints=" << rounding_checkpoints
+        << " continue_on_failure="
+        << (checkpoint_continue_on_failure ? 1 : 0)
         << " first_failed_layer=";
     if (first_failed_layer == layer_count) {
         std::cout << "none";
@@ -8528,6 +8577,14 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
     if (get_option(argc, argv, "--layers", value)) {
         command.layer_count = unsigned(std::stoul(value));
     }
+    if (get_option(argc, argv, "--checkpoint-tolerance", value)) {
+        command.checkpoint_tolerance = std::stoi(value);
+        if (command.checkpoint_tolerance < 0) {
+            throw std::runtime_error(
+                "--checkpoint-tolerance must be non-negative"
+            );
+        }
+    }
     if (get_option(argc, argv, "--max-new-tokens", value)) {
         command.max_new_tokens = unsigned(std::stoul(value));
     }
@@ -8589,6 +8646,11 @@ command_line_t parse_command_line(int argc, const char* argv[]) {
         "--resident-layer"
     );
     command.coarse_tasks = has_flag(argc, argv, "--coarse-tasks");
+    command.checkpoint_continue_on_failure = has_flag(
+        argc,
+        argv,
+        "--checkpoint-continue-on-failure"
+    );
     command.verify_e2e_golden = has_flag(
         argc,
         argv,
@@ -8618,6 +8680,10 @@ void print_usage(const char* executable) {
         << "  --data <dir>             Packed Fix16 model directory\n"
         << "  --tokens <id,id,...>     Prompt token IDs\n"
         << "  --layers <n>             Limit executed decoder layers\n"
+        << "  --checkpoint-tolerance <n>\n"
+        << "                           Maximum accepted raw Fix16 error per checkpoint; default 0\n"
+        << "  --checkpoint-continue-on-failure\n"
+        << "                           Diagnostic only: collect later checkpoints after an earlier failure\n"
         << "  --max-new-tokens <n>     Greedy tokens for generate\n"
         << "  --prefill-block-size <n> Coarse-task prompt block size; 1..8 (default 8)\n"
         << "  --op <name>              profile-mm-wave op: q,k,v,o,ffn-gate,ffn-up,ffn-down\n"
@@ -9087,7 +9153,9 @@ int main(int argc, const char* argv[]) {
                 model,
                 accelerator,
                 command.tokens,
-                diagnostic_layers
+                diagnostic_layers,
+                command.checkpoint_tolerance,
+                command.checkpoint_continue_on_failure
             ) ? 0 : 1;
         }
         if (command.mode == "verify-composed-prefill-sequence") {

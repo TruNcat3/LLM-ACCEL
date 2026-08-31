@@ -80,6 +80,7 @@ endif
 .PHONY: vitis_8x64_xo vitis_8x64_link vitis_8x64_hosts vitis_8x64_host vitis_8x64_qwen_host vitis_8x64_emconfig
 .PHONY: vitis_8x64_run_smoke vitis_8x64_run_qwen vitis_8x64_run_random
 .PHONY: clean
+.PHONY: test_checkpoint_tolerance_contract
 
 help:
 	@echo "Dual-8x64 Qwen accelerator build entry points"
@@ -98,6 +99,7 @@ help:
 	@echo "  make test_q214_payload_golden"
 	@echo "  make test_qwen3b_e2e_plan"
 	@echo "  make test_qwen3b_e2e_launcher_contract"
+	@echo "  make test_checkpoint_tolerance_contract"
 	@echo "  make test_coarse_task_residency_contract"
 	@echo "  make test_e2e_progress_contract"
 	@echo "  make test_e2e_status_contract"
@@ -165,6 +167,9 @@ test_qwen3b_e2e_plan:
 test_qwen3b_e2e_launcher_contract:
 	tests/test_qwen3b_e2e_launcher_contract.sh
 
+test_checkpoint_tolerance_contract:
+	tests/test_checkpoint_tolerance_contract.sh
+
 test_coarse_task_residency_contract:
 	tests/test_coarse_task_residency_contract.sh
 
@@ -209,6 +214,7 @@ test_publication_release: test_environment_contract \
 		test_host_task_program_trace_contract \
 		test_qwen3b_e2e_plan \
 		test_qwen3b_e2e_launcher_contract \
+		test_checkpoint_tolerance_contract \
 		test_coarse_task_residency_contract \
 		test_e2e_progress_contract \
 		test_e2e_status_contract \

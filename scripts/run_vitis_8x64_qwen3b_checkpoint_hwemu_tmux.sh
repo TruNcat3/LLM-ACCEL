@@ -13,6 +13,8 @@ emconfig="${build_dir}/emconfig.json"
 env_script="${VITIS_ENV_SCRIPT:-}"
 prompt_tokens="${VITIS_8X64_CHECKPOINT_TOKENS:-8}"
 layers="${VITIS_8X64_CHECKPOINT_LAYERS:-3}"
+tolerance="${VITIS_8X64_CHECKPOINT_TOLERANCE:-0}"
+continue_on_failure="${VITIS_8X64_CHECKPOINT_CONTINUE_ON_FAILURE:-0}"
 seed="${VITIS_8X64_RESIDENT_SEED:-20260718}"
 timeout_seconds="${VITIS_8X64_HW_EMU_TIMEOUT:-172800}"
 min_available_gib="${VITIS_MIN_AVAILABLE_GIB:-80}"
@@ -31,7 +33,9 @@ if [ "${1:-}" = "--worker" ]; then
         fi
     done
     source "${env_script}" >/dev/null 2>&1
-    if ! rg -a -q -- 'verify-composed-prefill-checkpoints' "${host_exe}"; then
+    if ! rg -a -q -- 'verify-composed-prefill-checkpoints' "${host_exe}" ||
+       ! rg -a -q -- 'checkpoint-tolerance' "${host_exe}" ||
+       ! rg -a -q -- 'checkpoint-continue-on-failure' "${host_exe}"; then
         echo "Host executable does not contain the checkpoint diagnostic mode" >&2
         exit 65
     fi
@@ -52,7 +56,10 @@ if [ "${1:-}" = "--worker" ]; then
     echo "layers=${layers}"
     echo "expected_checkpoints=$((2 * layers + 1))"
     echo "seed=${seed}"
-    echo "numeric_tolerance=0"
+    echo "strict_tolerance=0"
+    echo "numeric_tolerance=${tolerance}"
+    echo "acceptance_policy=max_abs_raw_error"
+    echo "continue_on_failure=${continue_on_failure}"
     echo "checkpoint_host_copy=1"
     echo "checkpoint_copy_scope=diagnostic_only_excluded_from_production_path"
     echo "timeout_seconds=${timeout_seconds}"
@@ -63,6 +70,10 @@ if [ "${1:-}" = "--worker" ]; then
 
     host_exe_abs="$(realpath "${host_exe}")"
     build_dir_abs="$(realpath "${build_dir}")"
+    continue_args=()
+    if [ "${continue_on_failure}" -eq 1 ]; then
+        continue_args+=(--checkpoint-continue-on-failure)
+    fi
     cd "${build_dir_abs}"
     set +e
     XCL_EMULATION_MODE=hw_emu \
@@ -75,7 +86,9 @@ if [ "${1:-}" = "--worker" ]; then
         --random-model \
         --seed "${seed}" \
         --tokens "${token_csv}" \
-        --layers "${layers}"
+        --layers "${layers}" \
+        --checkpoint-tolerance "${tolerance}" \
+        "${continue_args[@]}"
     host_status="$?"
     set -e
     echo "finished_at=$(date -Is)"
@@ -93,7 +106,7 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 
-for value_name in prompt_tokens layers seed timeout_seconds min_available_gib; do
+for value_name in prompt_tokens layers tolerance continue_on_failure seed timeout_seconds min_available_gib; do
     value="${!value_name}"
     if ! [[ "${value}" =~ ^[0-9]+$ ]]; then
         echo "${value_name} must be a non-negative integer" >&2
@@ -104,8 +117,16 @@ if [ "${prompt_tokens}" -lt 1 ] || [ "${prompt_tokens}" -gt 8 ]; then
     echo "VITIS_8X64_CHECKPOINT_TOKENS must be in 1..8" >&2
     exit 2
 fi
+if [ "${continue_on_failure}" -gt 1 ]; then
+    echo "VITIS_8X64_CHECKPOINT_CONTINUE_ON_FAILURE must be 0 or 1" >&2
+    exit 2
+fi
 if [ "${layers}" -lt 1 ] || [ "${layers}" -gt 36 ]; then
     echo "VITIS_8X64_CHECKPOINT_LAYERS must be in 1..36" >&2
+    exit 2
+fi
+if [ "${tolerance}" -gt 32767 ]; then
+    echo "VITIS_8X64_CHECKPOINT_TOLERANCE must be in 0..32767" >&2
     exit 2
 fi
 if ! command -v tmux >/dev/null 2>&1; then
@@ -134,8 +155,15 @@ if [ "${dry_run}" -eq 0 ]; then
 fi
 
 timestamp="$(date +%Y%m%d_%H%M%S)"
-session="llm_qwen3b_checkpoint_p${prompt_tokens}_l${layers}_${timestamp}"
-log_path="$PWD/logs/qwen3b_checkpoint_hwemu_p${prompt_tokens}_l${layers}_${timestamp}.log"
+tolerance_tag=""
+if [ "${tolerance}" -ne 0 ]; then
+    tolerance_tag="_tol${tolerance}"
+fi
+if [ "${continue_on_failure}" -eq 1 ]; then
+    tolerance_tag+="_continue"
+fi
+session="llm_qwen3b_checkpoint_p${prompt_tokens}_l${layers}${tolerance_tag}_${timestamp}"
+log_path="$PWD/logs/qwen3b_checkpoint_hwemu_p${prompt_tokens}_l${layers}${tolerance_tag}_${timestamp}.log"
 pid_path="${log_path%.log}.pid"
 worker_argv=(
     env
@@ -144,6 +172,8 @@ worker_argv=(
     "VITIS_8X64_CHECKPOINT_HOST_EXE=${host_exe}"
     "VITIS_8X64_CHECKPOINT_TOKENS=${prompt_tokens}"
     "VITIS_8X64_CHECKPOINT_LAYERS=${layers}"
+    "VITIS_8X64_CHECKPOINT_TOLERANCE=${tolerance}"
+    "VITIS_8X64_CHECKPOINT_CONTINUE_ON_FAILURE=${continue_on_failure}"
     "VITIS_8X64_RESIDENT_SEED=${seed}"
     "VITIS_8X64_HW_EMU_TIMEOUT=${timeout_seconds}"
     "VITIS_MIN_AVAILABLE_GIB=${min_available_gib}"
@@ -155,8 +185,9 @@ printf -v worker_command '%q ' "${worker_argv[@]}"
 printf -v quoted_log '%q' "${log_path}"
 
 if [ "${dry_run}" -eq 1 ]; then
-    printf 'dry_run=1\nprompt_tokens=%s\nlayers=%s\nexpected_checkpoints=%s\n' \
-        "${prompt_tokens}" "${layers}" "$((2 * layers + 1))"
+    printf 'dry_run=1\nprompt_tokens=%s\nlayers=%s\ntolerance=%s\ncontinue_on_failure=%s\nexpected_checkpoints=%s\n' \
+        "${prompt_tokens}" "${layers}" "${tolerance}" \
+        "${continue_on_failure}" "$((2 * layers + 1))"
     printf 'worker_command=%s\nlog=%s\nbuild_dir=%s\n' \
         "${worker_command}" "${log_path}" "${build_dir}"
     exit 0

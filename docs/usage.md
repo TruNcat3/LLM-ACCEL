@@ -216,6 +216,16 @@ VITIS_8X64_CHECKPOINT_HOST_EXE=/tmp/host_qwen_8x64_checkpoint.exe \
 VITIS_8X64_CHECKPOINT_LAYERS=3 \
   scripts/run_vitis_8x64_qwen3b_checkpoint_hwemu_tmux.sh
 
+# Diagnostic acceptance policy for a known one-LSB fixed-point divergence.
+# All strict mismatches and maximum raw errors remain in the log. Continuing
+# after a failure collects later checkpoints but never turns an error above
+# the configured tolerance into a final PASS.
+VITIS_8X64_CHECKPOINT_HOST_EXE=/tmp/host_qwen_8x64_checkpoint.exe \
+VITIS_8X64_CHECKPOINT_LAYERS=4 \
+VITIS_8X64_CHECKPOINT_TOLERANCE=1 \
+VITIS_8X64_CHECKPOINT_CONTINUE_ON_FAILURE=1 \
+  scripts/run_vitis_8x64_qwen3b_checkpoint_hwemu_tmux.sh
+
 # Full 36-layer extension of the same contract: random deterministic Fix16
 # weights and 146 coarse tasks. This is the launcher default and is expected
 # to take much longer under RTL HW Emu.
@@ -226,6 +236,11 @@ VITIS_8X64_E2E_MODEL_SOURCE=checkpoint \
 VITIS_8X64_E2E_DATA_DIR=/path/to/packed/qwen2.5-3b \
   scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
 ```
+
+Checkpoint tolerance defaults to zero. A checkpoint with nonzero differences
+is classified as `rounding_within_tolerance` only when its maximum absolute
+raw Fix16 error is within the explicit threshold. This operational acceptance
+does not erase the strict mismatch count or upgrade an older bit-exact claim.
 
 `P8` means eight active query rows from one sequence; it is neither batch size
 nor eight tokens generated in parallel. Decode remains `D1`. The first new

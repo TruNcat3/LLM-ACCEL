@@ -128,6 +128,9 @@ The latest checkpoint-localization package adds diagnostic-only Host readback
 after every coarse task. It is bit-exact through layer 2 and finds the first
 one-unit divergence at layer 3 Attention; it is not a full 36-layer correctness
 claim. See the [checkpoint package](results/qwen3b-checkpoint-20260830/).
+Checkpoint runs are strict by default. An explicit raw Fix16 tolerance can
+classify bounded one-LSB differences as accepted rounding while retaining the
+strict mismatch count; errors above that bound still fail the run.
 
 ## Evidence ladder
 

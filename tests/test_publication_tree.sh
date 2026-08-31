@@ -45,6 +45,7 @@ required_executables=(
     scripts/verify_vitis_8x64_e2e_progress.sh
     scripts/verify_result_checksums.sh
     tests/test_environment_contract.sh
+    tests/test_checkpoint_tolerance_contract.sh
 )
 for path in "${required_executables[@]}"; do
     if [ ! -x "${path}" ]; then
@@ -222,6 +223,7 @@ done
 
 scripts/verify_result_checksums.sh >/dev/null
 tests/test_e2e_performance_semantics.sh >/dev/null
+tests/test_checkpoint_tolerance_contract.sh >/dev/null
 
 if [ "${VERIFY_ROOT_CHECKSUMS:-0}" = "1" ]; then
     sha256sum -c CHECKSUMS.sha256 >/dev/null
