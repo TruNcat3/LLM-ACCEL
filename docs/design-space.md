@@ -9,7 +9,29 @@ The goal is to make the current implementation understandable as a sequence of
 measured choices rather than as the only possible design.
 
 The root [implementation and evidence map](../README.md#implementation-variants-and-evidence-map)
-assigns stable IDs R1, D1, P1, and S1 to these source and measurement boundaries.
+assigns stable IDs R1, D1, P1, S1, and Q1 to these source and measurement
+boundaries.
+
+## Quantized arithmetic candidates
+
+Quantization changes the arithmetic and packet contract, so it is evaluated as
+an explicit candidate rather than inferred from the FP16/Fix16 R1 measurements.
+The isolated Q1 blocks use fixed-width task and data words and preserve the
+controller's block-level scheduling boundary:
+
+| Candidate | Decode-oriented shape | Products per K | Physical DSPs | HLS result |
+| --- | ---: | ---: | ---: | --- |
+| W4A4 packed | 8x64 | 512 | 128 (4/DSP) | II=1, depth=5, 440.53 MHz |
+| W8A8 | 4x128 | 512 | 512 (1/DSP) | II=1, depth=3, 521.69 MHz |
+| W8A4 reference | 8x64 | 512 | 128 (2/DSP) | II=1, depth=7, 440.33 MHz |
+
+The four-way W4A4 packing is a true signed outer product: two INT4 activation
+digits and two INT4 weight digits are multiplied in one DSP and four products
+are recovered. It must not be conflated with the two-way W8A4 packing. W8A8
+does not pack products, but its 4x128 rectangle exposes a useful decode shape
+while retaining an II=1 inner loop. Full scale/zero-point handling, controller
+integration, HBM bandwidth, and model-level accuracy remain open. Source and
+reproduction commands are in the [Q1 case](../cases/quantized-block/).
 
 ## 1. Kernel partitioning
 

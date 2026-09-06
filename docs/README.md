@@ -12,8 +12,8 @@ history. Start with the shortest path that matches your goal.
    memory hierarchy, packed stream ABI, five-stage pipeline, online attention,
    and coarse-task execution model.
 2. [Design Space and Alternatives](design-space.md) compares kernel
-   partitioning, array shapes, stream granularity, attention algorithms,
-   prefill scheduling, and decode-utilization candidates.
+   partitioning, array shapes, stream granularity, quantized arithmetic,
+   attention algorithms, prefill scheduling, and decode-utilization candidates.
 3. [Experimental Results](experiments.md) defines the evidence ladder and
    consolidates performance, correctness, resource, and limitation tables.
 
@@ -36,6 +36,9 @@ history. Start with the shortest path that matches your goal.
 - [Q2.14 Multi-Length P/D HW-Emu Results](q214-pd-length-hwemu.md) documents
   the operator-level context-length experiment, its precision checks, and its
   narrower timing boundary.
+- [Quantized Block Candidates](../cases/quantized-block/) records the isolated
+  W4A4 and W8A8 controller-facing block candidates, HLS estimates, and
+  deadlock-checked CoSim evidence.
 
 ## Evidence boundaries
 
