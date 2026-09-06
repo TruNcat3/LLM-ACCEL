@@ -100,7 +100,7 @@ figure. A dash means that the variant has no root-level performance plot.
 | **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | — | [P/D 64--1024](results/q214-pd-20260811/) |
 | **P1 — Small resident protocol profiles** | Reduced shapes test finite FIFOs, block tails, residency, and controller-owned KV | R1 kernels with small model profiles | — | [Coarse tasks](results/coarse-task-20260816/), [block prefill](results/block-prefill-20260817/) |
 | **S1 — Streaming split / V8-2_s** | Earlier control/cache plus fixed compute-core split; analytical full-layer projection only | [`cases/streaming-split/`](cases/streaming-split/) | — | [Design and evidence limits](cases/streaming-split/docs/design.md) |
-| **Q1 — Quantized block candidates** | Isolated controller-facing INT4/INT8 block ABI; integration is open | [`cases/quantized-block/`](cases/quantized-block/) | — | [HLS candidate study](cases/quantized-block/) |
+| **Q1 — Quantized block candidates** | Isolated controller-facing INT4/INT8 block ABI with resource-budgeted CU replication; integration is open | [`cases/quantized-block/`](cases/quantized-block/) | — | [HLS candidate study](cases/quantized-block/) |
 
 ## Key results
 

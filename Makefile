@@ -3,6 +3,8 @@ FREQUENCY ?= 300
 THREADS ?= 16
 OPT_LEVEL ?= 3
 REPORT_LEVEL ?= 2
+QUANT_KERNEL ?= w4a4
+QUANT_KERNEL_COUNT ?= auto
 VITIS_8X64_MODEL_PROFILE ?= small
 VITIS_8X64_VALID_MODEL_PROFILES := small medium qwen-layer qwen-layer-long qwen2.5-3b
 
@@ -72,7 +74,7 @@ endif
 .PHONY: help
 .PHONY: hls_csim_compute hls_csynth_compute hls_cosim_compute
 .PHONY: hls_csim_control hls_csynth_control hls_cosim_control
-.PHONY: hls_csim_nk check_environment test_environment_contract test_coarse_task_program test_host_task_program_trace_contract test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan test_qwen3b_e2e_launcher_contract test_coarse_task_residency_contract test_e2e_progress_contract test_e2e_status_contract test_e2e_performance_semantics test_e2e_scaling_report test_result_installer_contract test_qwen3b_source_snapshot test_publication_tree test_publication_release verify_result_checksums regenerate_root_checksums verify_q214_pd_release verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
+.PHONY: hls_csim_nk check_environment test_environment_contract test_coarse_task_program test_host_task_program_trace_contract test_resident_attention_q214 test_q214_payload_golden test_qwen3b_e2e_plan test_qwen3b_e2e_launcher_contract test_coarse_task_residency_contract test_e2e_progress_contract test_e2e_status_contract test_e2e_performance_semantics test_e2e_scaling_report test_result_installer_contract test_qwen3b_source_snapshot test_quantized_cu_planner quantized_cu_plan test_publication_tree test_publication_release verify_result_checksums regenerate_root_checksums verify_q214_pd_release verify_q214_resident_release hls_csim_closed_loop_8x64_resident_layer hls_cosim_closed_loop_8x64_resident_layer
 .PHONY: hls_csim_closed_loop_8x64_composed_layer hls_cosim_closed_loop_8x64_composed_layer
 .PHONY: hls_csim_closed_loop_8x64_resident_prefill_block hls_cosim_closed_loop_8x64_resident_prefill_block
 .PHONY: hls_csynth_compute_xo hls_csynth_control_xo
@@ -107,6 +109,8 @@ help:
 	@echo "  make test_e2e_scaling_report"
 	@echo "  make test_result_installer_contract"
 	@echo "  make test_qwen3b_source_snapshot"
+	@echo "  make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto"
+	@echo "  make test_quantized_cu_planner"
 	@echo "  make test_publication_tree"
 	@echo "  make test_publication_release  # all non-simulator release gates"
 	@echo "  make verify_result_checksums"
@@ -191,6 +195,12 @@ test_result_installer_contract:
 test_qwen3b_source_snapshot:
 	tests/test_qwen3b_source_snapshot.sh
 
+quantized_cu_plan:
+	scripts/plan_quantized_cus.sh '$(QUANT_KERNEL)' '$(QUANT_KERNEL_COUNT)'
+
+test_quantized_cu_planner:
+	tests/test_quantized_cu_planner.sh
+
 check_environment:
 	scripts/check_environment.sh $${ENV_MODE:-publication}
 
@@ -222,6 +232,7 @@ test_publication_release: test_environment_contract \
 		test_e2e_scaling_report \
 		test_result_installer_contract \
 		test_qwen3b_source_snapshot \
+		test_quantized_cu_planner \
 		verify_q214_pd_release \
 		verify_q214_resident_release \
 		test_publication_tree

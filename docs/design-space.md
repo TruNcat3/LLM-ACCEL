@@ -33,6 +33,15 @@ while retaining an II=1 inner loop. Full scale/zero-point handling, controller
 integration, HBM bandwidth, and model-level accuracy remain open. Source and
 reproduction commands are in the [Q1 case](../cases/quantized-block/).
 
+CU replication is modeled separately from tile shape. The Q1 planner subtracts
+the published resident-controller and status resources before selecting the
+largest W4A4 or W8A8 count below a configurable device-utilization cap. With
+the default 85% U50 cap, LUT limits both resident candidates to one CU; without
+the fixed controller reservation, three W4A4 CUs fit the arithmetic HLS
+estimate. The latter is a compute-only exploration, not a link result. Each
+replica also needs dedicated block streams and controller-side output-column
+partitioning before its generated `nk=` declaration is usable.
+
 ## 1. Kernel partitioning
 
 | Candidate | Advantages | Disadvantages | Status |

@@ -36,6 +36,37 @@ W8A8 consumes one 32-bit activation word and four 256-bit weight words per K
 step, then emits sixteen 32-bit accumulators plus metadata in a 576-bit packet.
 Both kernels accept bounded K values and emit deterministic block metadata.
 
+## CU replication planning
+
+The tile shape and the number of replicated compute units are independent
+parameters. The resource planner reserves the published R1 controller and
+status-sink estimates, applies an 85% whole-U50 cap by default, and chooses the
+largest count that fits all BRAM, DSP, FF, and LUT limits:
+
+```bash
+make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto
+make quantized_cu_plan QUANT_KERNEL=w8a8 QUANT_KERNEL_COUNT=auto
+
+# Explore compute-only capacity or add a known controller stream limit.
+QUANT_FIXED_PROFILE=none \
+  make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto
+QUANT_INPUT_BITS_PER_CYCLE_CAP=2112 \
+  make quantized_cu_plan QUANT_KERNEL=w8a8 QUANT_KERNEL_COUNT=auto
+```
+
+| Budget profile | Candidate | Selected CUs | Modeled total LUT | LUT use | Aggregate HLS roofline |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Resident R1 plus status, 85% cap | W4A4 | 1 | 654,828 | 75.12% | 225.551 GMAC/s |
+| Resident R1 plus status, 85% cap | W8A8 | 1 | 687,362 | 78.85% | 267.105 GMAC/s |
+| Compute only, 85% cap | W4A4 | 3 | 578,427 | 66.36% | 676.654 GMAC/s |
+
+LUT is the limiting resource in these points. The compute-only row is not a
+deployable system estimate because it excludes the controller, platform shell,
+connectivity, and routing growth. The planner emits an `nk_line`, but every CU
+still requires a unique task/activation/weight/output stream set and an
+output-block partition in the controller. A requested count above the modeled
+limit is rejected. Run `make test_quantized_cu_planner` to check this contract.
+
 ## Reproduce
 
 The source is self-contained apart from the repository's HLS fixed-point type
@@ -71,5 +102,6 @@ HW Emu, routed system link, physical-board measurement, scale application,
 checkpoint accuracy result, or full-model INT4/INT8 claim yet.
 
 The next integration gate is to connect one candidate to the controller's
-block loader and run the same functional and residency checks used by R1,
-followed by a resource/timing re-evaluation of the complete multi-kernel link.
+block loader, parameterize its stream ports by the selected CU count, and run
+the same functional and residency checks used by R1. Resource/timing must then
+be re-evaluated on the complete multi-kernel link.
