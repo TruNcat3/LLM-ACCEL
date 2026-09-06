@@ -23,7 +23,7 @@ controller's block-level scheduling boundary:
 | --- | ---: | ---: | ---: | --- |
 | W4A4 packed | 8x64 | 512 | 128 (4/DSP) | II=1, depth=5, 440.53 MHz |
 | W8A8 | 4x128 | 512 | 512 (1/DSP) | II=1, depth=3, 521.69 MHz |
-| W8A4 reference | 8x64 | 512 | 128 (2/DSP) | II=1, depth=7, 440.33 MHz |
+| W8A4 reference (2-wave) | 8x64 | 512 | 128 (2/DSP) | II=1, depth=7, 440.33 MHz |
 
 The four-way W4A4 packing is a true signed outer product: two INT4 activation
 digits and two INT4 weight digits are multiplied in one DSP and four products

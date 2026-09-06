@@ -14,7 +14,7 @@ the Qwen controller, HBM scheduler, or the published end-to-end runtime.
 | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- |
 | W4A4 packed block | 8x64 | 32-bit / 256-bit | 512 | 128 | 4 products/DSP | 1 / 5 | 440.53 MHz | CSim + RTL CoSim pass |
 | W8A8 decode block | 4x128 | 32-bit / four 256-bit streams | 512 | 512 | 1 product/DSP | 1 / 3 | 521.69 MHz | CSim + RTL CoSim pass |
-| W8A4 packed reference | 8x64 | block-level | 512 | 128 | 2 products/DSP | 1 / 7 | 440.33 MHz | Existing reference |
+| W8A4 packed reference (2-wave) | 8x64 | block-level | 512 | 128 | 2 products/DSP | 1 / 7 | 440.33 MHz | Existing reference |
 
 The W4A4 design packs two signed INT4 activations and two signed INT4 weights
 into one DSP multiply and extracts the four cross-products. The W8A8 design
