@@ -67,6 +67,34 @@ still requires a unique task/activation/weight/output stream set and an
 output-block partition in the controller. A requested count above the modeled
 limit is rejected. Run `make test_quantized_cu_planner` to check this contract.
 
+The baseline arithmetic uses LUT fabric for the fully unrolled accumulator
+updates. A measured alternative binds those additions to DSP48 units, trading
+unused DSP capacity for a much smaller LUT footprint. W8A8 additionally keeps
+the external 32-bit result packet while using a verified 28-bit internal
+accumulator for the bounded `K<=4096` range:
+
+| Variant | Per-CU DSP | Per-CU FF | Per-CU LUT | Est. Fmax | Verification |
+| --- | ---: | ---: | ---: | ---: | --- |
+| W4A4 baseline LUT accum | 128 | 59,417 | 192,809 | 440.53 MHz | CSim + deadlock-on CoSim |
+| W4A4 DSP accum | 2,176 | 59,417 | 129,321 | 440.53 MHz | CSim + deadlock-on CoSim |
+| W8A8 baseline LUT accum | 512 | 76,459 | 225,343 | 521.69 MHz | CSim + deadlock-on CoSim |
+| W8A8 DSP accum + 28-bit internal | 2,560 | 68,091 | 128,975 | 528.23 MHz | CSim + deadlock-on CoSim |
+
+With the resident R1 reservation, the W4A4 DSP-accumulator point admits two CUs
+under the 85% whole-device cap: 4,475 DSP (75.18%) and 720,661 LUT (82.67%).
+The W8A8 narrow point admits two CUs at a 90% cap: 5,243 DSP (88.09%) and
+719,969 LUT (82.60%). These are still pre-link estimates; controller stream
+replication, HBM placement, fanout, and post-route timing remain integration
+gates.
+
+```bash
+QUANT_ACCUM_IMPL=dsp \
+  make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto
+
+QUANT_ACCUM_IMPL=dsp QUANT_NARROW_ACCUM=1 QUANT_RESOURCE_CAP_PCT=90 \
+  make quantized_cu_plan QUANT_KERNEL=w8a8 QUANT_KERNEL_COUNT=auto
+```
+
 ## Reproduce
 
 The source is self-contained apart from the repository's HLS fixed-point type
@@ -87,10 +115,24 @@ scripts/run_vitis_hls.sh \
   cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block.tcl
 ```
 
-For an existing development checkout, the combined regression launcher is
-`scripts/run_quantized_block_regression.sh [csim|synth|cosim|all]`. The public
-case intentionally does not store generated HLS projects, reports, XOs, or
-simulator traces.
+The public checkout also provides a regression launcher for the baseline and
+measured accumulator variants:
+`scripts/run_quantized_block_regression.sh [csim|synth|cosim|all]`. To run only
+the two optimized candidates, use the same Vitis 2022.2 environment and invoke
+their dedicated Tcl entry points:
+
+```bash
+HLS_EXTRA_CFLAGS=-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM \
+  scripts/run_vitis_hls.sh \
+  cases/quantized-block/tcl/run_cosim_mm_stream_8x64_int4x4_block_dspacc.tcl
+
+HLS_EXTRA_CFLAGS="-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM -DMM_STREAM_QUANTIZED_NARROW_ACCUM" \
+  scripts/run_vitis_hls.sh \
+  cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block_dspacc_narrow.tcl
+```
+
+The public case intentionally does not store generated HLS projects, reports,
+XOs, or simulator traces.
 
 ## Evidence boundary
 

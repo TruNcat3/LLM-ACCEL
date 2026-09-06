@@ -42,6 +42,16 @@ estimate. The latter is a compute-only exploration, not a link result. Each
 replica also needs dedicated block streams and controller-side output-column
 partitioning before its generated `nk=` declaration is usable.
 
+The LUT limit is not fundamental to the arithmetic array. The measured
+accumulator variant binds the fully unrolled bank additions to DSP48 units. It
+reduces W4A4 LUT from 192,809 to 129,321 per CU and admits two modeled resident
+CUs at the 85% cap. W8A8 additionally uses a 28-bit internal accumulator while
+retaining its 32-bit output packet; its LUT falls from 225,343 to 128,975 per
+CU, and two modeled CUs fit at a 90% cap. Both variants preserve the fixed-width
+stream ABI, `II=1`, and deadlock-enabled RTL CoSim. These are HLS/pre-link
+results: controller stream duplication, HBM placement, and complete Vitis link
+remain integration gates.
+
 ## 1. Kernel partitioning
 
 | Candidate | Advantages | Disadvantages | Status |

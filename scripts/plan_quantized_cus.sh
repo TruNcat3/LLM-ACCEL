@@ -19,6 +19,8 @@ Environment overrides:
   QUANT_FIXED_{BRAM,DSP,FF,LUT}=N       Override fixed-profile resources
   QUANT_MAX_CUS=N                       Optional replication cap; 0 disables
   QUANT_INPUT_BITS_PER_CYCLE_CAP=N      Optional aggregate input-wire cap
+  QUANT_ACCUM_IMPL=lut|dsp              Accumulator implementation (default lut)
+  QUANT_NARROW_ACCUM=0|1                Use the verified narrow internal width
 
 The emitted nk_line is only the CU replication declaration. Every CU still
 requires a unique task/activation/weight/output stream set from the controller.
@@ -60,6 +62,17 @@ fi
 
 candidate="${1:-}"
 requested_count="${2:-auto}"
+accum_impl="${QUANT_ACCUM_IMPL:-lut}"
+narrow_accum="${QUANT_NARROW_ACCUM:-0}"
+
+case "${accum_impl}" in
+    lut|dsp) ;;
+    *) die "QUANT_ACCUM_IMPL must be lut or dsp" ;;
+esac
+case "${narrow_accum}" in
+    0|1) ;;
+    *) die "QUANT_NARROW_ACCUM must be 0 or 1" ;;
+esac
 
 case "${candidate}" in
     w4a4)
@@ -91,6 +104,35 @@ case "${candidate}" in
     *)
         usage >&2
         die "candidate must be w4a4 or w8a8"
+        ;;
+esac
+
+case "${candidate}:${accum_impl}:${narrow_accum}" in
+    w4a4:lut:0)
+        hls_extra_cflags=
+        ;;
+    w4a4:dsp:0)
+        per_dsp=2176
+        per_lut=129321
+        hls_extra_cflags=-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM
+        ;;
+    w8a8:lut:0)
+        hls_extra_cflags=
+        ;;
+    w8a8:dsp:0)
+        per_dsp=2560
+        per_lut=145471
+        hls_extra_cflags=-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM
+        ;;
+    w8a8:dsp:1)
+        per_dsp=2560
+        per_ff=68091
+        per_lut=128975
+        estimated_fmax_mhz=528.23
+        hls_extra_cflags="-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM -DMM_STREAM_QUANTIZED_NARROW_ACCUM"
+        ;;
+    *)
+        die "unverified accumulator configuration: candidate=${candidate} impl=${accum_impl} narrow=${narrow_accum}"
         ;;
 esac
 
@@ -217,6 +259,9 @@ done
 
 echo "candidate=${candidate}"
 echo "tile=${tile}"
+echo "accum_impl=${accum_impl}"
+echo "narrow_accum=${narrow_accum}"
+echo "hls_extra_cflags=${hls_extra_cflags}"
 echo "fixed_profile=${fixed_profile}"
 echo "resource_cap_pct=${cap_pct}"
 echo "per_cu_bram18=${per_bram}"

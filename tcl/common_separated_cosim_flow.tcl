@@ -29,6 +29,10 @@ if {[info exists ::env(HLS_COSIM_PREPARE_ONLY)] && $::env(HLS_COSIM_PREPARE_ONLY
     set prepare_only 1
 }
 
+if {[info exists ::env(HLS_EXTRA_CFLAGS)] && $::env(HLS_EXTRA_CFLAGS) ne ""} {
+    append cflags " " $::env(HLS_EXTRA_CFLAGS)
+}
+
 if {$prepare} {
     open_project -reset $project_name
     set_top $top_name

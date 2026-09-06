@@ -26,6 +26,23 @@ assert_field "${resident_w8}" "modeled_max_cus=1"
 assert_field "${resident_w8}" "selected_cus=1"
 assert_field "${resident_w8}" "aggregate_input_bits_per_cycle=1056"
 
+resident_w4_dsp="$(QUANT_ACCUM_IMPL=dsp scripts/plan_quantized_cus.sh w4a4 auto)"
+assert_field "${resident_w4_dsp}" "accum_impl=dsp"
+assert_field "${resident_w4_dsp}" "resource_limit=dsp"
+assert_field "${resident_w4_dsp}" "modeled_max_cus=2"
+assert_field "${resident_w4_dsp}" "selected_cus=2"
+assert_field "${resident_w4_dsp}" "per_cu_dsp=2176"
+
+resident_w8_dsp="$(
+    QUANT_ACCUM_IMPL=dsp QUANT_NARROW_ACCUM=1 \
+        QUANT_RESOURCE_CAP_PCT=90 scripts/plan_quantized_cus.sh w8a8 auto
+)"
+assert_field "${resident_w8_dsp}" "narrow_accum=1"
+assert_field "${resident_w8_dsp}" "resource_limit=dsp"
+assert_field "${resident_w8_dsp}" "modeled_max_cus=2"
+assert_field "${resident_w8_dsp}" "selected_cus=2"
+assert_field "${resident_w8_dsp}" "per_cu_lut=128975"
+
 isolated_w4="$(QUANT_FIXED_PROFILE=none scripts/plan_quantized_cus.sh w4a4 auto)"
 assert_field "${isolated_w4}" "modeled_max_cus=3"
 assert_field "${isolated_w4}" "selected_cus=3"
@@ -49,4 +66,4 @@ if scripts/plan_quantized_cus.sh invalid auto >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "QUANTIZED CU PLANNER PASS resident_w4=1 resident_w8=1 isolated_w4=3 bandwidth_w8=2"
+echo "QUANTIZED CU PLANNER PASS resident_w4=1 resident_w8=1 resident_w4_dsp=2 resident_w8_dsp=2 isolated_w4=3 bandwidth_w8=2"

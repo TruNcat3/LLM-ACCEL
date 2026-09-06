@@ -5,6 +5,8 @@ OPT_LEVEL ?= 3
 REPORT_LEVEL ?= 2
 QUANT_KERNEL ?= w4a4
 QUANT_KERNEL_COUNT ?= auto
+QUANT_ACCUM_IMPL ?= lut
+QUANT_NARROW_ACCUM ?= 0
 VITIS_8X64_MODEL_PROFILE ?= small
 VITIS_8X64_VALID_MODEL_PROFILES := small medium qwen-layer qwen-layer-long qwen2.5-3b
 
@@ -109,7 +111,7 @@ help:
 	@echo "  make test_e2e_scaling_report"
 	@echo "  make test_result_installer_contract"
 	@echo "  make test_qwen3b_source_snapshot"
-	@echo "  make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto"
+	@echo "  make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto QUANT_ACCUM_IMPL=dsp"
 	@echo "  make test_quantized_cu_planner"
 	@echo "  make test_publication_tree"
 	@echo "  make test_publication_release  # all non-simulator release gates"
@@ -196,7 +198,9 @@ test_qwen3b_source_snapshot:
 	tests/test_qwen3b_source_snapshot.sh
 
 quantized_cu_plan:
-	scripts/plan_quantized_cus.sh '$(QUANT_KERNEL)' '$(QUANT_KERNEL_COUNT)'
+	QUANT_ACCUM_IMPL='$(QUANT_ACCUM_IMPL)' \
+	QUANT_NARROW_ACCUM='$(QUANT_NARROW_ACCUM)' \
+		scripts/plan_quantized_cus.sh '$(QUANT_KERNEL)' '$(QUANT_KERNEL_COUNT)'
 
 test_quantized_cu_planner:
 	tests/test_quantized_cu_planner.sh

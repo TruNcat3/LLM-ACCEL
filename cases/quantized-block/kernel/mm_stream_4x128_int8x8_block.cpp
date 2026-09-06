@@ -1,7 +1,14 @@
 #include "mm_stream_4x128_int8x8_block.hpp"
 
+#ifdef MM_STREAM_QUANTIZED_NARROW_ACCUM
+static constexpr unsigned int MM_STREAM_4X128_INT8X8_INTERNAL_ACCUM_BITS = 28;
+#else
+static constexpr unsigned int MM_STREAM_4X128_INT8X8_INTERNAL_ACCUM_BITS =
+    MM_STREAM_4X128_INT8X8_ACCUM_BITS;
+#endif
+
 struct mm_stream_4x128_int8x8_accum_bank_t {
-    ap_int<MM_STREAM_4X128_INT8X8_ACCUM_BITS>
+    ap_int<MM_STREAM_4X128_INT8X8_INTERNAL_ACCUM_BITS>
         value[MM_STREAM_4X128_INT8X8_TOKENS]
              [MM_STREAM_4X128_INT8X8_OUTPUTS];
 };
@@ -67,6 +74,22 @@ static void compute_int8x8_products(
     }
 }
 
+static void update_int8x8_accum(
+    ap_int<MM_STREAM_4X128_INT8X8_INTERNAL_ACCUM_BITS>& accum,
+    ap_int<16> product,
+    bool initialize) {
+    #pragma HLS inline
+#ifdef MM_STREAM_QUANTIZED_USE_DSP_ACCUM
+    // Trade LUT-heavy wide accumulators for otherwise idle DSP adders.
+    #pragma HLS bind_op variable=accum op=add impl=dsp
+#endif
+    if (initialize) {
+        accum = product;
+    } else {
+        accum += product;
+    }
+}
+
 static void update_int8x8_bank(
     mm_stream_4x128_int8x8_accum_bank_t& bank,
     const mm_stream_4x128_int8x8_product_tile_t& product,
@@ -80,11 +103,9 @@ static void update_int8x8_bank(
         for (unsigned int output = 0;
              output < MM_STREAM_4X128_INT8X8_OUTPUTS; output++) {
             #pragma HLS unroll
-            if (initialize) {
-                bank.value[token][output] = product.value[token][output];
-            } else {
-                bank.value[token][output] += product.value[token][output];
-            }
+            update_int8x8_accum(
+                bank.value[token][output], product.value[token][output],
+                initialize);
         }
     }
 }

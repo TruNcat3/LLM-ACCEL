@@ -1,7 +1,14 @@
 #include "mm_stream_8x64_int4x4_block.hpp"
 
+#ifdef MM_STREAM_QUANTIZED_NARROW_ACCUM
+static constexpr unsigned int MM_STREAM_8X64_INT4X4_INTERNAL_ACCUM_BITS = 20;
+#else
+static constexpr unsigned int MM_STREAM_8X64_INT4X4_INTERNAL_ACCUM_BITS =
+    MM_STREAM_8X64_INT4X4_ACCUM_BITS;
+#endif
+
 struct mm_stream_8x64_int4x4_accum_bank_t {
-    ap_int<MM_STREAM_8X64_INT4X4_ACCUM_BITS>
+    ap_int<MM_STREAM_8X64_INT4X4_INTERNAL_ACCUM_BITS>
         value[MM_STREAM_8X64_INT4X4_TOKENS]
              [MM_STREAM_8X64_INT4X4_OUTPUTS];
 };
@@ -55,10 +62,14 @@ static void packed_int4x4_outer_product(
 }
 
 static void update_int4x4_accum(
-    ap_int<MM_STREAM_8X64_INT4X4_ACCUM_BITS>& accum,
+    ap_int<MM_STREAM_8X64_INT4X4_INTERNAL_ACCUM_BITS>& accum,
     ap_int<8> product,
     bool initialize) {
     #pragma HLS inline
+#ifdef MM_STREAM_QUANTIZED_USE_DSP_ACCUM
+    // Trade LUT-heavy wide accumulators for otherwise idle DSP adders.
+    #pragma HLS bind_op variable=accum op=add impl=dsp
+#endif
     if (initialize) {
         accum = product;
     } else {
