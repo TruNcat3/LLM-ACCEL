@@ -1,0 +1,8 @@
+variant	shape	products_per_k	physical_dsp	internal_accum_bits	main_ii	main_depth	hls_estimated_ns	hls_estimated_fmax_mhz	ff	lut	bram18k	verification	decision
+w4a4_rotating_lut	8x64	512	128	24	1	5	2.270	440.53	59417	192809	0	baseline CSim + RTL CoSim	superseded
+w4a4_rotating_dsp	8x64	512	2176	24	1	5	2.270	440.53	59417	129321	0	CSim + RTL CoSim	diagnostic only
+w4a4_shared_four_bank	8x64	512	128	20	1	90	2.270	440.53	142888	119761	0	CSim + CSynth; CoSim not run	rejected high fanout/depth
+w4a4_single_lut	8x64	512	128	20	1	5	2.270	440.53	19607	43970	0	CSim + deadlock-on RTL CoSim	selected
+w8a8_rotating_lut	4x128	512	512	32	1	3	1.917	521.69	76459	225343	0	baseline CSim + RTL CoSim	superseded
+w8a8_rotating_dsp_narrow	4x128	512	2560	28	1	3	1.893	528.23	68091	128975	0	CSim + RTL CoSim	diagnostic only
+w8a8_single_lut	4x128	512	512	28	1	3	1.774	563.70	24167	35720	0	CSim + deadlock-on RTL CoSim	selected

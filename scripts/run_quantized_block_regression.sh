@@ -57,6 +57,8 @@ variants=(
     "baseline_w8||cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block.tcl"
     "dspacc_w4|-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM|cases/quantized-block/tcl/run_cosim_mm_stream_8x64_int4x4_block_dspacc.tcl"
     "dspacc_narrow_w8|-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM -DMM_STREAM_QUANTIZED_NARROW_ACCUM|cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block_dspacc_narrow.tcl"
+    "single_narrow_w4|-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM|cases/quantized-block/tcl/run_cosim_mm_stream_8x64_int4x4_block_single_narrow.tcl"
+    "single_narrow_w8|-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM|cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block_single_narrow.tcl"
 )
 
 for stage in csim synth cosim; do

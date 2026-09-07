@@ -12,15 +12,17 @@ the Qwen controller, HBM scheduler, or the published end-to-end runtime.
 
 | Candidate | Tile | Activation/weight packet | Logical products per K | Physical DSPs | Packing | HLS II/depth | Estimated Fmax | Status |
 | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- |
-| W4A4 packed block | 8x64 | 32-bit / 256-bit | 512 | 128 | 4 products/DSP | 1 / 5 | 440.53 MHz | CSim + RTL CoSim pass |
-| W8A8 decode block | 4x128 | 32-bit / four 256-bit streams | 512 | 512 | 1 product/DSP | 1 / 3 | 521.69 MHz | CSim + RTL CoSim pass |
+| W4A4 packed block, single 20-bit accumulator bank | 8x64 | 32-bit / 256-bit | 512 | 128 | 4 products/DSP | 1 / 5 | 440.53 MHz | CSim + RTL CoSim pass |
+| W8A8 decode block, single 28-bit accumulator bank | 4x128 | 32-bit / four 256-bit streams | 512 | 512 | 1 product/DSP | 1 / 3 | 563.70 MHz | CSim + RTL CoSim pass |
 | W8A4 packed reference (2-wave) | 8x64 | block-level | 512 | 128 | 2 products/DSP | 1 / 7 | 440.33 MHz | Existing reference |
 
 The W4A4 design packs two signed INT4 activations and two signed INT4 weights
 into one DSP multiply and extracts the four cross-products. The W8A8 design
 uses a 4x128 rectangle to expose a decode-friendly output shape; INT8 products
-are mapped one per DSP. The W8A4 row is included to make the packing distinction
-explicit: it is two products per DSP, not four.
+are mapped one per DSP. Both selected kernels use one accumulator bank because
+the integer feedback closes at II=1 without the four rotating banks used by the
+floating-point pipeline. The W8A4 row is included to make the packing
+distinction explicit: it is two products per DSP, not four.
 
 ## Interface contract
 
@@ -56,36 +58,38 @@ QUANT_INPUT_BITS_PER_CYCLE_CAP=2112 \
 
 | Budget profile | Candidate | Selected CUs | Modeled total LUT | LUT use | Aggregate HLS roofline |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Resident R1 plus status, 85% cap | W4A4 | 1 | 654,828 | 75.12% | 225.551 GMAC/s |
-| Resident R1 plus status, 85% cap | W8A8 | 1 | 687,362 | 78.85% | 267.105 GMAC/s |
-| Compute only, 85% cap | W4A4 | 3 | 578,427 | 66.36% | 676.654 GMAC/s |
+| Resident R1 plus status, 85% cap | W4A4 single-bank | 4 | 637,849 | 73.17% | 902.205 GMAC/s |
+| Resident R1 plus status, 85% cap | W8A8 single-bank | 4 | 604,849 | 69.39% | 1,154.458 GMAC/s |
+| Compute only, 85% cap | W4A4 single-bank | 4 (topology cap) | 175,880 | 20.18% | 902.205 GMAC/s |
 
-LUT is the limiting resource in these points. The compute-only row is not a
-deployable system estimate because it excludes the controller, platform shell,
-connectivity, and routing growth. The planner emits an `nk_line`, but every CU
-still requires a unique task/activation/weight/output stream set and an
-output-block partition in the controller. A requested count above the modeled
-limit is rejected. Run `make test_quantized_cu_planner` to check this contract.
+The four-CU rows are resource sums, not a completed link. The fixed profile is
+measured from a two-CU R1 controller; a four-CU integration still needs new
+stream ports, dispatch logic, connectivity, placement, and routing closure.
+The planner emits an `nk_line`, but every CU still requires a unique
+task/activation/weight/output stream set and an output-block partition in the
+controller. A requested count above the modeled limit is rejected. Run
+`make test_quantized_cu_planner` to check this contract.
 
-The baseline arithmetic uses LUT fabric for the fully unrolled accumulator
-updates. A measured alternative binds those additions to DSP48 units, trading
-unused DSP capacity for a much smaller LUT footprint. W8A8 additionally keeps
-the external 32-bit result packet while using a verified 28-bit internal
-accumulator for the bounded `K<=4096` range:
+The earlier implementation used four rotating accumulator banks. Binding those
+updates to DSP48 reduced LUT at the cost of four copies of the accumulator
+datapath and thousands of extra DSPs. A shared four-bank mux also reduced LUT,
+but produced a 90-stage high-fanout pipeline. The selected single-bank design
+keeps the external packet widths while using verified 20-bit (W4A4) and 28-bit
+(W8A8) internal accumulators for the bounded `K<=4096` range:
 
 | Variant | Per-CU DSP | Per-CU FF | Per-CU LUT | Est. Fmax | Verification |
 | --- | ---: | ---: | ---: | ---: | --- |
-| W4A4 baseline LUT accum | 128 | 59,417 | 192,809 | 440.53 MHz | CSim + deadlock-on CoSim |
-| W4A4 DSP accum | 2,176 | 59,417 | 129,321 | 440.53 MHz | CSim + deadlock-on CoSim |
-| W8A8 baseline LUT accum | 512 | 76,459 | 225,343 | 521.69 MHz | CSim + deadlock-on CoSim |
-| W8A8 DSP accum + 28-bit internal | 2,560 | 68,091 | 128,975 | 528.23 MHz | CSim + deadlock-on CoSim |
+| W4A4 four-bank LUT baseline | 128 | 59,417 | 192,809 | 440.53 MHz | superseded |
+| W4A4 four-bank DSP diagnostic | 2,176 | 59,417 | 129,321 | 440.53 MHz | pass, not selected |
+| W4A4 single-bank narrow | 128 | 19,607 | 43,970 | 440.53 MHz | CSim + deadlock-on CoSim |
+| W8A8 four-bank LUT baseline | 512 | 76,459 | 225,343 | 521.69 MHz | superseded |
+| W8A8 four-bank DSP diagnostic | 2,560 | 68,091 | 128,975 | 528.23 MHz | pass, not selected |
+| W8A8 single-bank narrow | 512 | 24,167 | 35,720 | 563.70 MHz | CSim + deadlock-on CoSim |
 
-With the resident R1 reservation, the W4A4 DSP-accumulator point admits two CUs
-under the 85% whole-device cap: 4,475 DSP (75.18%) and 720,661 LUT (82.67%).
-The W8A8 narrow point admits two CUs at a 90% cap: 5,243 DSP (88.09%) and
-719,969 LUT (82.60%). These are still pre-link estimates; controller stream
-replication, HBM placement, fanout, and post-route timing remain integration
-gates.
+The selected single-bank variants are the planner defaults. Both pass CSim and
+deadlock-enabled RTL CoSim with the same finite-stream testbench; no stream
+depth or protocol relaxation was used. These remain pre-link estimates until
+the controller stream replication and post-route timing are complete.
 
 ```bash
 QUANT_ACCUM_IMPL=dsp \
@@ -115,20 +119,20 @@ scripts/run_vitis_hls.sh \
   cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block.tcl
 ```
 
-The public checkout also provides a regression launcher for the baseline and
-measured accumulator variants:
+The public checkout also provides a regression launcher for the baseline,
+diagnostic DSP, and selected single-bank variants:
 `scripts/run_quantized_block_regression.sh [csim|synth|cosim|all]`. To run only
 the two optimized candidates, use the same Vitis 2022.2 environment and invoke
 their dedicated Tcl entry points:
 
 ```bash
-HLS_EXTRA_CFLAGS=-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM \
+HLS_EXTRA_CFLAGS="-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM" \
   scripts/run_vitis_hls.sh \
-  cases/quantized-block/tcl/run_cosim_mm_stream_8x64_int4x4_block_dspacc.tcl
+  cases/quantized-block/tcl/run_cosim_mm_stream_8x64_int4x4_block_single_narrow.tcl
 
-HLS_EXTRA_CFLAGS="-DMM_STREAM_QUANTIZED_USE_DSP_ACCUM -DMM_STREAM_QUANTIZED_NARROW_ACCUM" \
+HLS_EXTRA_CFLAGS="-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM" \
   scripts/run_vitis_hls.sh \
-  cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block_dspacc_narrow.tcl
+  cases/quantized-block/tcl/run_cosim_mm_stream_4x128_int8x8_block_single_narrow.tcl
 ```
 
 The public case intentionally does not store generated HLS projects, reports,

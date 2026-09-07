@@ -21,8 +21,8 @@ controller's block-level scheduling boundary:
 
 | Candidate | Decode-oriented shape | Products per K | Physical DSPs | HLS result |
 | --- | ---: | ---: | ---: | --- |
-| W4A4 packed | 8x64 | 512 | 128 (4/DSP) | II=1, depth=5, 440.53 MHz |
-| W8A8 | 4x128 | 512 | 512 (1/DSP) | II=1, depth=3, 521.69 MHz |
+| W4A4 packed, single-bank | 8x64 | 512 | 128 (4/DSP) | II=1, depth=5, 440.53 MHz |
+| W8A8, single-bank | 4x128 | 512 | 512 (1/DSP) | II=1, depth=3, 563.70 MHz |
 | W8A4 reference (2-wave) | 8x64 | 512 | 128 (2/DSP) | II=1, depth=7, 440.33 MHz |
 
 The four-way W4A4 packing is a true signed outer product: two INT4 activation
@@ -34,23 +34,22 @@ integration, HBM bandwidth, and model-level accuracy remain open. Source and
 reproduction commands are in the [Q1 case](../cases/quantized-block/).
 
 CU replication is modeled separately from tile shape. The Q1 planner subtracts
-the published resident-controller and status resources before selecting the
-largest W4A4 or W8A8 count below a configurable device-utilization cap. With
-the default 85% U50 cap, LUT limits both resident candidates to one CU; without
-the fixed controller reservation, three W4A4 CUs fit the arithmetic HLS
-estimate. The latter is a compute-only exploration, not a link result. Each
-replica also needs dedicated block streams and controller-side output-column
-partitioning before its generated `nk=` declaration is usable.
+the published resident-controller and status resources before selecting a
+count below a configurable device-utilization cap. The selected single-bank
+W4A4 and W8A8 estimates both fit four planned CUs at the default 85% U50 cap:
+the resource sums are 637,849 LUT (73.17%) and 604,849 LUT (69.39%),
+respectively. These are not link results: the fixed profile comes from the
+two-CU controller, and each new replica still needs dedicated block streams,
+controller output partitioning, and post-route timing closure.
 
-The LUT limit is not fundamental to the arithmetic array. The measured
-accumulator variant binds the fully unrolled bank additions to DSP48 units. It
-reduces W4A4 LUT from 192,809 to 129,321 per CU and admits two modeled resident
-CUs at the 85% cap. W8A8 additionally uses a 28-bit internal accumulator while
-retaining its 32-bit output packet; its LUT falls from 225,343 to 128,975 per
-CU, and two modeled CUs fit at a 90% cap. Both variants preserve the fixed-width
-stream ABI, `II=1`, and deadlock-enabled RTL CoSim. These are HLS/pre-link
-results: controller stream duplication, HBM placement, and complete Vitis link
-remain integration gates.
+The LUT limit was an artifact of rotating accumulator state. The selected
+single-bank variants keep additions in LUT fabric and reduce W4A4 from 192,809
+to 43,970 LUT per CU and W8A8 from 225,343 to 35,720 LUT per CU. Both preserve
+the fixed-width stream ABI, `II=1`, and deadlock-enabled RTL CoSim. A DSP-bound
+accumulator remains as a diagnostic comparison, not the recommended design:
+it consumes 2,176 DSP per W4A4 CU and 2,560 DSP per W8A8 CU. These are
+HLS/pre-link results; controller stream duplication, HBM placement, and the
+complete Vitis link remain integration gates.
 
 ## 1. Kernel partitioning
 

@@ -17,10 +17,10 @@ Environment overrides:
   QUANT_DEVICE_FF=1743360               U50 FF capacity
   QUANT_DEVICE_LUT=871680               U50 LUT capacity
   QUANT_FIXED_{BRAM,DSP,FF,LUT}=N       Override fixed-profile resources
-  QUANT_MAX_CUS=N                       Optional replication cap; 0 disables
+  QUANT_MAX_CUS=N                       Topology replication cap (default: 4)
   QUANT_INPUT_BITS_PER_CYCLE_CAP=N      Optional aggregate input-wire cap
-  QUANT_ACCUM_IMPL=lut|dsp              Accumulator implementation (default lut)
-  QUANT_NARROW_ACCUM=0|1                Use the verified narrow internal width
+  QUANT_ACCUM_IMPL=single|lut|dsp       Accumulator implementation (default single)
+  QUANT_NARROW_ACCUM=0|1                Use the verified narrow width (default 1)
 
 The emitted nk_line is only the CU replication declaration. Every CU still
 requires a unique task/activation/weight/output stream set from the controller.
@@ -62,12 +62,12 @@ fi
 
 candidate="${1:-}"
 requested_count="${2:-auto}"
-accum_impl="${QUANT_ACCUM_IMPL:-lut}"
-narrow_accum="${QUANT_NARROW_ACCUM:-0}"
+accum_impl="${QUANT_ACCUM_IMPL:-single}"
+narrow_accum="${QUANT_NARROW_ACCUM:-1}"
 
 case "${accum_impl}" in
-    lut|dsp) ;;
-    *) die "QUANT_ACCUM_IMPL must be lut or dsp" ;;
+    single|lut|dsp) ;;
+    *) die "QUANT_ACCUM_IMPL must be single, lut, or dsp" ;;
 esac
 case "${narrow_accum}" in
     0|1) ;;
@@ -108,6 +108,11 @@ case "${candidate}" in
 esac
 
 case "${candidate}:${accum_impl}:${narrow_accum}" in
+    w4a4:single:1)
+        per_ff=19607
+        per_lut=43970
+        hls_extra_cflags="-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM"
+        ;;
     w4a4:lut:0)
         hls_extra_cflags=
         ;;
@@ -118,6 +123,12 @@ case "${candidate}:${accum_impl}:${narrow_accum}" in
         ;;
     w8a8:lut:0)
         hls_extra_cflags=
+        ;;
+    w8a8:single:1)
+        per_ff=24167
+        per_lut=35720
+        estimated_fmax_mhz=563.70
+        hls_extra_cflags="-DMM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK -DMM_STREAM_QUANTIZED_NARROW_ACCUM"
         ;;
     w8a8:dsp:0)
         per_dsp=2560
@@ -149,7 +160,7 @@ device_ff="${QUANT_DEVICE_FF:-1743360}"
 device_lut="${QUANT_DEVICE_LUT:-871680}"
 cap_pct="${QUANT_RESOURCE_CAP_PCT:-85}"
 fixed_profile="${QUANT_FIXED_PROFILE:-resident-r1}"
-max_cus="${QUANT_MAX_CUS:-0}"
+max_cus="${QUANT_MAX_CUS:-4}"
 input_cap="${QUANT_INPUT_BITS_PER_CYCLE_CAP:-0}"
 
 for value in "${device_bram}" "${device_dsp}" "${device_ff}" \
@@ -163,9 +174,9 @@ fi
 case "${fixed_profile}" in
     resident-r1)
         profile_bram=1212
-        profile_dsp=123
-        profile_ff=473348
-        profile_lut=462019
+        profile_dsp=126
+        profile_ff=434789
+        profile_lut=461969
         ;;
     none)
         profile_bram=0
@@ -294,6 +305,7 @@ echo "modeled_total_ff_percent=$(percent "${total_ff}" "${device_ff}")"
 echo "modeled_total_lut_percent=$(percent "${total_lut}" "${device_lut}")"
 echo "nk_line=nk=${kernel_name}:${selected_cus}:${instances}"
 echo "wiring_gate=one_unique_stream_set_per_cu_required"
+echo "integration_status=resource_sum_only_four_cu_controller_and_vitis_link_required"
 
 if [ "${cap_pct}" -gt 90 ]; then
     echo "warning=resource_cap_above_90_percent_has_little_shell_and_routing_margin"

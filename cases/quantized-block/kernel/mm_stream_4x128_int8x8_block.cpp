@@ -18,6 +18,9 @@ struct mm_stream_4x128_int8x8_product_tile_t {
                       [MM_STREAM_4X128_INT8X8_OUTPUTS];
 };
 
+typedef ap_int<MM_STREAM_4X128_INT8X8_INTERNAL_ACCUM_BITS>
+    mm_stream_4x128_int8x8_internal_accum_t;
+
 static ap_int<8> unpack_int8x8_weight(
     const mm_stream_4x128_int8x8_weight_word_t& weight0,
     const mm_stream_4x128_int8x8_weight_word_t& weight1,
@@ -131,13 +134,17 @@ void compute_mm_stream_4x128_int8x8_block_nk(
     const mm_stream_quantized_task_t task =
         unpack_mm_stream_quantized_task(task_stream.read());
     mm_stream_4x128_int8x8_accum_bank_t bank0;
+#ifndef MM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK
     mm_stream_4x128_int8x8_accum_bank_t bank1;
     mm_stream_4x128_int8x8_accum_bank_t bank2;
     mm_stream_4x128_int8x8_accum_bank_t bank3;
+#endif
     #pragma HLS array_partition variable=bank0.value complete dim=0
+#ifndef MM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK
     #pragma HLS array_partition variable=bank1.value complete dim=0
     #pragma HLS array_partition variable=bank2.value complete dim=0
     #pragma HLS array_partition variable=bank3.value complete dim=0
+#endif
 
     for (unsigned int k = 0; k < task.k_count; k++) {
         #pragma HLS pipeline II=1
@@ -152,11 +159,19 @@ void compute_mm_stream_4x128_int8x8_block_nk(
             weight_stream2.read();
         const mm_stream_4x128_int8x8_weight_word_t weight3 =
             weight_stream3.read();
-        const bool initialize = k < 4;
+        const bool initialize =
+#ifdef MM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK
+            k == 0;
+#else
+            k < 4;
+#endif
         mm_stream_4x128_int8x8_product_tile_t product;
         #pragma HLS array_partition variable=product.value complete dim=0
         compute_int8x8_products(
             product, activation_word, weight0, weight1, weight2, weight3);
+#ifdef MM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK
+        update_int8x8_bank(bank0, product, initialize);
+#else
         switch (k & 3) {
         case 0:
             update_int8x8_bank(bank0, product, initialize);
@@ -171,6 +186,7 @@ void compute_mm_stream_4x128_int8x8_block_nk(
             update_int8x8_bank(bank3, product, initialize);
             break;
         }
+#endif
     }
 
     for (unsigned int packet = 0;
@@ -189,8 +205,12 @@ void compute_mm_stream_4x128_int8x8_block_nk(
             const unsigned int out =
                 group * MM_STREAM_4X128_INT8X8_LANES_PER_GROUP + lane;
             const ap_int<MM_STREAM_4X128_INT8X8_ACCUM_BITS> value =
+#ifdef MM_STREAM_QUANTIZED_SINGLE_ACCUM_BANK
+                bank0.value[token][out];
+#else
                 bank0.value[token][out] + bank1.value[token][out] +
                 bank2.value[token][out] + bank3.value[token][out];
+#endif
             const unsigned int low =
                 lane * MM_STREAM_4X128_INT8X8_ACCUM_BITS;
             output.range(
