@@ -4,6 +4,10 @@
 [Setup](environment.md) | [Raw evidence](../results/q214-pd-20260811/) |
 [Repository](../README.md)
 
+This diagnostic profile is part of CoWave (the `LLM-ACCEL` repository). Its
+exact U50 platform path is retained below because it is part of the archived
+reproduction identity.
+
 ## Scope
 
 This experiment validates the Q2.14 online-softmax/FlashAttention path and the

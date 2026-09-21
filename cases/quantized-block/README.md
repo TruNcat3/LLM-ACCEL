@@ -3,6 +3,9 @@
 [Repository](../../README.md) | [Design space](../../docs/design-space.md) |
 [Environment](../../docs/environment.md) | [Usage](../../docs/usage.md)
 
+This case study is part of CoWave (the `LLM-ACCEL` repository). It isolates
+quantized compute candidates without changing the resident mainline evidence.
+
 This case contains isolated controller-facing matrix-multiply blocks for the
 next quantized implementation. They use the same fixed-width, block-level
 stream discipline as the resident R1 path, but they are not yet connected to
@@ -42,8 +45,9 @@ Both kernels accept bounded K values and emit deterministic block metadata.
 
 The tile shape and the number of replicated compute units are independent
 parameters. The resource planner reserves the published R1 controller and
-status-sink estimates, applies an 85% whole-U50 cap by default, and chooses the
-largest count that fits all BRAM, DSP, FF, and LUT limits:
+status-sink estimates, applies an 85% cap against the full reference U50 device
+by default, and chooses the largest count that fits all BRAM, DSP, FF, and LUT
+limits:
 
 ```bash
 make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto

@@ -1,18 +1,17 @@
-# LLM-ACCEL
+# CoWave (LLM-ACCEL)
 
-**A streaming FPGA Accelerator for controller-resident LLM 
-execution.**
+**Controller-Orchestrated Streaming for LLM Acceleration.**
 
 [Architecture](docs/architecture.md) | [Design space](docs/design-space.md) |
 [Experiments](docs/experiments.md) | [Setup](docs/environment.md) |
 [Reproduction](docs/usage.md) |
 [Evidence](results/README.md) | [Citation](#citation) | [License](LICENSE)
 
-LLM-ACCEL investigates how a model-aware controller and regular stream-only
-compute arrays can execute transformer decoder subgraphs while keeping hidden
-tensors and KV state in accelerator memory. The current fixed-point prototype
-implements Qwen-style RMSNorm, Q/K/V/O projections, RoPE, HBM-resident KV,
-online attention, gated FFN, and residual paths.
+CoWave (the LLM-ACCEL repository) investigates how a model-aware controller and
+regular stream-only compute arrays can execute transformer decoder subgraphs
+while keeping hidden tensors and KV state in accelerator memory. The current
+fixed-point prototype implements Qwen-style RMSNorm, Q/K/V/O projections, RoPE,
+HBM-resident KV, online attention, gated FFN, and residual paths.
 
 > **Research question.** How much of an LLM decoder can be expressed as a
 > static, overlapped hardware schedule while the compute kernels remain simple,
@@ -153,7 +152,9 @@ supports.
 ## Reproduce the core validation
 
 The reference environment is Ubuntu 20.04 with Vitis, Vivado, Vitis HLS, and
-XRT 2022.2. The smallest useful validation path is:
+XRT 2022.2. Released results use the AMD/Xilinx Alveo U50 as the reference
+validation platform; reported resource capacities and clocks refer to that
+configuration. The smallest useful validation path is:
 
 ```bash
 # Resolve the reference toolchain and verify HLS/Host prerequisites first.
@@ -215,13 +216,13 @@ model quality.
 
 ## Citation
 
-If LLM-ACCEL contributes to academic work, cite the repository metadata in
-[`CITATION.cff`](CITATION.cff) or use the tag `wang2026llmaccel`:
+If CoWave (LLM-ACCEL) contributes to academic work, cite the repository
+metadata in [`CITATION.cff`](CITATION.cff) or use the tag `wang2026llmaccel`:
 
 ```bibtex
 @software{wang2026llmaccel,
   author       = {Teng Wang},
-  title        = {LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution},
+  title        = {CoWave: Controller-Orchestrated Streaming for LLM Acceleration},
   year         = {2026},
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
   email        = {wangt635@ustc.edu.cn},

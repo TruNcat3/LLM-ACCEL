@@ -4,7 +4,8 @@
 [Experiments](experiments.md) | [Setup](environment.md) |
 [Repository](../README.md)
 
-This document records the architectural alternatives explored by LLM-ACCEL.
+This document records the architectural alternatives explored by CoWave
+(the LLM-ACCEL repository).
 The goal is to make the current implementation understandable as a sequence of
 measured choices rather than as the only possible design.
 
@@ -36,7 +37,8 @@ reproduction commands are in the [Q1 case](../cases/quantized-block/).
 CU replication is modeled separately from tile shape. The Q1 planner subtracts
 the published resident-controller and status resources before selecting a
 count below a configurable device-utilization cap. The selected single-bank
-W4A4 and W8A8 estimates both fit four planned CUs at the default 85% U50 cap:
+W4A4 and W8A8 estimates both fit four planned CUs at the default 85% reference
+U50 cap:
 the resource sums are 637,849 LUT (73.17%) and 604,849 LUT (69.39%),
 respectively. These are not link results: the fixed profile comes from the
 two-CU controller, and each new replica still needs dedicated block streams,
@@ -158,7 +160,7 @@ disabled and uses the better-understood cross-wave dataflow path.
 | Tile scores, then make a second pass | Bounded temporary storage | Re-reads or retains tile data |
 | Online normalization and PV accumulation | Bounded running state | Requires rescaling dependencies |
 
-LLM-ACCEL selects online normalization. Its main HLS bottleneck is currently the
+CoWave selects online normalization. Its main HLS bottleneck is currently the
 PV accumulator's carried dependency; the full-profile loop reaches II=4. This
 is an internal attention problem and is not solved by widening the stream ABI.
 

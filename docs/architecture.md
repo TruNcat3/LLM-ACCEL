@@ -6,7 +6,7 @@
 
 ## 1. Design objective
 
-LLM-ACCEL is organized around one constraint: intermediate decoder-layer
+CoWave is organized around one constraint: intermediate decoder-layer
 tensors should remain on the accelerator whenever their next consumer is also
 on the accelerator. The host supplies a high-level operation, addresses, model
 parameters, and input data; it is not intended to schedule individual matrix

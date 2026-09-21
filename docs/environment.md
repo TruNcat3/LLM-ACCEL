@@ -16,13 +16,15 @@ The released measurements were produced with the following compatible stack:
 | Host OS | Ubuntu 20.04, x86-64 | All recorded builds |
 | Vitis / Vivado / Vitis HLS | 2022.2 | HLS, XO export, linking, HW Emu |
 | XRT | 2022.2 / 2.14 | Host compilation, HW Emu, board runtime |
-| Vitis platform | `xilinx_u50_gen3x16_xdma_5_202210_1` | Linking and emulation |
-| Target card | Alveo U50 | Physical-board work only |
+| Vitis platform | `xilinx_u50_gen3x16_xdma_5_202210_1` | Reference evaluation platform for linking and emulation |
+| Target card | Alveo U50 | Optional physical-board validation only |
 
 The FPGA card is not required for CSim, RTL CoSim, synthesis, or HW Emu. A
 different tool release or platform may work, but it creates a new evidence
 configuration and must not be presented as a reproduction of the archived
-2022.2 results.
+2022.2 results. The U50 is CoWave's reference evaluation platform for those
+artifacts, not the design identity; exact platform and device names remain
+necessary for reproducing the published configuration.
 
 ## 2. Reproduction levels
 
@@ -32,7 +34,7 @@ Choose the smallest preflight mode matching the intended work:
 | --- | --- | --- |
 | `publication` | Shell, compiler, Git, Python, Perl, ripgrep, checksums | 2 GiB memory and 2 GiB `/tmp` |
 | `hls` | Publication tools plus Vitis/Vivado/HLS 2022.2 and development headers | 50 GiB memory and 20 GiB `/tmp` |
-| `hw-emu` | HLS stack plus XRT, U50 platform, `emconfigutil`, `xclbinutil`, and `tmux` | 80 GiB memory and 100 GiB `/tmp` |
+| `hw-emu` | HLS stack plus XRT, U50 reference evaluation platform, `emconfigutil`, `xclbinutil`, and `tmux` | 80 GiB memory and 100 GiB `/tmp` |
 | `board` | XRT management tools and a render device node | 4 GiB memory and 2 GiB `/tmp` |
 
 Every mode also checks the core shell and publication utilities. The table
@@ -44,7 +46,8 @@ own authoritative guards and may refuse a run even after a relaxed preflight.
 
 ## 3. Install prerequisites
 
-Install the AMD/Xilinx 2022.2 tools, XRT, and the U50 deployment platform using
+Install the AMD/Xilinx 2022.2 tools, XRT, and the U50 reference evaluation
+platform using
 their licensed installers and platform packages. The repository does not
 redistribute vendor binaries, board firmware, or model checkpoints.
 
@@ -161,7 +164,8 @@ measurement boundary.
 - **A 2021.x or 2023.x executable appears first in `PATH`.** Set
   `VITIS_ENV_SCRIPT` explicitly, source the setup helper again, and rerun the
   `hls` preflight.
-- **The U50 platform is unresolved.** Set `XPLATFORM` to the installed `.xpfm`;
+- **The U50 reference evaluation platform is unresolved.** Set `XPLATFORM` to
+  the installed `.xpfm`;
   a device name alone is not sufficient for a reproducible link.
 - **Host compilation cannot find OpenCL/XRT.** Install the OpenCL development
   package and verify `XILINX_XRT` before rebuilding.

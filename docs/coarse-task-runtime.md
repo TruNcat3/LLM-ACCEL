@@ -8,7 +8,7 @@
 
 Operator-by-operator host orchestration exposes every intermediate tensor to
 host scheduling and transfer overhead. A single whole-model command removes
-that overhead but turns the controller into a large dynamic runtime. LLM-ACCEL
+that overhead but turns the controller into a large dynamic runtime. CoWave
 uses an intermediate boundary: the host composes a short sequence of
 coarse-grained tasks, while the controller owns the static operator schedule,
 HBM access, on-chip buffering, online softmax, and KV-cache update inside each
@@ -353,7 +353,7 @@ copy. A separate one-layer Task-18/19 run passed the same checks.
 | Exact multi-block P16 final-tail golden | 2 | 9 across 2 blocks | 357.259 us | 107,178 | 535.889 us |
 | Tail-block prompt P11 plus G1 (8+3) | 2 | 10 across 2 forwards | 296.956 us | 89,087 | 445.434 us |
 
-The U50 HW-Emu image generates a 300-MHz XSim kernel clock (3.333 ns), even
+The reference U50 HW-Emu image generates a 300-MHz XSim kernel clock (3.333 ns), even
 though the physical implementation target is 200 MHz. Cycles are therefore
 derived from the run-local `profile_kernels.csv` at 300 MHz and then projected
 to 200 MHz. OpenCL event times and host wall time under HW Emu are simulator
@@ -417,7 +417,7 @@ the following independently regenerated estimates:
 | Whole system | 4 | 1,308 | 1,480 | 829,923 | 697,267 | 3.746 ns maximum |
 
 The current totals are 48.661% BRAM18, 24.866% DSP, 47.605% FF, and 79.991%
-LUT of the full U50. `scripts/report_qwen3b_hls_resources.sh` parses the three
+LUT of the full reference U50 device. `scripts/report_qwen3b_hls_resources.sh` parses the three
 underlying CSynth reports and derives the two-CU/system rows; the E2E archiver
 stores that exact TSV beside the run evidence. The controller alone still
 estimates approximately 104% of one SLR's LUT capacity, so the whole-device

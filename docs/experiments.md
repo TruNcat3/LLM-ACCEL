@@ -6,7 +6,7 @@
 
 ## 1. Reporting policy
 
-LLM-ACCEL separates evidence into four classes:
+CoWave separates evidence into four classes:
 
 | Evidence | Supports | Does not support |
 | --- | --- | --- |
@@ -346,7 +346,7 @@ The combined results support three conclusions:
    raises the physical resource risk.** The current profile-matched
    Qwen2.5-3B controller plus two compute CUs and status sink estimates 1,308
    BRAM18, 1,480 DSP, 829,923 FF, and 697,267 LUT (48.661%, 24.866%, 47.605%,
-   and 79.991% of the full U50). The controller alone exceeds one SLR's LUT
+   and 79.991% of the full reference U50 device). The controller alone exceeds one SLR's LUT
    estimate, so place-and-route remains a required gate. The earlier
    1,477-DSP/868,458-FF/697,305-LUT values remain preserved in the 2026-08-18
    historical release artifact rather than being rewritten in place.

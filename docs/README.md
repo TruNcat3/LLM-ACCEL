@@ -1,10 +1,11 @@
-# LLM-ACCEL Documentation
+# CoWave (LLM-ACCEL) Documentation
 
 [Repository](../README.md) | [Setup](environment.md) |
 [Evidence index](../results/README.md) | [License](../LICENSE)
 
-The documentation is organized by question rather than by implementation
-history. Start with the shortest path that matches your goal.
+CoWave documentation is organized by question rather than by implementation
+history. The repository name remains `LLM-ACCEL` for checkout and URL
+continuity. Start with the shortest path that matches your goal.
 
 ## Understand the research
 
@@ -58,3 +59,6 @@ The repository uses the following vocabulary consistently:
 
 Raw measurements and source provenance belong in `results/`; interpretation
 belongs in `docs/`; the root README only summarizes released evidence.
+The released hardware-emulation and HLS evidence uses Alveo U50 as a reference
+evaluation platform; U50 is not the design identity. Exact device and platform
+names remain in the reproduction instructions where they are needed.

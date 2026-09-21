@@ -3,6 +3,9 @@
 [Repository](../../README.md) | [Environment](../../docs/environment.md) |
 [Detailed design](docs/design.md)
 
+This case study is part of CoWave (the `LLM-ACCEL` repository) and remains a
+comparative streaming architecture.
+
 A separated streaming LLM accelerator where a **model-aware control/cache
 core** (cc) orchestrates a **fixed compute core** (V8-2_s) through packed
 AXI streams. All dimension scaling is handled by cc's `operator_program`

@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use LLM-ACCEL in academic work, please cite Teng Wang and this repository."
-title: "LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution"
+message: "If you use CoWave (LLM-ACCEL) in academic work, please cite Teng Wang and this repository."
+title: "CoWave: Controller-Orchestrated Streaming for LLM Acceleration"
 type: software
 version: 0.10.0
 date-released: 2026-08-30
@@ -14,7 +14,7 @@ repository-code: "https://github.com/TruNcat3/LLM-ACCEL"
 url: "https://github.com/TruNcat3/LLM-ACCEL"
 license: "PolyForm-Noncommercial-1.0.0"
 abstract: >-
-  LLM-ACCEL is a synthesizable HLS and RTL hardware-emulation research
+  CoWave (the LLM-ACCEL repository) is a synthesizable HLS and RTL hardware-emulation research
   prototype that separates model-aware decoder scheduling and memory state
   from two regular stream-only 8x64 compute arrays. It explores block-level
   streaming, host-composed controller-resident subgraphs, 1--8-row block
@@ -29,7 +29,7 @@ keywords:
   - online attention
 preferred-citation:
   type: software
-  title: "LLM-ACCEL: A Streaming FPGA Research Prototype for Resident LLM Decoder Execution"
+  title: "CoWave: Controller-Orchestrated Streaming for LLM Acceleration"
   authors:
     - family-names: "Wang"
       given-names: "Teng"

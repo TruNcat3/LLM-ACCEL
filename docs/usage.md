@@ -4,6 +4,10 @@
 [Experiments](experiments.md) | [Setup](environment.md) |
 [Repository](../README.md)
 
+These instructions reproduce CoWave from the `LLM-ACCEL` checkout. The
+repository name remains in command paths, environment variables, and artifact
+names for compatibility with the published tooling.
+
 ## 1. Prepare and verify the environment
 
 Complete [Environment Setup](environment.md) before selecting a profile or
