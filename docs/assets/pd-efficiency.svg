@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="440" viewBox="0 0 960 440" role="img" aria-labelledby="title desc" font-family="DejaVu Sans">
-  <title id="title">D1 operator-level prefill and decode modeled useful-MAC efficiency by KV context</title>
-  <desc id="desc">Eight-row prefill efficiency decreases from 94.812 percent at context 64 to 72.310 percent at context 1024. Single-row decode efficiency decreases from 13.296 to 11.607 percent.</desc>
+  <title id="title">Fix16 operator diagnostics prefill and decode modeled useful-MAC efficiency by KV context</title>
+  <desc id="desc">Fix16 operator diagnostics: eight-row prefill efficiency decreases from 94.812 percent at context 64 to 72.310 percent at context 1024. The workload D1 single-row decode efficiency decreases from 13.296 to 11.607 percent.</desc>
   <rect width="960" height="440" rx="16" fill="#0d1117"/>
   <style>
     .title{font-size:22px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.label{font-size:14px;font-weight:600;fill:#c9d1d9}.tick{font-size:12px;fill:#8b949e}.grid{stroke:#30363d;stroke-width:1}.p{stroke:#3fb950;fill:none;stroke-width:4}.d{stroke:#58a6ff;fill:none;stroke-width:4}.pointp{fill:#3fb950}.pointd{fill:#58a6ff}.value{font-size:13px;font-weight:700;fill:#f0f6fc}
   </style>
-  <text class="title" x="36" y="40">[D1] Query-block height dominates datapath efficiency</text>
-  <text class="sub" x="36" y="64">Operator-level Q2.14 diagnostic · modeled useful-MAC efficiency</text>
+  <text class="title" x="36" y="40">Fix16 operator diagnostics · query-block height and efficiency</text>
+  <text class="sub" x="36" y="64">Q2.14 diagnostic · workload D1 is one decode row · modeled useful-MAC efficiency</text>
   <g>
     <line class="grid" x1="90" y1="100" x2="910" y2="100"/><text class="tick" x="45" y="105">100%</text>
     <line class="grid" x1="90" y1="160" x2="910" y2="160"/><text class="tick" x="53" y="165">80%</text>

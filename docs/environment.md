@@ -1,11 +1,15 @@
 # Environment Setup
 
 [Documentation index](README.md) | [Usage](usage.md) |
+[Repository map](repository-map.md) | [Release workflow](release-workflow.md) |
 [Repository](../README.md)
 
 This page is the required starting point for reproduction. It separates the
 software needed to inspect published evidence from the substantially heavier
-environment needed to synthesize or emulate the accelerator.
+environment needed to synthesize or emulate the accelerator. The same shell
+contract serves the Fix16 resident root, the streaming-split case, and the
+quantized matrix-block case; each family has its own source and evidence
+boundary in [Usage](usage.md).
 
 ## 1. Reference stack
 
@@ -33,21 +37,22 @@ Choose the smallest preflight mode matching the intended work:
 | Mode | What it checks | Default resource guard |
 | --- | --- | --- |
 | `publication` | Shell, compiler, Git, Python, Perl, ripgrep, checksums | 2 GiB memory and 2 GiB `/tmp` |
-| `hls` | Publication tools plus Vitis/Vivado/HLS 2022.2 and development headers | 50 GiB memory and 20 GiB `/tmp` |
-| `hw-emu` | HLS stack plus XRT, U50 reference evaluation platform, `emconfigutil`, `xclbinutil`, and `tmux` | 80 GiB memory and 100 GiB `/tmp` |
+| `hls` | Publication tools plus Vitis/Vivado/HLS 2022.2 and development headers; covers root and case-local HLS/CoSim | 50 GiB memory and 20 GiB `/tmp` |
+| `hw-emu` | HLS stack plus XRT, U50 reference evaluation platform, `emconfigutil`, `xclbinutil`, and `tmux`; needed by Fix16 system runs | 80 GiB memory and 100 GiB `/tmp` |
 | `board` | XRT management tools and a render device node | 4 GiB memory and 2 GiB `/tmp` |
 
 Every mode also checks the core shell and publication utilities. The table
 lists the additional contract that distinguishes each level.
 
 The `hw-emu` guard is deliberately sized for the standard Qwen2.5-3B build.
-Small profiles may use less. Individual long-running launchers retain their
-own authoritative guards and may refuse a run even after a relaxed preflight.
+Small profiles and operator diagnostics may use less. Individual long-running
+launchers retain their own authoritative guards and may refuse a run even after
+a relaxed preflight. Quantized planner and CSim checks do not need `hw-emu`.
 
 ## 3. Install prerequisites
 
-Install the AMD/Xilinx 2022.2 tools, XRT, and the U50 reference evaluation
-platform using
+Install the AMD/Xilinx 2022.2 tools, XRT, and (for Vitis link/HW-Emu) the U50
+reference evaluation platform using
 their licensed installers and platform packages. The repository does not
 redistribute vendor binaries, board firmware, or model checkpoints.
 
@@ -61,7 +66,9 @@ ocl-icd-opencl-dev
 
 OpenCL development headers must provide `CL/cl2.hpp`. XRT must provide its
 headers and runtime libraries. Board use additionally requires the XRT kernel
-drivers and a platform/firmware installation compatible with the card.
+drivers and a platform/firmware installation compatible with the card. The
+quantized planner itself is shell/AWK-only, but its HLS and CoSim recipes use
+the same Vitis HLS 2022.2 environment.
 
 ## 4. Configure the shell
 
@@ -71,6 +78,10 @@ For a standard installation, the repository setup helper locates common
 ```bash
 source scripts/setup_environment.sh
 ```
+
+This step is needed before HLS, CoSim, Vitis link, or HW-Emu. A publication-
+only audit does not need vendor tools; run
+`scripts/check_environment.sh publication` directly as shown in Section 5.
 
 For a custom installation, set explicit paths first:
 
@@ -84,8 +95,9 @@ source scripts/setup_environment.sh
 
 The helper must be sourced; executing it cannot modify the parent shell. It
 exports the resolved environment script, tool roots, device name, and platform
-path. Public launchers use the same resolver and no longer depend on a
-machine-private setup path.
+path. Public launchers use the same resolver and do not depend on a
+machine-private setup path. `XPLATFORM` is required for Vitis link and
+`sw_emu`; HLS-only quantized checks still benefit from the same tool setup.
 
 ## 5. Run preflight
 
@@ -176,5 +188,7 @@ measurement boundary.
   before debugging kernels or model data.
 
 After the selected preflight passes, continue with
-[Usage and Reproduction](usage.md). That document starts at profile selection
-and validation; it assumes this environment contract is already satisfied.
+[Usage and Reproduction](usage.md). It routes to the Fix16 resident,
+streaming-split, and quantized matrix-block families, and links to the
+scoped [resident](reproduction-resident.md) and
+[diagnostic](reproduction-diagnostics.md) command guides.

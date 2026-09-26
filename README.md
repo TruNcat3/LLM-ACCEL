@@ -2,222 +2,149 @@
 
 **Controller-Orchestrated Streaming for LLM Acceleration.**
 
-[Architecture](docs/architecture.md) | [Design space](docs/design-space.md) |
-[Experiments](docs/experiments.md) | [Setup](docs/environment.md) |
-[Reproduction](docs/usage.md) |
-[Evidence](results/README.md) | [Citation](#citation) | [License](LICENSE)
+[Architecture](docs/architecture.md) | [Implementation map](docs/implementations.md) |
+[Design space](docs/design-space.md) | [Experiments](docs/experiments.md) |
+[Setup](docs/environment.md) | [Reproduction](docs/usage.md) |
+[Citation](#citation) | [License](LICENSE)
 
-CoWave (the LLM-ACCEL repository) investigates how a model-aware controller and
-regular stream-only compute arrays can execute transformer decoder subgraphs
-while keeping hidden tensors and KV state in accelerator memory. The current
-fixed-point prototype implements Qwen-style RMSNorm, Q/K/V/O projections, RoPE,
-HBM-resident KV, online attention, gated FFN, and residual paths.
+CoWave studies how a model-aware controller can schedule regular streaming
+compute arrays while keeping transformer hidden tensors and KV state in
+accelerator memory. This repository contains a resident decoder implementation,
+an alternative streaming split, and quantized matrix experiments, together
+with their source, reproduction flows and scoped evidence.
 
-> **Research question.** How much of an LLM decoder can be expressed as a
-> static, overlapped hardware schedule while the compute kernels remain simple,
-> reusable, and well utilized across prefill and decode shapes?
-
-This repository contains synthesizable HLS kernels, bounded RTL co-simulation,
-a Vitis multi-kernel system, deterministic fixed-point oracles, and archived
-hardware-emulation evidence. Generated binaries, model weights, and tool build
-trees are intentionally excluded.
+The most complete published system is the **Fix16 resident** implementation.
+Fix16 means signed fixed point, not IEEE FP16. Its controller owns RMSNorm,
+Q/K/V/O scheduling, RoPE, online attention, KV-cache traffic, gated FFN and
+residual execution. Host embedding and vocabulary-head/sampling remain
+outside the accelerator.
 
 ## Research contributions
 
-- **Model-aware control, regular compute.** The controller owns tensor
-  residency, HBM traffic, KV state, online attention, and wave scheduling; two
-  identical 8x64 compute CUs execute matrix and vector work.
-- **Block-level stream ABI.** Explicit fixed-width packets replace bit-level
-  pipelines and cross-XO C++ structs, reducing control fan-out and regularizing
-  the physical interface.
-- **Five-stage overlap.** Block load, stream drive, compute, collection, and
-  commit are connected by bounded FIFOs and cross-wave dataflow.
-- **Online attention.** Tiled QK updates a running maximum and normalization
-  sum before tiled PV accumulation; the score matrix is never materialized in
-  external memory.
-- **Static Host task programs.** Explicit Attention, FFN, and final-norm
-  descriptors compose each forward while hidden state and KV remain resident
-  across tasks, query blocks, and layers. Completed runs identify this
-  executor as `static_descriptor_v1` and validate every HBM ping-pong pair in
-  the task progress trace.
-- **Shape-aware evidence.** Prefill and single-row decode use explicit useful
-  work, timing-boundary, and active-row definitions rather than conflating
-  query-block height with batch size.
+- **Model-aware control, regular compute:** a controller expands coarse
+  requests into tiles; compute kernels execute reusable matrix/vector tasks.
+- **Resident state:** block buffers, hidden-state ping-pong and controller-owned
+  KV avoid intermediate Host transfers.
+- **Packed streaming and overlap:** fixed-width packets and bounded FIFOs
+  support load, issue, compute, collect and commit overlap across projection
+  waves.
+- **Shape-aware evaluation:** each result identifies precision, active query
+  rows, sequence batch, context, timing boundary and evidence level.
+
+The [design-space study](docs/design-space.md) compares implementation choices
+for matrix multiplication, vector operators, attention, transport and scheduling.
 
 ## Architecture at a glance
 
+The diagram shows the published Fix16 resident system. The other families
+explore different compute organization or arithmetic within the same broad
+control/compute separation.
+
 ```mermaid
 flowchart LR
-    H[Host<br/>input + coarse program] --> C
-    M[(HBM<br/>weights / hidden / KV)] <--> C
-
+    H[Host: input + coarse task program] --> C
+    M[(HBM: weights / hidden / KV)] <--> C
     subgraph C[Model-aware controller]
-      direction LR
-      L[Block load] --> B[Ping-pong GBUF]
-      B --> D[Tile + dispatch]
-      R[Collect] --> P[Commit / retain / release]
+      L[Load + banked buffers] --> D[Tile + issue]
+      R[Collect] --> S[Retain / commit / release]
     end
-
-    D -->|packed task + activation + weights| U0[8x64 Compute CU 0]
-    D -->|packed task + activation + weights| U1[8x64 Compute CU 1]
-    U0 -->|packed result| R
-    U1 -->|packed result| R
-    P --> O[Final hidden state]
+    D -->|packed streams| U0[8x64 compute CU]
+    D -->|packed streams| U1[8x64 compute CU]
+    U0 --> R
+    U1 --> R
+    S --> O[Final hidden state]
 ```
 
-Each compute CU sustains up to 512 MAC/cycle; the two-CU modeled peak is
-1,024 MAC/cycle. Compute CUs have no HBM master and encode no model-layer
-semantics. The controller presents them with a regular sequence of tiles while
-the next block is prefetched:
+Two 8×64 arrays provide a logical peak of 1,024 MAC/cycle. Five-stage overlap
+applies within a projection across waves; arbitrary transformer operations
+remain constrained by data dependencies. The Host submits Attention, FFN and
+final-normalization tasks while the controller manages their resident
+subgraphs. See [architecture](docs/architecture.md) and the
+[runtime contract](docs/coarse-task-runtime.md).
 
-```mermaid
-sequenceDiagram
-    participant H as HBM
-    participant C as Controller
-    participant U as Two compute CUs
-    H->>C: load block n+1
-    C->>U: drive wave n
-    U-->>C: collect wave n-1
-    C->>C: retain or commit n-1
-    Note over H,U: stages overlap after pipeline fill
-```
+## Implementation map
 
-The production task contract is `Task 18 = Attention`, `Task 19 = FFN`, and
-`Task 20 = final RMSNorm`. The Host builds an explicit descriptor sequence;
-the controller expands each descriptor into its static resident subgraph. See
-the [architecture](docs/architecture.md) for the memory hierarchy and packet
-ABI, and the [design-space study](docs/design-space.md) for alternatives.
+The three implementation families below organize the public source tree.
+The [complete catalog](docs/implementations.md) maps their configurations,
+diagnostic workloads and historical names.
 
-## Implementation variants and evidence map
+| Implementation family | Code location | Published scope |
+| --- | --- | --- |
+| **Fix16 resident** | [kernel](kernel/), [include](include/), [host](host/) | Resident layer/coarse-task execution; standard-shape L1/L2 HW Emu and scoped diagnostics |
+| **Streaming split** | [cases/streaming-split](cases/streaming-split/) | Alternative fixed compute and control/cache split; linear-operation tests and analytical layer projections |
+| **Quantized matrix blocks** | [cases/quantized-block](cases/quantized-block/) | W4A4/W8A8 matrix kernels; arithmetic/RTL tests and HLS resource studies |
 
-Stable design IDs identify the exact execution boundary behind every root
-figure. A dash means that the variant has no root-level performance plot.
-
-| ID and implementation | Execution boundary | Source family | Root figure | Released evidence |
-| --- | --- | --- | --- | --- |
-| **R1 — Resident coarse-task (current)** | Controller executes Tasks 18/19/20; hidden and KV remain in HBM | [`kernel/`](kernel/), [`host/`](host/) | [R1 overview panels](docs/assets/results-overview.svg) | [P8 resident](results/q214-resident-fix-20260818/), [L1](results/qwen3b-e2e-20260820/), [L2](results/qwen3b-e2e-l2-20260821/) |
-| **D1 — Operator-level Q2.14 diagnostic** | Host sequences individual operators; CU intervals measure the diagnostic datapath | R1 kernels with the [`q214exp18` build](scripts/build_vitis_8x64_prefill_eval_hwemu.sh) | — | [P/D 64--1024](results/q214-pd-20260811/) |
-| **P1 — Small resident protocol profiles** | Reduced shapes test finite FIFOs, block tails, residency, and controller-owned KV | R1 kernels with small model profiles | — | [Coarse tasks](results/coarse-task-20260816/), [block prefill](results/block-prefill-20260817/) |
-| **S1 — Streaming split / V8-2_s** | Earlier control/cache plus fixed compute-core split; analytical full-layer projection only | [`cases/streaming-split/`](cases/streaming-split/) | — | [Design and evidence limits](cases/streaming-split/docs/design.md) |
-| **Q1 — Quantized block candidates** | Selected single-bank INT4/INT8 blocks; four-CU resource model is closed, controller integration remains open | [`cases/quantized-block/`](cases/quantized-block/) | — | [HLS study](cases/quantized-block/), [Q1 evidence](results/quantized-single-bank-20260907/) |
+Implementation profiles, old Case/R1/D1/Q1 labels and source entry points are
+mapped in the [catalog](docs/implementations.md). Quantized full-layer work in
+the development workspace has not yet been promoted into this public source
+and evidence set.
 
 ## Key results
 
-The root highlights only the current R1 mainline. Performance values use Vitis
-2022.2 HW-Emu CU traces modeled at 200 MHz; resources are profile-matched HLS
-estimates. Neither is a physical-board measurement.
+The figure selects four views of **Fix16 resident**: the most complete released
+generation request, a high-utilization bounded workload, layer scaling and
+matched resource estimates. They have different workloads and timing scopes.
 
-![Four selected result views from the current R1 resident coarse-task implementation.](docs/assets/results-overview.svg)
+![Four scoped views of the Fix16 resident implementation.](docs/assets/results-overview.svg)
 
-The richest released R1 boundary is P8/G2/L2: one eight-token prompt and one
-real D1 forward across two layers and ten coarse tasks. It reaches 119.652
-useful GMAC/s and 58.424% modeled efficiency, with 4,096/4,096 oracle values
-exact and no intermediate Host hidden-state copy. The highest-utilization
-bounded R1 gate is the single-forward P8 Task-18/19/20 path at 189.285 GMAC/s
-and 92.424%; it is shown separately because its narrower workload is not an
-end-to-end generation request.
+| Released workload | Modeled result at 200 MHz | Evidence |
+| --- | --- | --- |
+| P8/G2/L2: one eight-token prompt, one real D1, two layers | 2,319,441.4 cycles; 11.597 ms; 119.652 useful GMAC/s; 58.424% efficiency | [L2 package](results/qwen3b-e2e-l2-20260821/) |
+| Standard-shape P8 Attention + FFN + final norm | 651,621 cycles; 3.258 ms; 189.285 useful GMAC/s; 92.424% efficiency | [Resident P8 package](results/q214-resident-fix-20260818/) |
 
-From L1 to L2, useful work doubles while modeled cycles increase by 1.948x:
-cycles per layer fall 2.60%, throughput rises 2.67%, and efficiency rises
-1.520 percentage points. Historical D1/P1/S1 plots, full tables, timing
-boundaries, and raw evidence remain in the [experimental report](docs/experiments.md)
-and [evidence index](results/README.md). Host compute, PCIe-inclusive latency,
-and simulator wall time are excluded from all displayed HW-Emu intervals.
+These are HW-Emu CU intervals with Host computation and PCIe outside the timed
+boundary. Resources are HLS estimates. Neither row is physical-board throughput
+or a measured 36-layer model. The random fixed-point L1/L2 generation gates
+check 4,096 values exactly; they do not establish trained-checkpoint accuracy.
 
-The latest checkpoint-localization package adds diagnostic-only Host readback
-after every coarse task. It is bit-exact through layer 2 and finds the first
-one-unit divergence at layer 3 Attention; it is not a full 36-layer correctness
-claim. See the [checkpoint package](results/qwen3b-checkpoint-20260830/).
-Checkpoint runs are strict by default. An explicit raw Fix16 tolerance can
-classify bounded one-LSB differences as accepted rounding while retaining the
-strict mismatch count; errors above that bound still fail the run.
-
-## Evidence ladder
-
-The project separates claims by evidence level:
-
-1. **CSim** checks routing, arithmetic, and reference-model agreement quickly.
-2. **RTL CoSim** exercises finite FIFOs with deadlock detection enabled.
-3. **HLS CSynth** reports operator schedules and pre-route resource/timing
-   estimates.
-4. **Vitis HW Emu** validates linked multi-kernel execution and provides the CU
-   traces used for the figures above.
-5. **Physical implementation and board measurements** remain a separate gate.
-
-Every published result package records its workload, timed boundary, source
-snapshot, artifact identities, raw evidence, and checksums. The
-[evidence index](results/README.md) states exactly which claim each package
-supports.
+The [experiment report](docs/experiments.md) separates current results,
+historical baselines, component studies and unresolved numerical questions.
+The [evidence index](results/README.md) maps all archived packages to their
+implementation and validation scope.
 
 ## Reproduce the core validation
 
-The reference environment is Ubuntu 20.04 with Vitis, Vivado, Vitis HLS, and
-XRT 2022.2. Released results use the AMD/Xilinx Alveo U50 as the reference
-validation platform; reported resource capacities and clocks refer to that
-configuration. The smallest useful validation path is:
+Start with [environment setup](docs/environment.md), then choose a family and
+validation level in [usage](docs/usage.md). Reference builds use Vitis/Vivado/
+Vitis HLS and XRT 2022.2; the Alveo U50 is the evaluation platform. No physical
+card is needed to inspect results or run HLS/RTL hardware emulation.
 
 ```bash
-# Resolve the reference toolchain and verify HLS/Host prerequisites first.
+# Inspect the public tree and all archived result checksums.
+scripts/check_environment.sh publication
+make test_publication_tree
+make verify_result_checksums
+
+# With the vendor toolchain installed: prepare HLS/Host validation.
 source scripts/setup_environment.sh
 scripts/check_environment.sh hls
-
-# Fixed-point packet semantics.
 make test_q214_payload_golden
-
-# Closed controller-compute loop with finite-FIFO deadlock checking.
 make hls_csim_closed_loop_8x64_resident_layer
-scripts/run_hls_resident_layer_cosim.sh
-
-# Non-simulator publication and provenance gates.
-make test_publication_release
 ```
 
-Building the exact multi-kernel image and reproducing the standard P8, P/D,
-or P8/G2 experiments requires profile-specific XOs and long-running HW Emu.
-Follow [Environment Setup](docs/environment.md), then
-[Usage and Reproduction](docs/usage.md), rather than copying commands from an
-archived result.
+CoSim, bounded HW Emu and long model-stack runs have separate
+[recipes](docs/usage.md). Choose the workload explicitly; an L36 RTL simulation
+is not a quick setup test.
 
 ## Repository guide
 
-- [`docs/`](docs/README.md) — reading paths for architecture, design choices,
-  environment setup, experiments, and reproduction.
-- [`kernel/`](kernel/) and [`include/`](include/) — controller, unified compute,
-  status sink, fixed-point types, packet ABI, and pipeline parameters.
-- [`host/`](host/) — XRT runtime, deterministic random models, and out-of-band
-  CPU golden checks.
-- [`cases/`](cases/) — bounded alternative implementations, including the
-  quantized block candidates and the earlier streaming split.
-- [`tests/`](tests/), [`tcl/`](tcl/), and [`scripts/`](scripts/) — the CSim,
-  CoSim, synthesis, HW-Emu, evidence, and release flows.
-- [`results/`](results/README.md) — immutable, checksum-protected experimental
-  packages; generated build trees and binaries are not stored here.
-- [`cases/streaming-split/`](cases/streaming-split/) — an earlier streaming
-  split design retained as a comparative architecture.
+| Need | Start here |
+| --- | --- |
+| Understand design choices and alternatives | [Architecture](docs/architecture.md), [design space](docs/design-space.md) |
+| Locate implementation files and configuration owners | [Repository map](docs/repository-map.md), [implementation catalog](docs/implementations.md) |
+| Build and test a selected family | [Environment](docs/environment.md), [usage](docs/usage.md), [case index](cases/README.md) |
+| Interpret a result or compare variants | [Experiments](docs/experiments.md), [immutable evidence](results/README.md) |
+| Promote a development change into this repository | [Development-to-release workflow](docs/release-workflow.md) |
 
-## Scope and current status
-
-Completed evidence includes finite-buffer RTL CoSim, standard-dimension P8
-Attention/FFN/final-norm execution, multi-length P/D diagnostics, and
-standard-shape P8/G2 L1 and L2 generation-path gates with controller-owned KV.
-The full 36-layer HW-Emu extension completed all 146 coarse tasks, but it is not
-reported as a completed correctness result because the final numerical gate
-remains open.
-
-The checkpoint diagnostic is complete through layers 0--2 and localizes the
-first strict mismatch to layer 3 Attention. The production path remains
-intermediate-copy free; checkpoint readback is a deliberate debugging mode.
-
-Checkpoint-level accuracy, accelerator-side LM-head/sampling, complete
-multi-block standard prompts, post-route frequency/power, PCIe-inclusive
-latency, and physical-board performance remain open. Deterministic random
-Fix16 evidence validates arithmetic and protocol closure; it does not claim
-model quality.
+The [documentation index](docs/README.md) provides the complete reading order.
+Large build trees, binaries, waveforms and model checkpoints are stored outside
+the publication tree; compact raw evidence and identity manifests accompany
+the reported results.
 
 ## Citation
 
-If CoWave (LLM-ACCEL) contributes to academic work, cite the repository
-metadata in [`CITATION.cff`](CITATION.cff) or use the tag `wang2026llmaccel`:
+Please cite Teng Wang and this repository using
+[`CITATION.cff`](CITATION.cff) or the tag `wang2026llmaccel`:
 
 ```bibtex
 @software{wang2026llmaccel,
@@ -231,16 +158,16 @@ metadata in [`CITATION.cff`](CITATION.cff) or use the tag `wang2026llmaccel`:
 }
 ```
 
+The citation version identifies the software release, not a hardware profile,
+workload or validation level.
+
 ## License
 
 Copyright © 2026 Teng Wang, High Efficient Intelligent Computing Lab, Suzhou
 Institute for Advanced Research of USTC, Suzhou, China.
 
-Software is available for noncommercial purposes under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). Documentation, figures, and
-experimental evidence are licensed under
-[CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.md). Both permit attributed modification
-and redistribution for noncommercial purposes. Commercial use requires
-separate written permission from the copyright holder. Because of the
-noncommercial restriction, this is a source-available research release rather
-than an OSI-approved open-source license.
+Software uses [PolyForm Noncommercial 1.0.0](LICENSE); documentation, figures
+and evidence use [CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.md). Both permit attributed
+modification and redistribution for noncommercial purposes. Commercial use
+requires separate permission. This is a source-available research release;
+the noncommercial restriction is not an OSI-approved open-source license.

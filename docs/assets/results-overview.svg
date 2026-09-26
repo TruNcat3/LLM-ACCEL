@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc" font-family="DejaVu Sans">
-  <title id="title">Selected results from the current R1 resident coarse-task implementation</title>
-  <desc id="desc">A four-panel R1 overview showing the most complete released generation gate, the highest-utilization bounded gate, cross-layer amortization from one to two layers, and the profile-matched HLS resource envelope.</desc>
+  <title id="title">Selected results from the current Fix16 resident coarse-task implementation</title>
+  <desc id="desc">A four-panel Fix16 resident overview showing the most complete released generation gate, the highest-utilization bounded gate, cross-layer amortization from one to two layers, and the profile-matched HLS resource envelope.</desc>
   <rect width="1200" height="650" rx="18" fill="#0d1117"/>
   <style>
     .title{font-size:24px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.card{fill:#161b22;stroke:#30363d;stroke-width:1}.tag{font-size:12px;font-weight:700;fill:#0d1117}.head{font-size:17px;font-weight:700;fill:#f0f6fc}.scope{font-size:13px;fill:#8b949e}.metric{font-size:31px;font-weight:700;fill:#f0f6fc}.unit{font-size:14px;font-weight:600;fill:#c9d1d9}.value{font-size:15px;font-weight:700;fill:#f0f6fc}.positive{font-size:14px;font-weight:700;fill:#3fb950}.note{font-size:12px;fill:#8b949e}.label{font-size:13px;font-weight:600;fill:#c9d1d9}.grid{stroke:#30363d;stroke-width:1}.track{fill:#21262d}.blue{fill:#58a6ff}.green{fill:#3fb950}.purple{fill:#d2a8ff}.orange{fill:#f0883e}
   </style>
-  <text class="title" x="30" y="38">Selected R1 results · current mainline overview</text>
-  <text class="sub" x="30" y="62">All four panels use the resident coarse-task implementation; historical diagnostics remain in the detailed report</text>
+  <text class="title" x="30" y="38">Selected Fix16 resident results · current mainline overview</text>
+  <text class="sub" x="30" y="62">All four panels use the Fix16 resident coarse-task implementation; historical diagnostics remain in the detailed report</text>
 
   <rect class="card" x="28" y="82" width="558" height="230" rx="12"/>
-  <rect class="green" x="50" y="102" width="42" height="24" rx="12"/><text class="tag" x="63" y="119">R1</text>
-  <text class="head" x="106" y="120">Most complete released boundary</text>
+  <rect class="green" x="50" y="102" width="58" height="24" rx="12"/><text class="tag" x="60" y="119">Fix16</text>
+  <text class="head" x="122" y="120">Most complete released boundary</text>
   <text class="scope" x="50" y="148">P8/G2/L2 · Prefill + one real D1 · 10 coarse tasks</text>
   <text class="metric" x="50" y="195">119.652</text><text class="unit" x="205" y="194">useful GMAC/s</text>
   <text class="metric" x="342" y="195">58.424%</text><text class="unit" x="342" y="216">modeled efficiency</text>
@@ -19,8 +19,8 @@
   <text class="note" x="50" y="289">4,096/4,096 values exact · hidden/KV stay resident across both layers</text>
 
   <rect class="card" x="614" y="82" width="558" height="230" rx="12"/>
-  <rect class="green" x="636" y="102" width="42" height="24" rx="12"/><text class="tag" x="649" y="119">R1</text>
-  <text class="head" x="692" y="120">Highest-utilization standard-shape gate</text>
+  <rect class="green" x="636" y="102" width="58" height="24" rx="12"/><text class="tag" x="646" y="119">Fix16</text>
+  <text class="head" x="708" y="120">Highest-utilization standard-shape gate</text>
   <text class="scope" x="636" y="148">P8 · Task 18 → 19 → 20 · bounded one-forward measurement</text>
   <text class="metric" x="636" y="195">189.285</text><text class="unit" x="791" y="194">useful GMAC/s</text>
   <text class="metric" x="928" y="195">92.424%</text><text class="unit" x="928" y="216">modeled efficiency</text>
@@ -29,8 +29,8 @@
   <text class="note" x="636" y="289">16,384/16,384 values exact · not a generation request or board result</text>
 
   <rect class="card" x="28" y="336" width="558" height="286" rx="12"/>
-  <rect class="green" x="50" y="356" width="42" height="24" rx="12"/><text class="tag" x="63" y="373">R1</text>
-  <text class="head" x="106" y="374">Cross-layer amortization</text>
+  <rect class="green" x="50" y="356" width="58" height="24" rx="12"/><text class="tag" x="60" y="373">Fix16</text>
+  <text class="head" x="122" y="374">Cross-layer amortization</text>
   <text class="scope" x="50" y="402">Same Host, xclbin, and emulation configuration · L1 → L2</text>
   <text class="label" x="50" y="447">Cycles / layer</text><text class="value" x="190" y="447">1.191M → 1.160M</text><text class="positive" x="466" y="447">−2.60%</text>
   <line class="grid" x1="50" y1="466" x2="562" y2="466"/>
@@ -40,8 +40,8 @@
   <text class="note" x="50" y="596">Feature: useful work doubles while modeled cycles rise only 1.948x</text>
 
   <rect class="card" x="614" y="336" width="558" height="286" rx="12"/>
-  <rect class="green" x="636" y="356" width="42" height="24" rx="12"/><text class="tag" x="649" y="373">R1</text>
-  <text class="head" x="692" y="374">Profile-matched resource envelope</text>
+  <rect class="green" x="636" y="356" width="58" height="24" rx="12"/><text class="tag" x="646" y="373">Fix16</text>
+  <text class="head" x="708" y="374">Profile-matched resource envelope</text>
   <text class="scope" x="636" y="402">Controller + 2 compute CUs + status sink · HLS CSynth</text>
   <text class="label" x="636" y="439">BRAM18</text><rect class="track" x="710" y="424" width="390" height="20" rx="5"/><rect class="blue" x="710" y="424" width="190" height="20" rx="5"/><text class="value" x="1110" y="440">48.7%</text>
   <text class="label" x="636" y="480">DSP</text><rect class="track" x="710" y="465" width="390" height="20" rx="5"/><rect class="green" x="710" y="465" width="97" height="20" rx="5"/><text class="value" x="1110" y="481">24.9%</text>

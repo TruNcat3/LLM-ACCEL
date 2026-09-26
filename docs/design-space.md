@@ -1,250 +1,220 @@
 # Design Space and Alternatives
 
-[Documentation index](README.md) | [Architecture](architecture.md) |
+[Documentation index](README.md) | [Implementation map](implementations.md) |
+[Repository map](repository-map.md) | [Architecture](architecture.md) |
 [Experiments](experiments.md) | [Setup](environment.md) |
 [Repository](../README.md)
 
-This document records the architectural alternatives explored by CoWave
-(the LLM-ACCEL repository).
-The goal is to make the current implementation understandable as a sequence of
-measured choices rather than as the only possible design.
+This document records the design choices that separate CoWave's three public
+implementation families. It distinguishes the shared architectural idea, the
+choices made by each actual source tree, and alternatives that remain open.
+The [implementation map](implementations.md) defines public family names and
+the difference between an implementation family and a narrower evidence scope.
 
-The root [implementation and evidence map](../README.md#implementation-variants-and-evidence-map)
-assigns stable IDs R1, D1, P1, S1, and Q1 to these source and measurement
-boundaries.
+## Shared architectural idea
 
-## Quantized arithmetic candidates
+All three families use a model-aware or controller-facing boundary around
+regular stream compute:
 
-Quantization changes the arithmetic and packet contract, so it is evaluated as
-an explicit candidate rather than inferred from the FP16/Fix16 R1 measurements.
-The isolated Q1 blocks use fixed-width task and data words and preserve the
-controller's block-level scheduling boundary:
+- model and memory policy should not be replicated inside every arithmetic
+  island;
+- packet widths and ownership transitions should be explicit at kernel
+  boundaries;
+- finite streams must be checked for progress and backpressure, not only
+  functional output;
+- arithmetic shape, memory traffic, and evidence stage are separate design
+  dimensions.
 
-| Candidate | Decode-oriented shape | Products per K | Physical DSPs | HLS result |
-| --- | ---: | ---: | ---: | --- |
-| W4A4 packed, single-bank | 8x64 | 512 | 128 (4/DSP) | II=1, depth=5, 440.53 MHz |
-| W8A8, single-bank | 4x128 | 512 | 512 (1/DSP) | II=1, depth=3, 563.70 MHz |
-| W8A4 reference (2-wave) | 8x64 | 512 | 128 (2/DSP) | II=1, depth=7, 440.33 MHz |
-
-The four-way W4A4 packing is a true signed outer product: two INT4 activation
-digits and two INT4 weight digits are multiplied in one DSP and four products
-are recovered. It must not be conflated with the two-way W8A4 packing. W8A8
-does not pack products, but its 4x128 rectangle exposes a useful decode shape
-while retaining an II=1 inner loop. Full scale/zero-point handling, controller
-integration, HBM bandwidth, and model-level accuracy remain open. Source and
-reproduction commands are in the [Q1 case](../cases/quantized-block/).
-
-CU replication is modeled separately from tile shape. The Q1 planner subtracts
-the published resident-controller and status resources before selecting a
-count below a configurable device-utilization cap. The selected single-bank
-W4A4 and W8A8 estimates both fit four planned CUs at the default 85% reference
-U50 cap:
-the resource sums are 637,849 LUT (73.17%) and 604,849 LUT (69.39%),
-respectively. These are not link results: the fixed profile comes from the
-two-CU controller, and each new replica still needs dedicated block streams,
-controller output partitioning, and post-route timing closure.
-
-The LUT limit was an artifact of rotating accumulator state. The selected
-single-bank variants keep additions in LUT fabric and reduce W4A4 from 192,809
-to 43,970 LUT per CU and W8A8 from 225,343 to 35,720 LUT per CU. Both preserve
-the fixed-width stream ABI, `II=1`, and deadlock-enabled RTL CoSim. A DSP-bound
-accumulator remains as a diagnostic comparison, not the recommended design:
-it consumes 2,176 DSP per W4A4 CU and 2,560 DSP per W8A8 CU. These are
-HLS/pre-link results; controller stream duplication, HBM placement, and the
-complete Vitis link remain integration gates.
+The root **Fix16 resident** implementation is the selected end-to-end boundary.
+**Streaming split** is an earlier alternative architecture with a different
+controller and compute core. **Quantized matrix blocks** are isolated INT4/INT8
+kernel candidates, not a published full-layer implementation.
 
 ## 1. Kernel partitioning
 
-| Candidate | Advantages | Disadvantages | Status |
-| --- | --- | --- | --- |
-| Monolithic decoder kernel | Direct data reuse; no inter-kernel protocol | Large control cone, difficult synthesis/debug, weak reuse | Early baseline |
-| Controller plus stream-only compute | Separates model semantics from arithmetic; reusable compute CUs | Requires explicit finite-depth protocol | **Selected** |
-| Many operator-specific kernels | Natural software mapping | Repeated launch/data movement; large system interconnect | Not selected |
+| Family or boundary | Actual choice | What it does not claim |
+| --- | --- | --- |
+| Fix16 resident | One model-aware controller/cache kernel, two stream-only 8x64 compute CUs, and a status sink | The compute CUs do not own HBM or model-layer semantics |
+| Streaming split | `control_cache_core` (`cc`) schedules a fixed V8-2_s compute core through an `operator_program` | It is not a second profile of the resident Task 18/19/20 runtime |
+| Quantized matrix blocks | Standalone controller-facing W4A4 and W8A8 stream kernels | Four-CU resource sums are not a linked system or full model |
 
-The selected split makes the controller the only stateful model component.
-This avoids operator-by-operator host scheduling without turning every compute
-island into a separate memory master.
+Alternatives considered in the resident family were a monolithic decoder kernel
+and many operator-specific kernels. The former increases the control cone and
+synthesis/debug burden; the latter fragments launches and data movement. The
+controller-plus-stream-compute boundary is selected for the root family.
 
 ## 2. Compute-array shape
 
-Candidate shapes trade parallel rows, output columns, DSP count, and placement
-regularity. The current pair of 8x64 CUs was selected because it provides:
+| Family | Shape | Rationale and limitation |
+| --- | --- | --- |
+| Fix16 resident | 2 x 8x64 CUs, 1,024 modeled MAC/cycle peak | Eight rows fit a prefill block; one-row decode cannot fill the array without independent row work |
+| Streaming split | 2 cores x 1 lane x 16x64, 2,048 modeled DSP lanes | Larger reduction depth reduces operation count; its resource/frequency tradeoff is case-local |
+| Quantized matrix blocks | W4A4 8x64; W8A8 4x128 | W4A4 packs four signed INT4 products per DSP; W8A8 exposes a decode-oriented rectangle |
 
-- 1024 MAC/cycle system peak;
-- a natural 8-row prefill block;
-- two independently placeable compute islands;
-- output-column partitioning with shared activation broadcast.
-
-Its main limitation is explicit: M=1 decode uses one of eight rows. Enlarging
-the array does not fix this shape mismatch. Better decode utilization requires
-multiple independent rows of work, such as request batching or another
-Split-M mapping.
+An array shape is not a workload claim. Prompt rows, sequence batch, decode
+forwards, layer count, and context are recorded separately in the workload and
+evidence documents. A larger array alone does not solve M=1 decode utilization.
 
 ## 3. Cross-kernel protocol granularity
 
-| Candidate | Observation |
-| --- | --- |
-| Fine-grained/bit-level control | Creates many narrow pipelines and large control/fan-out networks |
-| Custom structs across XO boundaries | Fragile ABI and tool-dependent packing |
-| Fixed-width block packets | Regular interfaces, explicit compatibility, easier protocol checking |
+| Alternative | Observation | Public choice |
+| --- | --- | --- |
+| Fine-grained or bit-level control | Many narrow pipelines and large fan-out networks | Rejected for the root boundary |
+| C++ structs across XO boundaries | Tool-dependent packing and fragile ABI | Rejected at exported stream boundaries |
+| Fixed-width block packets | Regular interfaces and explicit compatibility checks | Used by all three families, with family-specific widths |
 
-The selected ABI uses fixed-width integer packets. Task and status are compact
-encodings; payload channels move activation, weight, vector, and result blocks.
-The block ABI improves the boundary, while timing-critical arithmetic inside a
-kernel still requires separate optimization.
+The root Fix16 ABI uses 160-bit task, 128-bit activation, 256-bit weight,
+416-bit vector/result, and 64-bit status packets. Streaming split uses 512-bit
+input/weight packets, two 1,024-bit output halves, and 32-bit control. Quantized
+blocks use a 128-bit task word, 32-bit activation, 256-bit weight, and 448/576-bit
+output words. These contracts are similar in purpose but not interchangeable.
 
 ## 4. Operator implementation choices
 
-| Operator class | Candidates | Current implementation |
-| --- | --- | --- |
-| Dense projection | Monolithic GEMM; operator-specific arrays; unified tiled MM | Unified 8x64 MM with output-wave Split-N across two CUs |
-| RMSNorm | Host preprocessing; controller reduction; CU vector task | CU vector task so normalized features remain in the stream/resident path |
-| RoPE | Host transform; CU vector opcode; controller-local banked transform | Controller-local transform using a model-initialized persistent coefficient table |
-| Exponential/normalization | Custom iterative exponential; lookup approximation; HLS math primitive | `hls::exp` on a bounded fixed-point input, followed by online normalization state |
-| SiLU and gated product | Separate kernels; controller arithmetic; unified CU vector path | Unified CU vector task to avoid intermediate host/memory traffic |
-| Residual addition | Host or external-memory round trip; controller; CU vector path | CU vector task with resident operands |
-| KV cache | Host-managed cache; compute-local cache; controller-managed external cache | Controller-managed cache, keeping PCIe outside the token loop |
+The resident family keeps model semantics in the controller and uses the
+compute CUs for regular matrix/vector work:
 
-A custom iterative exponential was rejected because its recurrence created an
-unfavorable timing path in the attention normalization stage. The selected HLS
-math primitive gives the synthesis tool a recognized implementation while the
-controller still clamps and represents its input explicitly. The remaining
-attention bottleneck is the PV accumulator dependency, not the exponential
-function itself.
+| Operator or state | Resident choice | Alternative or boundary |
+| --- | --- | --- |
+| Dense projection | Unified 8x64 matrix engine with output-column partitioning | Operator-specific arrays duplicate control and memory policy |
+| RMSNorm/residual/gated activation | CU vector tasks with resident operands | Host preprocessing or repeated external-memory round trips |
+| RoPE and KV cache | Controller-local transform and controller-managed HBM cache | Host-managed KV would put PCIe traffic in the decode loop |
+| Attention normalization | Tiled online maximum/sum/PV state | Materialized score matrix or a second normalization pass |
+| Quantized arithmetic | Separate W4A4/W8A8 block candidates | Not inferred from Fix16 measurements and not yet controller integrated |
+
+The streaming split implements a different operator contract: `cc` selects an
+operation and data addresses, while V8-2_s applies activation/normalization
+choices to the streamed result. It does not reproduce the resident controller's
+online-attention/KV ownership.
 
 ## 5. Weight delivery pipeline
 
-Several organizations were evaluated:
+The Fix16 resident loader reads 512-bit weight blocks and emits regular 256-bit
+row packets. The selected producer II is 2; eight output slots are interleaved
+so each slot receives a block every 16 cycles, matching the consumer schedule.
+Increasing the producer to II=1 would add queued state without improving the
+current consumer rate. The bounded FIFO and source-profile details are kept in
+the [architecture](architecture.md) and [runtime report](coarse-task-runtime.md).
 
-| Candidate | Outcome |
-| --- | --- |
-| Load a complete panel, then emit | Simple but serializes memory preparation and compute |
-| Chunk ping-pong buffers | Good overlap, excessive BRAM for the explored configuration |
-| Whole 4096-bit tile FIFO | II=1 loading, but high register/multiplexer cost |
-| 512-bit block FIFO with dynamic selection | Lower storage, unfavorable selector path |
-| 512-bit block FIFO plus row shift registers | **Selected:** rate matched and structurally regular |
-
-The selected isolated weight path reduced the measured wave/loader latency
-from roughly 6.8k to 1.1k HLS cycles in the exploration profile. Depths 1, 2,
-and 4 produced the same cycle estimate; depth 2 was retained because it removes
-the block-FIFO depth warning without paying the extra storage of depth 4.
+Streaming split uses four weight HBM ports and four weight streams. Each
+operation receives 16 weight blocks per stream, making the case's
+single-stream versus four-PC comparison a bandwidth experiment inside that
+family. Quantized blocks have bounded 256-bit weight words; their controller
+loader, scale application, and model-level accumulation remain open.
 
 ## 6. Wave scheduling
 
-### Sequential waves
+The resident projection path uses bounded cross-wave dataflow. The tested
+intra-projection invariant is:
 
-The simplest controller completes load, drive, compute, collect, and commit for
-one wave before starting the next. It is easy to verify but repeatedly pays
-pipeline fill/drain and cannot hide memory preparation.
+```text
+load -> issue/drive -> compute -> collect -> commit
+```
 
-### Cross-wave dataflow
+Different waves occupy those stages concurrently after fill. `II=2` weight
+loading, finite result FIFOs, and deadlock-enabled RTL CoSim are part of the
+contract. This is not a promise of generalized cross-block or cross-request
+overlap: prompt blocks and decode descriptors remain ordered in the Host task
+program, and cross-block residency has its own evidence scope.
 
-The selected path connects wave-local stages with bounded streams and separate
-scratch state. It reduced the full single-token layer interval from 714,495 to
-683,601 cycles in hardware emulation and brings later projection waves close
-to the 2,048-cycle array ideal.
+The streaming split has a three-process dataflow graph (`dispatch`,
+`input_path`, and `output_path`) that overlaps operation issue, packed input and
+weight movement, compute, and output storage. Its schedule is specific to the
+case-local `operator_program`; it does not establish the resident pipeline
+invariant for a different implementation.
 
-### Multi-wave repeat command
-
-The compute ABI can describe repeated waves under one task. Closed-loop CoSim
-demonstrated protocol correctness for a limited repeat case, but separated-
-kernel hardware emulation did not meet the progress/performance threshold for
-repeat counts above one during exploration. The release therefore keeps repeat
-disabled and uses the better-understood cross-wave dataflow path.
+Multi-wave repeat commands and deeper FIFOs remain alternatives, not release
+defaults. Any change must be evaluated for finite-buffer progress, II, timing,
+and resources together.
 
 ## 7. Attention alternatives
 
-| Candidate | Storage/traffic | Scheduling implication |
+| Candidate | Storage/traffic | Decision |
 | --- | --- | --- |
-| Materialize the score matrix | O(sequence length) score storage per query and additional traffic | Simple normalization pass |
-| Tile scores, then make a second pass | Bounded temporary storage | Re-reads or retains tile data |
-| Online normalization and PV accumulation | Bounded running state | Requires rescaling dependencies |
+| Materialized score matrix | Extra score storage and traffic | Not selected for the resident controller |
+| Tiled scores with a second pass | Bounded temporary storage but rereads tile state | Reference alternative |
+| Online normalization and PV accumulation | Bounded running state with rescaling dependencies | Selected for Fix16 resident |
 
-CoWave selects online normalization. Its main HLS bottleneck is currently the
-PV accumulator's carried dependency; the full-profile loop reaches II=4. This
-is an internal attention problem and is not solved by widening the stream ABI.
-
-Candidate improvements include banked partial accumulators, interleaved heads,
-and a tree reduction followed by a less frequent state update. Any change must
-preserve the fixed-point error envelope and cross-tile normalization semantics.
+Online attention keeps the running maximum, normalization sum, and PV
+accumulator per query group. Its current bottleneck is the carried PV
+dependency; widening the packet ABI does not remove that dependency. Any
+partial-accumulator or tree-reduction alternative must preserve the fixed-point
+error envelope and cross-tile normalization semantics.
 
 ## 8. Prefill scheduling
 
-The current diagnostic prefill host invokes individual operators to expose
-each tensor to a golden checker. This produces strong functional evidence and
-allows per-stage profiling, but compiling every diagnostic route together
-duplicates controller state and exceeds the target resource budget.
+The resident family has two intentionally different evidence scopes:
 
-The implemented coarse-task runtime uses static resident subgraphs:
+- **Fix16 operator diagnostics** invoke individual operators so each tensor can
+  be checked and profiled. This is useful visibility evidence, not a separate
+  implementation generation.
+- **Small-shape protocol tests** exercise finite FIFOs, block tails, residency,
+  and controller-owned KV at reduced shapes. They are protocol evidence, not a
+  separate implementation generation.
 
-1. the host submits Task 18 for an attention sublayer and supplies one to
-   eight consecutive query rows;
-2. the controller executes RMSNorm through attention residual while Q/K/V/O
-   intermediates remain resident and the KV cache is updated in HBM;
-3. the Task-18 residual is materialized in HBM pair A and the host submits
-   Task 19 referring to that resident output;
-4. the controller executes RMSNorm through FFN residual and commits only the
-   completed layer to HBM pair B;
-5. the following layer consumes pair B without a host copy, and Task 20 applies
-   final RMSNorm after the last layer.
-
-The 8-row-block hardware-emulation result shows that the arithmetic schedule can
-reach 94.78% useful-MAC efficiency. The separate coarse-task evidence proves
-the HBM residency contract; standard-shape cycles are reported independently
-because diagnostic prefill and coarse-task runs have different host/runtime
-boundaries.
+The production resident path uses static coarse tasks. A prompt block submits
+Task 18 and Task 19 for each layer; Task 20 materializes the final normalized
+hidden state. The full task program, block composition, and timing boundaries
+are maintained in [coarse-task-runtime.md](coarse-task-runtime.md) and
+[experiments.md](experiments.md), rather than duplicated here.
 
 ## 9. Decode utilization candidates
 
-Two-CU Split-N is already present: activation data is broadcast and output
-columns are divided between CUs. It does not fill unused token rows for M=1.
+The resident 8x64 array exposes an M=1 shape limit. Candidates that address
+that limit are:
 
-Promising candidates are:
+- multi-request batching, so independent rows share resident weights;
+- speculative or multi-token blocks when the algorithm exposes independent
+  candidate rows;
+- row remapping or Split-M when the workload has independent row work.
 
-- **multi-request batching:** independent decode requests occupy different
-  rows while sharing the same resident weights;
-- **multi-token speculative blocks:** useful when the algorithm can provide
-  more than one candidate token;
-- **row remapping / Split-M:** partition independent row work across lanes when
-  the workload exposes it.
-
-Adding dynamic controller states without a corresponding independent row of
-work cannot increase arithmetic utilization and is therefore not a priority.
+Controller state alone cannot fill unused token rows. A future policy must be
+measured against the same useful-work, timing-boundary, and evidence-stage
+definitions used by the released reports.
 
 ## 10. Runtime task granularity
 
-Three runtime boundaries were considered:
-
-| Boundary | Benefit | Cost | Decision |
+| Boundary | Benefit | Cost | Status |
 | --- | --- | --- | --- |
-| Host submits every operator | Maximum observability and simple golden checks | Host round trips and transfers fragment the layer | Diagnostic path only |
-| One host command runs the full model | Minimum launch overhead | Large dynamic controller, weak host control over requests/sampling | Not the current target |
-| Host composes coarse resident subgraphs | Static controller schedules with flexible model/runtime composition | Requires explicit tensor-residency handles and task contracts | **Selected** |
+| Host submits every operator | Maximum visibility and simple golden checks | Host round trips fragment a layer | Fix16 diagnostics only |
+| One host command runs a whole model | Lowest launch overhead | Large dynamic controller and weak request/sampling control | Not the current target |
+| Host composes coarse resident subgraphs | Static controller schedule with flexible layer/request composition | Requires explicit residency handles and task contracts | Selected Fix16 resident boundary |
 
-The selected target keeps intermediate tensors and KV state in HBM/on-chip
-buffers while allowing the host to combine several task types into complete
-prefill and decode inference. End-to-end reporting must include both the
-common four-CU modeled interval and the Host-observed task-sequence latency.
-The current generate path realizes this boundary as an explicit static Host
-descriptor program for blockwise prompt and single-token decode traversal.
-Descriptors select Tasks 18/19/20, layer and position metadata, and one of two
-HBM hidden-state pairs; they never expose controller-owned KV or local
-intermediates. The block-prefill extension groups each prompt into
-one-to-eight-row coarse-task blocks while leaving decode at one row. A future
-optimization may batch descriptor submission to reduce launch overhead, but it
-must preserve the same residency and status contract rather than turning the
-controller into a dynamic whole-model interpreter.
+The selected descriptor program carries operation, layer, position, active rows,
+and HBM-pair IDs. It never exposes controller-owned KV or local intermediates.
+The streaming split's `operator_program` is a distinct operator-level contract;
+the quantized blocks currently expose only bounded matrix operations.
 
-## 11. Evaluation principles
+<a id="quantized-arithmetic-candidates"></a>
 
-Designs are compared using four independent dimensions:
+## 11. Numeric representation and quantized candidates
 
-1. functional error against deterministic fixed-point golden models;
-2. finite-buffer progress with RTL deadlock detection enabled;
-3. cycles and useful-MAC efficiency under matched shapes;
-4. synthesis timing and resource cost.
+The source-defined numeric boundaries are:
 
-An optimization is not accepted solely because it improves one dimension. For
-example, the diagnostic prefill build is fast and correct in hw_emu but is not
-considered deployable because its unpruned controller exceeds the resource
-budget.
+| Family | Source-defined format | Evidence boundary |
+| --- | --- | --- |
+| Fix16 resident | Signed `ap_fixed` activations/weights/accumulators, with Q2.14 attention probabilities | Fixed-point CSim/oracles, RTL CoSim, HLS, and bounded HW-Emu; not IEEE FP16 |
+| Streaming split | `fm_t ap_fixed<16,8>`, `wt_linear_t ap_fixed<16,4>`, `fm_accum_t ap_fixed<32,16>`, internal `ap_fixed<48,24>`; `hls::recip` receives float conversion | Fixed-point packet storage with a mixed helper path; do not merge its numbers with Fix16 resident claims |
+| Quantized matrix blocks | W4A4 signed 4-bit operands and W8A8 signed 8-bit operands, with source-defined integer accumulators and output widths | Isolated CSim/RTL CoSim/HLS probes; scale fields are metadata and full-layer integration is open |
+
+The quantized candidates are not the latest complete model implementation. The
+public case documents only the isolated kernels and four-CU planning sums;
+full-layer W4/W8 controller integration remains development work pending
+validated public evidence.
+
+## 12. Evaluation principles
+
+Designs are compared across independent dimensions:
+
+1. arithmetic and functional agreement at the declared numeric boundary;
+2. finite-buffer progress and deadlock detection;
+3. useful work, cycles, and shape-normalized efficiency within a declared timing
+   boundary;
+4. HLS II, resource estimates, and timing structure;
+5. linked-system, routed, and physical-board evidence as separate later gates.
+
+An optimization is not accepted solely because one dimension improves. The
+[experiments report](experiments.md) owns measured resident results, while the
+[streaming split case](../cases/streaming-split/docs/design.md) and
+[quantized matrix-block case](../cases/quantized-block/README.md) own their
+family-specific evidence and limitations.

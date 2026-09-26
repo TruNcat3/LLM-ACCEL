@@ -87,7 +87,11 @@ endif
 .PHONY: test_checkpoint_tolerance_contract
 
 help:
-	@echo "Dual-8x64 Qwen accelerator build entry points"
+	@echo "CoWave build and validation entry points"
+	@echo "  Implementation families: docs/implementations.md"
+	@echo "  Source map and configurations: docs/repository-map.md"
+	@echo "  Reproduction routes: docs/usage.md"
+	@echo "  Alternatives: cases/streaming-split and cases/quantized-block"
 	@echo "  make check_environment ENV_MODE=publication|hls|hw-emu|board"
 	@echo "  make test_environment_contract"
 	@echo "  make test_coarse_task_program"

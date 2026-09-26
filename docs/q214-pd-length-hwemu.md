@@ -8,11 +8,27 @@ This diagnostic profile is part of CoWave (the `LLM-ACCEL` repository). Its
 exact U50 platform path is retained below because it is part of the archived
 reproduction identity.
 
+This page uses a local historical notation that is narrower than the public
+workload vocabulary. Here `P<n>` means the final eight-row Prefill block at
+context length `n`, and `D<n>` means one one-row Decode forward at cached
+context length `n`. Thus `P1024` covers positions 1016--1023 and `D1024`
+covers position 1024 against 1025 KV entries. Neither suffix is a sequence
+batch, total prompt length, implementation family, or number of decode
+forwards. New reports should use explicit `prompt_tokens`, `query_rows`,
+`context`, `sequence_batch`, and `decode_forwards` fields.
+
+This is the **Fix16 operator diagnostics** evidence scope. It measures a
+Host-orchestrated operator composition and must not be read as the
+controller-resident Task 18/19/20 production boundary documented in
+[`coarse-task-runtime.md`](coarse-task-runtime.md).
+
 ## Scope
 
-This experiment validates the Q2.14 online-softmax/FlashAttention path and the
-complete Qwen2.5-3B decoder layer at four context lengths: 64, 256, 512, and
-1024.  The Vitis 2022.2 hardware-emulation build runs at a modeled 200 MHz and
+This experiment validates the Q2.14 online-softmax/FlashAttention path and a
+composed Qwen2.5-3B-shaped decoder-layer datapath at four context lengths: 64,
+256, 512, and 1024. It is an operator-diagnostic composition, not the
+controller-resident production runtime. The Vitis 2022.2 hardware-emulation
+build runs at a modeled 200 MHz and
 contains one controller, two 8x64 compute CUs, and one status sink.
 
 - Prefill (`P`) evaluates the final 8-row query block ending at the stated context
@@ -41,6 +57,14 @@ Gate/Up/SiLU/Down FFN, and the final residual. Latency is computed at 200 MHz.
 Modeled useful-MAC efficiency divides the shape-counted useful MACs by the
 measured cycles and the peak of two 8x64 compute CUs, or 1,024 MAC/cycle. It is
 not post-route physical utilization.
+
+This is the aggregate per-case `cc8_ctrl` Running Time for the sequential
+operator calls composing one layer; the package metadata describes it as the
+sum of those controller active intervals. The same interval is reported for
+the listed CUs in that case, but it is not the common four-CU production scope
+used by resident Task 18/19/20 packages. Host gaps, transfer gaps, fixture
+packing/migration, and CPU golden checks remain outside the aggregate. Matching
+CU rows do not resolve separable CU occupancy or inter-task issue gaps.
 
 This is a **kernel-only, host-orchestrated layer profile**, not yet a single
 autonomous controller launch. Host scheduling gaps, transfers between
@@ -132,7 +156,10 @@ active cycle counts.
 ## Conclusion
 
 The Q2.14 blockwise online-softmax implementation is functionally stable for
-both P and D through a 1024-token context.  The complete layer has no observed
-stream deadlock, task-count mismatch, packet loss, or precision-gate failure.
+both P and D through a 1024-token context in this one-layer diagnostic
+composition. The tested operator sequence has no observed stream deadlock,
+task-count mismatch, packet loss, or precision-gate failure.
 The primary remaining performance limitation is the one-row Decode shape,
-not the long-context Attention protocol.
+not the long-context Attention protocol. This does not promote the
+Host-orchestrated diagnostic into the resident production runtime, a 36-layer
+result, or a physical-board measurement.

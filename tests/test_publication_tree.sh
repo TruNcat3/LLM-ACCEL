@@ -9,12 +9,22 @@ required_files=(
     LICENSE
     LICENSES/CC-BY-NC-4.0.md
     docs/README.md
+    docs/implementations.md
+    docs/repository-map.md
+    docs/release-workflow.md
     docs/environment.md
     docs/architecture.md
     docs/design-space.md
     docs/coarse-task-runtime.md
+    docs/coarse-task-runtime-history.md
     docs/usage.md
+    docs/reproduction-resident.md
+    docs/reproduction-diagnostics.md
     docs/experiments.md
+    docs/experiment-details.md
+    cases/README.md
+    cases/streaming-split/README.md
+    cases/quantized-block/README.md
     results/README.md
     docs/assets/results-overview.svg
     docs/assets/e2e-scaling.svg
@@ -57,7 +67,7 @@ done
 for heading in \
     '## Research contributions' \
     '## Architecture at a glance' \
-    '## Implementation variants and evidence map' \
+    '## Implementation map' \
     '## Key results' \
     '## Reproduce the core validation' \
     '## Citation' \
@@ -69,18 +79,51 @@ do
     fi
 done
 
-for design_id in R1 D1 P1 S1; do
-    if ! rg -q "\\*\\*${design_id} —" README.md; then
-        echo "README is missing implementation ID: ${design_id}" >&2
+for public_name in \
+    'Fix16 resident' \
+    'Streaming split' \
+    'Quantized matrix blocks'
+do
+    if ! rg -F -q "**${public_name}**" README.md ||
+       ! rg -F -q "**${public_name}**" docs/implementations.md; then
+        echo "README/catalog is missing implementation family: ${public_name}" >&2
         exit 65
     fi
 done
 
-if ! rg -F -q 'Selected R1 results · current mainline overview' docs/assets/results-overview.svg ||
-   ! rg -F -q '[R1] P8/G2' docs/assets/e2e-scaling.svg ||
-   ! rg -F -q '[D1] Query-block' docs/assets/pd-efficiency.svg ||
-   ! rg -F -q '[R1] Whole-system' docs/assets/resource-utilization.svg; then
-    echo "Root figures are not mapped to implementation IDs" >&2
+for evidence_scope in 'Fix16 operator diagnostics' 'Small-shape protocol tests'; do
+    if ! rg -F -q "**${evidence_scope}**" docs/implementations.md; then
+        echo "Catalog is missing resident evidence scope: ${evidence_scope}" >&2
+        exit 65
+    fi
+done
+
+if ! rg -F -q 'Selected Fix16 resident results · current mainline overview' docs/assets/results-overview.svg ||
+   ! rg -F -q 'Fix16 resident P8/G2' docs/assets/e2e-scaling.svg ||
+   ! rg -F -q 'Fix16 operator diagnostics · query-block' docs/assets/pd-efficiency.svg ||
+   ! rg -F -q 'Fix16 resident · whole-system' docs/assets/resource-utilization.svg; then
+    echo "Root figures are not mapped to public implementation names" >&2
+    exit 65
+fi
+
+if ! rg -F -q '[Implementation map](docs/implementations.md)' README.md ||
+   ! rg -F -q '[Implementation map](implementations.md)' docs/README.md ||
+   ! rg -F -q '## Legacy Label Migration' docs/implementations.md; then
+    echo "Canonical implementation catalog is not linked or complete" >&2
+    exit 65
+fi
+
+for legacy_alias in R1 D1 P1 S1 Q1; do
+    if ! rg -F -q "| \`${legacy_alias}\` |" docs/implementations.md; then
+        echo "Canonical implementation catalog is missing legacy alias: ${legacy_alias}" >&2
+        exit 65
+    fi
+done
+
+if rg -F -q '[R1]' docs/assets/e2e-scaling.svg docs/assets/resource-utilization.svg ||
+   rg -F -q '[D1]' docs/assets/pd-efficiency.svg ||
+   rg -q '>R1<' docs/assets/results-overview.svg; then
+    echo "Public figures still expose legacy implementation badges" >&2
     exit 65
 fi
 
@@ -109,9 +152,10 @@ if [ "$(rg -c '^!\[' README.md)" -ne 1 ] ||
     exit 65
 fi
 
-if [ "$(rg -o '>R1<' docs/assets/results-overview.svg | wc -l)" -ne 4 ] ||
-   rg -q '>D1<' docs/assets/results-overview.svg; then
-    echo "Consolidated root figure must contain exactly four R1 panels" >&2
+if [ "$(rg -o '>Fix16<' docs/assets/results-overview.svg | wc -l)" -ne 4 ] ||
+   rg -q '>R1<' docs/assets/results-overview.svg ||
+   ! rg -F -q 'workload D1' docs/assets/pd-efficiency.svg; then
+    echo "Consolidated root figure must contain exactly four Fix16 panels and retain workload D1" >&2
     exit 65
 fi
 

@@ -1,176 +1,142 @@
-# Case 2: Streaming Split Architecture (cc + V8-2_s)
+# Streaming Split Design
 
-[Case overview](../README.md) | [Environment](../../../docs/environment.md) |
-[Main architecture](../../../docs/architecture.md) |
-[Repository](../../../README.md)
+[Case overview](../README.md) | [Implementation map](../../../docs/implementations.md) |
+[Repository map](../../../docs/repository-map.md) | [Architecture](../../../docs/architecture.md) |
+[Design space](../../../docs/design-space.md) | [Environment](../../../docs/environment.md)
 
 ## Overview
 
-A **separated streaming architecture** where a model-aware control/cache
-core (`control_cache_core`, "cc") orchestrates a fixed compute core
-(`qkv_tile_kernel_cc_qwen_small_core_v8_2_s`, "V8-2_s") through packed
-AXI streams. The compute core is a regular tile processor that knows nothing
-about model semantics; all dimension scaling, op sequencing, and data
-movement are handled by cc's `operator_program`.
+Streaming split is an alternative implementation family. A model-aware
+control/cache kernel (`cc`) schedules a regular V8-2_s tile kernel through
+AXI streams. It is a case-local design study, not a second name for the root
+Fix16 resident implementation and not a replacement for its KV-cache runtime.
 
-This case demonstrates how a **fixed compute core** can serve arbitrary LLM
-dimensions (Qwen hidden=2048) through an `operator_program` schedule of
-accumulate ops, without redesigning the datapath for each projection size.
+The public boundary is deliberately narrow: the sources exercise a bounded
+operator program and accumulation path. They do not publish a complete model
+graph, checkpoint accuracy, or end-to-end board throughput.
 
 ## Key design decisions
 
 ### 1. Fixed compute core (V8-2_s)
 
-| Parameter | Value | Rationale |
+The compute source fixes the reduction and output shape instead of specializing
+the datapath for each model projection:
+
+| Parameter | Source value | Meaning |
+| --- | ---: | --- |
+| `INPUT_DIM` | 16 | Reduction elements per operation |
+| `OUTPUT_DIM` | 64 | Output columns per operation |
+| `NUM_CORES` | 2 | Independent compute cores |
+| `NUM_LANES` | 1 | Lanes per core (`TOTAL_LANES=2`) |
+| `NUM_TILES` | 16 | Input tile count |
+| `WT_BLOCKS_PER_LANE` | 32 | 512-bit weight packets per lane |
+
+Each operation performs a 16-by-64 fixed-point matrix product. The source
+uses `ap_fixed<48,24>` for its internal accumulator and converts the result to
+the 32-bit `fm_accum_t` output format after the reduction.
+
+### 2. Control/cache core (`cc`)
+
+`control_cache_core.cpp` is a three-process dataflow graph:
+
+```
+cc_dispatch -> cc_input_path -> V8-2_s
+     |             |
+     +--------> cc_output_path -> hidden_out
+```
+
+The `operator_program` is a flat six-word record per operation. Its fields
+select activation/control flags, weight offset, input source and offset,
+output destination, and output offset. An operation sequence can therefore
+clear, accumulate, and finalize a large reduction without changing the tile
+kernel shape. `SRC_PREV_GBUF` and `DST_GBUF_FEEDBACK` remain source-level
+placeholders; this case does not claim a complete on-chip model schedule.
+
+### 3. Weight multi-bank
+
+Four independent weight memory ports (`HBM[2:5]`) feed four weight streams.
+Each operation sends 16 weight blocks per port, so the source can present the
+64-block V8-2_s weight slice in parallel. This is a connectivity and packet
+organization choice local to this family; it is not evidence for the resident
+family's HBM scheduler.
+
+### 4. Packed stream interfaces
+
+The packet widths are defined in `include/control_cache_packets.hpp`:
+
+| Stream | Width | Contents |
+| --- | ---: | --- |
+| Input | 512 bits | Two lane-major copies of 16 `fm_t` values |
+| Weight | 512 bits | 32 `wt_linear_t` values |
+| Output low/high | 1024 bits each | 32 `fm_accum_t` values per stream |
+| Control | 32 bits | One `op_ctrl` value per operation |
+
+Output metadata is implicit in packet order. The two output streams are kept
+at 1024 bits because the combined result and metadata packet would exceed the
+stream-width limit used by this design.
+
+## Numeric boundary
+
+The formats below are taken from `include/kernel_cc_qwen.hpp` and the compute
+kernel. They describe packet and accumulator representation, not an accuracy
+claim:
+
+| Type | Source format | Role |
 | --- | --- | --- |
-| `INPUT_DIM` | 16 | Reduction depth per op (balance: 4 too many ops, 32 too few lanes) |
-| `OUTPUT_DIM` | 64 | Output columns per matmul instance |
-| `NUM_CORES` | 2 | Independent core pairs sharing one activation |
-| `NUM_LANES` | 1 | Lanes per core (DSP budget: 2×1×16×64 = 2048) |
-| `NUM_TILES` | 16 | Tile depth (group = 2×16 = 32 = Q 2048/64, 100% output util) |
-| `WT_BLOCKS_PER_LANE` | 32 | Weight blocks per lane per op |
+| `fm_t` | `ap_fixed<16,8>` | Activation/input packets |
+| `wt_linear_t` | `ap_fixed<16,4>` | Weight packets |
+| `fm_accum_t` | `ap_fixed<32,16>` | Output packets and host decoding |
+| Internal matmul accumulator | `ap_fixed<48,24>` | Unsaturated reduction |
 
-**Key properties:**
-- `matmul_16x64_tpl`: 16-input × 64-output MAC, 1024 DSP, II=1 pipeline
-- 2 cores (2048 DSP total), shared activation block
-- `acc` uses `ap_fixed<48,24>` (P2 wide accumulator): eliminates per-step
-  saturation, single round/sat at output
-- `LANE_MM_stream` macro: always `+=` (no branch), accumulate via caller-side
-  clear — avoids HLS pipeline scheduling explosion from conditional branches
-- `compute_stream_core`: fused read+compute (no `local_input_buffer`),
-  eliminates read/write port conflict on shared BRAM
-
-### 2. Control/cache core (cc) — dataflow orchestrator
-
-cc is a **3-process dataflow DAG** connected by internal `hls::stream`:
-
-```
-cc_dispatch (op_program m_axi → iparam/oparam streams)
-    ├── cc_input_path (hidden_in + 4×weight_hbm → input/weight/ctrl streams)
-    └── cc_output_path (collect → store_out 512-bit packed → hidden_out)
-```
-
-**`operator_program` format** (flat uint32 array, 6 fields per op):
-
-| Field | Purpose |
-| --- | --- |
-| `op_ctrl` | Activation type (NONE/RELU/GELU/SILU/SOFTMAX/LAYERNORM) + ACCUMULATE/FINALIZE flags |
-| `weight_offset` | This op's weight slice in `weight_hbm` (wt_block granularity) |
-| `input_source` | SRC_HBM (reload) or reuse `gbuf_in` |
-| `input_hbm_offset` | Hidden input element offset |
-| `output_dest` | DST_HBM or DST_GBUF_FEEDBACK |
-| `output_hbm_offset` | Output element offset (fm_accum_t granularity) |
-
-**Accumulate sequence** (large-dimension reduction):
-```
-op0:  ctrl=0x00  (clear + compute, weight slice 0)
-op1:  ctrl=0x40  (accumulate, weight slice 1)
-...
-opN:  ctrl=0xC0  (accumulate + finalize, output)
-```
-Total reduction = `num_ops × INPUT_DIM`. Verified: 512 op → reduction 2048
-(sw_emu `sample=2048 ✅`).
-
-### 3. Weight multi-bank (4 PC parallel)
-
-4 independent `weight_hbm` m_axi ports (HBM[2:5]), each reading
-`WT_PER_V82/4 = 16` wt_blocks per op in parallel. cc sends 4 weight streams
-to V8-2_s, which loads them in 16 cycles (vs 66 cycles single-stream,
-**3.67× speedup**).
-
-```
-conn_v8_2x2.cfg:
-  sp=cc_0.weight_hbm_0:HBM[2]
-  sp=cc_0.weight_hbm_1:HBM[3]
-  sp=cc_0.weight_hbm_2:HBM[4]
-  sp=cc_0.weight_hbm_3:HBM[5]
-  stream_connect=cc_0.weight_stream_0:v82_0.weight_stream_0
-  stream_connect=cc_0.weight_stream_1:v82_0.weight_stream_1
-  stream_connect=cc_0.weight_stream_2:v82_0.weight_stream_2
-  stream_connect=cc_0.weight_stream_3:v82_0.weight_stream_3
-```
-
-### 4. 512-bit packed I/O
-
-- **Input packet** (`in_pkt_axis` = `ap_axiu<512>`): 1 tile × 2 lanes ×
-  16 inputs, lane-major, zero metadata. `read` 128→16 cycles (8×).
-- **Output** (`hidden_out` = `ap_uint<512>*`): 16 fm_accum_t per 512-bit word,
-  `store_out` 8192→512 cycles (16×).
-- **Weight** (`weight_axis` = `ap_axiu<512>`): 1 wt_block (32 × 16-bit) per
-  packet.
+The activation helpers call `hls::recip` after converting a fixed-point value
+to `float`. Thus the family has fixed-point storage and stream payloads, but
+it is not an end-to-end equivalent of the root Fix16 numerical path.
 
 ## Performance and validation evidence
 
-### Single-op HLS schedule (300 MHz target)
+The case's evidence is intentionally scoped to the bounded design:
 
-| Stage | Cycles | Notes |
+| Evidence level | Supports | Does not support |
 | --- | --- | --- |
-| `load_weights_stream` (4 parallel) | 18 | 4 streams × 16 blocks, II=1 |
-| `compute_stream` (II=2) | 36 | 16 tiles, 2 cores, mm_results RMW port limit |
-| `activate_tiles_core` | 187 | layernorm/gelu/silu, II=1 |
-| `write_stream` | ~128 | 2 lanes × 16 tiles × 512-bit |
-| **accumulate op** | **54** | load_w + compute |
-| **FINALIZE op** | **~369** | + activate + write |
+| CSim and software emulation | Packet ordering, operation-program routing, and finite accumulation checks | Model accuracy or resident-runtime behavior |
+| HLS synthesis | Local schedule, resource, and timing estimates for `cc` and V8-2_s | Routed utilization, board frequency, or system throughput |
+| Case emulation checks | The tested finite stream graph and deadlock-free termination | A complete Qwen model execution |
+| Analytical composition | A projection from local operation schedules | Measured full-layer or board throughput |
 
-### Analytical full-layer projection (Qwen-3B, hidden=2048)
+Do not combine these rows with the resident family's Task 18/19/20,
+KV-ownership, or Fix16 end-to-end evidence. The shared architectural idea is
+streamed model-aware scheduling; the implementation and evidence boundaries
+are different. See [`docs/experiments.md`](../../../docs/experiments.md) for
+the repository-wide evidence hierarchy.
 
-| Metric | Value |
-| --- | --- |
-| Total ops/layer | ~3140 |
-| Layer latency | ~178K cyc ≈ 0.59 ms |
-| 36-layer decode | ~21 ms/token ≈ **50 token/s** |
-| vs D=4 original | **4.3× speedup** |
+<a id="quick-start"></a>
+## Reproduce
 
-### HLS resource estimate (xcu50)
+Use the canonical bounded build and software-emulation commands in the
+[case overview](../README.md). The HLS-only entry points are:
 
-| Resource | Approximate usage | Fraction of full xcu50 |
-| --- | ---: | ---: |
-| DSP | 2,838 | 47.7% |
-| FF | 676K | 38.8% |
-| LUT | 342K | 39.3% |
-| BRAM18 | 256 | 9.5% |
+```bash
+cd cases/streaming-split
+source ../../scripts/setup_environment.sh
+../../scripts/check_environment.sh hls
+vitis_hls -f tcl/run_v8_2_s_csynth.tcl
+vitis_hls -f tcl/run_cc_csynth.tcl
+```
 
-Percentages use the full xcu50 capacities (5,952 DSP, 1,743K FF, 871K LUT,
-and 2,688 BRAM18). The figures are pre-route HLS estimates; they are not a
-placed-and-routed utilization report. Likewise, the 36-layer row above is an
-analytical composition of the single-op schedule rather than a measured
-end-to-end HW-Emu or board throughput result.
-
-### Validation
-
-| Level | Status |
-| --- | --- |
-| csynth | ✅ load 18cyc, compute II=2, activate II=1, All constraints |
-| sw_emu | ✅ 7-op miss=0/2048, 16-chunk sample=256 |
-| hw_emu | ✅ 0% stall, no deadlock, miss=0 |
-
-## Optimization history
-
-The path from D=4 single-stream to D=16 + 4-PC:
-
-| Step | Change | Effect |
-| --- | --- | --- |
-| store_out 512-bit | 32-bit serial → 512-bit packed | 16× (8192→512cyc) |
-| cc dataflow | Sequential op_loop → 3-process DAG | store/send overlap |
-| compute streaming | Delete local_input_buffer, fuse read+compute | Remove port conflict |
-| mm_results cyclic64 | cyclic 32→64 | II 4→2 |
-| param local | Kernel-top load param→register | activate II 67→1 |
-| clear parallel | c,l unroll + i unroll64 | 458× (8192→18cyc) |
-| activate cyclic64 | local_output cyclic 32→64 | II 2→1 |
-| hls::recip | ap_fixed / → float recip IP | ~15cyc saved |
-| **INPUT_DIM=16** | 4→16, lanes 4→1 | op count 4×, output 100% |
-| **weight 4 PC** | 1→4 m_axi + 4 streams | load 66→18cyc (3.67×) |
+The Vitis software-emulation launcher, host checks, and connectivity file are
+also listed in the overview. Generated HLS projects, emulation binaries, and
+traces are not public evidence artifacts.
 
 ## Files
 
-| File | Description |
+| File | Role |
 | --- | --- |
-| `kernel/control_cache_core.cpp` | cc dataflow orchestrator (dispatch + input_path + output_path) |
-| `kernel/qkv_tile_kernel_cc_qwen_small_core_v8_2_s.cpp` | V8-2_s fixed compute core (streaming matmul + activate + write) |
-| `include/control_cache_packets.hpp` | Dimension constants, packet types, pack/unpack, op_task_t |
-| `include/kernel_cc_qwen.hpp` | fm_t, fm_accum_t, wt_block_t definitions |
-| `host/host_v8_2x2.cpp` | 7-op integrated layer host (Q/K/V/O/Gate/Up/Down) |
-| `host/host_accum.cpp` | Parameterized accumulate host (variable reduction depth) |
-| `conn_v8_2x2.cfg` | Vitis connectivity (7 m_axi sp + 8 stream_connect) |
-| `tcl/run_v8_2_s_csynth.tcl` | V8-2_s HLS synthesis script |
-| `tcl/run_cc_csynth.tcl` | cc HLS synthesis script |
+| `kernel/control_cache_core.cpp` | Control/cache dataflow orchestrator |
+| `kernel/qkv_tile_kernel_cc_qwen_small_core_v8_2_s.cpp` | Fixed V8-2_s compute core |
+| `include/control_cache_packets.hpp` | Dimensions, packet types, and operation ABI |
+| `include/kernel_cc_qwen.hpp` | Fixed-point payload and accumulator types |
+| `host/host_v8_2x2.cpp` | Seven-operation bounded host check |
+| `host/host_accum.cpp` | Parameterized accumulation check |
+| `conn_v8_2x2.cfg` | HBM and stream connectivity |
+| `tcl/run_v8_2_s_csynth.tcl` | Compute-core HLS entry point |
+| `tcl/run_cc_csynth.tcl` | Control/cache HLS entry point |
