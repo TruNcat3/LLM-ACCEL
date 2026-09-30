@@ -8,6 +8,9 @@ pages explain the architecture; reproduction pages specify executable flows;
 result packages preserve evidence. Implementation families, build profiles and
 test workloads are separate concepts.
 
+Start with [Summary and example](summary-example.md) for a compact overview and
+a publication-only validation example.
+
 ## Read the research
 
 | Read in this order | Question answered |

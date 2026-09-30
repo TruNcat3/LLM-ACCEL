@@ -146,6 +146,7 @@ is not a quick setup test.
 
 | Need | Start here |
 | --- | --- |
+| Get a short overview and a first validation example | [Summary and example](docs/summary-example.md) |
 | Learn the Vitis build and runtime flow | [Companion tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow), then [CoWave setup](docs/environment.md) |
 | Understand design choices and alternatives | [Architecture](docs/architecture.md), [design space](docs/design-space.md) |
 | Locate implementation files and configuration owners | [Repository map](docs/repository-map.md), [implementation catalog](docs/implementations.md) |
