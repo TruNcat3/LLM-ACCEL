@@ -11,6 +11,23 @@ contract serves the Fix16 resident root, the streaming-split case, and the
 quantized matrix-block case; each family has its own source and evidence
 boundary in [Usage](usage.md).
 
+## Learn the workflow
+
+Our companion [Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
+provides introductory examples and explanations in Chinese:
+
+| Topic | Tutorial |
+| --- | --- |
+| Kernel, Host, emulation and hardware build overview | [Overall workflow](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/overall) |
+| Replicating kernels and connecting multiple kernel types | [Multi-kernel examples](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/multi-kernels) |
+| Application-side control and runtime calls | [Host programming](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/host) |
+| Build targets and dependency rules | [Makefile walkthrough](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/Makefile) |
+
+Use the tutorial to learn the flow, then use this page and the selected
+CoWave recipe for reproduction. Its installation examples reference Ubuntu
+18.04 and Vitis 2020.2; CoWave's archived measurements use the reference stack
+below. The tutorial is a learning resource, not a build dependency.
+
 ## 1. Reference stack
 
 The released measurements were produced with the following compatible stack:

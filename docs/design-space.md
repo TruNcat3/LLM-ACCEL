@@ -197,10 +197,18 @@ The source-defined numeric boundaries are:
 | Streaming split | `fm_t ap_fixed<16,8>`, `wt_linear_t ap_fixed<16,4>`, `fm_accum_t ap_fixed<32,16>`, internal `ap_fixed<48,24>`; `hls::recip` receives float conversion | Fixed-point packet storage with a mixed helper path; do not merge its numbers with Fix16 resident claims |
 | Quantized matrix blocks | W4A4 signed 4-bit operands and W8A8 signed 8-bit operands, with source-defined integer accumulators and output widths | Isolated CSim/RTL CoSim/HLS probes; scale fields are metadata and full-layer integration is open |
 
-The quantized candidates are not the latest complete model implementation. The
-public case documents only the isolated kernels and four-CU planning sums;
-full-layer W4/W8 controller integration remains development work pending
-validated public evidence.
+The public quantized source case contains isolated kernels and CU planning
+tools. Separately, the [full-layer development study](quantized-layer-progress.md)
+now provides a matched W4A4 comparison of Baseline, Attention, block pipeline
+and Integrated decode. It tests controller-owned scheduling and KV state with
+four compute CUs. Its trace analysis and numerical evidence are published;
+the corresponding full-layer hardware source release remains pending.
+
+This comparison distinguishes improving one service from improving the whole
+layer. Attention packing/prefetch, projection overlap and decode row reuse
+address different dependencies. Subsequent experiments vary AXI outstanding
+requests, SiLU/RMS lanes and Attention wave overlap; their completed component
+results do not yet establish the gain of the combined full-layer design.
 
 ## 12. Evaluation principles
 

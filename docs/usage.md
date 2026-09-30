@@ -144,6 +144,17 @@ evidence. They are not connected to the Fix16 controller, HBM scheduler, or a
 full-model runtime; do not combine their resource estimates with resident
 performance claims.
 
+To reanalyze the completed quantized full-layer development comparison using
+only the archived inputs and Python standard library:
+
+```bash
+bash results/quantized-layer-w4-20260930/verify.sh
+```
+
+This rebuilds metrics and numerical comparisons from saved traces and dumps.
+It does not launch or rebuild the full-layer accelerator; see the
+[progress report](quantized-layer-progress.md) for its source-release boundary.
+
 ## Evidence and historical releases
 
 Each result package records its source snapshot, generated-artifact identity,

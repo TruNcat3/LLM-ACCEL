@@ -120,6 +120,7 @@ help:
 	@echo "  make test_publication_tree"
 	@echo "  make test_publication_release  # all non-simulator release gates"
 	@echo "  make verify_result_checksums"
+	@echo "  make verify_quantized_layer_evidence  # reanalyze the archived W4 comparison"
 	@echo "  make regenerate_root_checksums  # after git add -A"
 	@echo "  make verify_q214_pd_release"
 	@echo "  make verify_q214_resident_release"
@@ -227,6 +228,10 @@ test_host_task_program_trace_contract:
 test_publication_tree:
 	tests/test_publication_tree.sh
 
+.PHONY: verify_quantized_layer_evidence
+verify_quantized_layer_evidence:
+	bash results/quantized-layer-w4-20260930/verify.sh
+
 test_publication_release: test_environment_contract \
 		test_coarse_task_program \
 		test_host_task_program_trace_contract \
@@ -243,6 +248,7 @@ test_publication_release: test_environment_contract \
 		test_quantized_cu_planner \
 		verify_q214_pd_release \
 		verify_q214_resident_release \
+		verify_quantized_layer_evidence \
 		test_publication_tree
 	@echo "PUBLICATION RELEASE GATES PASS"
 

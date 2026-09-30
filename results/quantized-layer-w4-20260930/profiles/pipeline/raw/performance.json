@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "precision": "w4",
+  "evidence": "hw_emu_rtl_handshakes",
+  "model_shape": {
+    "hidden": 2048,
+    "ffn": 11008,
+    "q_heads": 16,
+    "kv_heads": 2,
+    "head_dim": 128,
+    "measured_layers": 1,
+    "sequence_batch": 1
+  },
+  "prefill": 66,
+  "block_size": 8,
+  "weight_mode": "random",
+  "numerical_validation": "c_model_hidden_and_kv",
+  "host_intermediate_compute": false,
+  "actual_clock_period_ps": 3334.0,
+  "actual_simulation_mhz": 299.9400119976005,
+  "target_mhz": 200.0,
+  "logical_peak_gmac_s": 819.2,
+  "phases": {
+    "prefill": {
+      "query_rows": 66,
+      "causal_attention_pairs": 2211,
+      "start_ps": 5112689.0,
+      "end_ps": 8888245627.0,
+      "cycles": 2664407.0,
+      "controller_cycles": 2664407.0,
+      "modeled_layer_ms": 13.322035,
+      "useful_mac": 5095698432,
+      "useful_gmac_s": 382.50150461247097,
+      "modeled_useful_mac_efficiency_percent": 46.692078199764524,
+      "projected_36_layer_ms": 479.59326,
+      "cu_active_cycles_including_waits": {
+        "ctrl": 2664407.0,
+        "cu0": 2662788.0,
+        "cu1": 2662764.0,
+        "cu2": 2662159.0,
+        "cu3": 2662231.0
+      }
+    },
+    "decode": {
+      "query_rows": 1,
+      "causal_attention_pairs": 67,
+      "start_ps": 8893306639.0,
+      "end_ps": 9601408231.0,
+      "cycles": 212388.0,
+      "controller_cycles": 212388.0,
+      "modeled_layer_ms": 1.06194,
+      "useful_mac": 77344768,
+      "useful_gmac_s": 72.83346328417801,
+      "modeled_useful_mac_efficiency_percent": 8.890803623556886,
+      "projected_36_layer_ms": 38.22984,
+      "cu_active_cycles_including_waits": {
+        "ctrl": 212388.0,
+        "cu0": 211092.0,
+        "cu1": 211117.0,
+        "cu2": 210155.0,
+        "cu3": 210132.0
+      }
+    }
+  },
+  "p_plus_d_cycles_excluding_host_gap": 2876795.0,
+  "p_plus_d_useful_mac": 5173043200,
+  "p_plus_d_modeled_efficiency_percent": 43.90128597971006,
+  "projected_36_layer_decode_tokens_s": 26.157577431660712,
+  "projection_scope": "linear decoder-layer scaling; excludes embedding, final norm, LM head, sampling and PCIe; only sampled context",
+  "limitations": "synthetic weights; no trained-checkpoint accuracy, physical-board timing, or PE occupancy claim; emulated memory/interconnect",
+  "trace_sha256": "40068054eb13677e6cd682ae81580073acd7c8211506f23956c936c5dfcc1b73",
+  "host_log_sha256": "b29ed5a00baede85c69346b985811cdd1ad9123cb9ecfa73284182264a120ca6",
+  "host_sha256": "f55ca0c39dd121ba31f97b6724e3465371960ecfdaf22a46ca4b969759a02abe",
+  "xclbin_sha256": "6277dc3cf8c0e391d9553ceced6aa96d42a3abf37cf79c46c872b7ebb8c78320",
+  "emconfig_sha256": "696c863021ad86e4740c840916408d9fdae97a9bbaadaefe1e43a1f0f79116ac",
+  "numerical_evidence": {
+    "schema": 1,
+    "numerical_validation": "PASS",
+    "reference_kind": "production_controller_and_unified_compute_C_model",
+    "scope": "P hidden, D hidden and retained K/V; post-inference; independent arithmetic and RTL timing gates are separate",
+    "metadata": {
+      "bits": 4,
+      "hidden": 2048,
+      "ffn": 11008,
+      "q_heads": 16,
+      "kv_heads": 2,
+      "head_dim": 128,
+      "prefill": 66,
+      "block": 8,
+      "weights": "random",
+      "fixture": "deterministic_v1",
+      "layer": 0
+    },
+    "tolerance_raw": 0,
+    "tensors": {
+      "prefill_hidden": {
+        "checked_values": 135168,
+        "max_raw_error": 0,
+        "different_values": 0,
+        "outside_tolerance": 0,
+        "first_mismatches": []
+      },
+      "decode_hidden": {
+        "checked_values": 2048,
+        "max_raw_error": 0,
+        "different_values": 0,
+        "outside_tolerance": 0,
+        "first_mismatches": []
+      },
+      "key_cache": {
+        "checked_values": 17152,
+        "max_raw_error": 0,
+        "different_values": 0,
+        "outside_tolerance": 0,
+        "first_mismatches": []
+      },
+      "value_cache": {
+        "checked_values": 17152,
+        "max_raw_error": 0,
+        "different_values": 0,
+        "outside_tolerance": 0,
+        "first_mismatches": []
+      }
+    },
+    "checked_values": 171520,
+    "max_raw_error": 0,
+    "reference_sha256": "7642e2f188910cecaecafe5540d19464803db22932351fc92741d0beb236738b",
+    "actual_sha256": "7642e2f188910cecaecafe5540d19464803db22932351fc92741d0beb236738b"
+  }
+}

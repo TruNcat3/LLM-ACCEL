@@ -20,6 +20,11 @@ test workloads are separate concepts.
 
 ## Find and reproduce an implementation
 
+For an introduction to the tools, start with our
+[Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
+(Chinese), then follow [CoWave's environment setup](environment.md) for the
+2022.2 reproduction configuration.
+
 | Family / purpose | Source orientation | Execution entry |
 | --- | --- | --- |
 | Fix16 resident | [Root source map](repository-map.md#resident-source) | [Resident reproduction](reproduction-resident.md) |
@@ -39,6 +44,11 @@ The [experimental report](experiments.md) explains which measurements can be
 compared and links to detailed tables. Historical and diagnostic data remain
 available in the [detailed experimental record](experiment-details.md) and
 [runtime history](coarse-task-runtime-history.md).
+
+The [quantized full-layer progress report](quantized-layer-progress.md)
+separates the completed W4A4 comparison from ongoing W8A8, AXI, SiLU and RMS
+experiments. Its archived measurements can be reanalyzed without Vitis;
+promotion of the full-layer hardware source is a separate release step.
 
 A workload needs explicit prompt tokens, active query rows, sequence batch,
 layers and KV context. HW-Emu cycles differ from simulator wall time; modeled

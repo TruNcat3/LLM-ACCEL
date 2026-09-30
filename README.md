@@ -2,6 +2,11 @@
 
 **Controller-Orchestrated Streaming for LLM Acceleration.**
 
+Our [Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
+introduces accelerator builds, multi-kernel designs, Host code and Makefiles
+with worked examples (in Chinese). For CoWave's Vitis/XRT 2022.2 reference
+configuration, continue with [environment setup](docs/environment.md).
+
 [Architecture](docs/architecture.md) | [Implementation map](docs/implementations.md) |
 [Design space](docs/design-space.md) | [Experiments](docs/experiments.md) |
 [Setup](docs/environment.md) | [Reproduction](docs/usage.md) |
@@ -75,9 +80,10 @@ diagnostic workloads and historical names.
 | **Quantized matrix blocks** | [cases/quantized-block](cases/quantized-block/) | W4A4/W8A8 matrix kernels; arithmetic/RTL tests and HLS resource studies |
 
 Implementation profiles, old Case/R1/D1/Q1 labels and source entry points are
-mapped in the [catalog](docs/implementations.md). Quantized full-layer work in
-the development workspace has not yet been promoted into this public source
-and evidence set.
+mapped in the [catalog](docs/implementations.md). The
+[quantized full-layer progress report](docs/quantized-layer-progress.md)
+adds completed W4A4 development measurements with replayable trace analysis;
+the corresponding full-layer hardware source release is still pending.
 
 ## Key results
 
@@ -101,6 +107,13 @@ The [experiment report](docs/experiments.md) separates current results,
 historical baselines, component studies and unresolved numerical questions.
 The [evidence index](results/README.md) maps all archived packages to their
 implementation and validation scope.
+
+The completed **W4A4 full-layer development comparison** reduces P66+D1
+cycles by **14.28%** from its matched baseline; the Integrated
+configuration reaches **47.00% Prefill useful-MAC efficiency**. This is a
+single-layer HW-Emu measurement with four compute CUs. See the
+[comparison and scope](docs/quantized-layer-progress.md) before comparing it
+with the Fix16 workloads above.
 
 ## Reproduce the core validation
 
@@ -130,10 +143,12 @@ is not a quick setup test.
 
 | Need | Start here |
 | --- | --- |
+| Learn the Vitis build and runtime flow | [Companion tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow), then [CoWave setup](docs/environment.md) |
 | Understand design choices and alternatives | [Architecture](docs/architecture.md), [design space](docs/design-space.md) |
 | Locate implementation files and configuration owners | [Repository map](docs/repository-map.md), [implementation catalog](docs/implementations.md) |
 | Build and test a selected family | [Environment](docs/environment.md), [usage](docs/usage.md), [case index](cases/README.md) |
 | Interpret a result or compare variants | [Experiments](docs/experiments.md), [immutable evidence](results/README.md) |
+| Follow quantized controller and scheduling work | [Full-layer progress](docs/quantized-layer-progress.md) |
 | Promote a development change into this repository | [Development-to-release workflow](docs/release-workflow.md) |
 
 The [documentation index](docs/README.md) provides the complete reading order.

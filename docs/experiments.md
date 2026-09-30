@@ -11,7 +11,7 @@ readback, HLS estimate, or isolated kernel into a whole-system release.
 
 ## Evidence taxonomy
 
-The public repository has three hardware implementation families:
+The public repository has three executable hardware source families:
 
 | Family | Source boundary | Public evidence status |
 | --- | --- | --- |
@@ -68,6 +68,24 @@ The streaming-split family is documented in
 Its projected full-layer values are analytical and must not be mixed with the
 measured resident packages above.
 
+## Quantized full-layer development measurement
+
+The [W4A4 full-layer package](../results/quantized-layer-w4-20260930/) adds a
+completed, matched P66+D1 comparison across Baseline, Attention, block pipeline
+and Integrated decode. All four runs check 171,520 hidden/KV values exactly
+against the corresponding production C model. Integrated reduces the sum of
+Prefill and Decode cycles from 3,326,289 to 2,851,423, a 14.28% reduction.
+Its modeled Prefill/Decode efficiencies are 46.998% / 9.239%.
+
+These are one-layer, one-sequence measurements with four W4 compute CUs,
+deterministic random weights and a 4,096-MAC/cycle denominator. Raw RTL
+transitions, complete numerical dumps and analysis tools are published; the
+full-layer hardware source/build closure remains a development snapshot.
+It is not the executable quantized matrix-block case or a full-model hardware
+release. The [progress report](quantized-layer-progress.md) maps configurations,
+defines the timing boundary and separates ongoing W8/AXI/SiLU/RMS work from
+completed results.
+
 ## Measurement conventions
 
 The following terms are deliberately explicit because historical reports use
@@ -85,7 +103,9 @@ short local labels:
   target. A 200-MHz table is therefore a modeled target-equivalent latency,
   not a routed clock measurement.
 - Modeled useful-MAC efficiency is shape-counted useful MAC divided by the
-  measured modeled interval and the declared two-CU peak of 1,024 MAC/cycle.
+  measured modeled interval and the declared peak: 1,024 MAC/cycle for the
+  two-compute-CU Fix16 resident packages, and 4,096 MAC/cycle for the
+  four-compute-CU W4 full-layer development comparison.
   Padding, vector work, Host operations, and CPU-oracle work are not silently
   added to the numerator; this metric is not physical utilization or power.
 - Operator diagnostics and production resident runs have different Host

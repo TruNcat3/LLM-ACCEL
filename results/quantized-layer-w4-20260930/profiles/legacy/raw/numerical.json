@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "numerical_validation": "PASS",
+  "reference_kind": "production_controller_and_unified_compute_C_model",
+  "scope": "P hidden, D hidden and retained K/V; post-inference; independent arithmetic and RTL timing gates are separate",
+  "metadata": {
+    "bits": 4,
+    "hidden": 2048,
+    "ffn": 11008,
+    "q_heads": 16,
+    "kv_heads": 2,
+    "head_dim": 128,
+    "prefill": 66,
+    "block": 8,
+    "weights": "random",
+    "fixture": "deterministic_v1",
+    "layer": 0
+  },
+  "tolerance_raw": 0,
+  "tensors": {
+    "prefill_hidden": {
+      "checked_values": 135168,
+      "max_raw_error": 0,
+      "different_values": 0,
+      "outside_tolerance": 0,
+      "first_mismatches": []
+    },
+    "decode_hidden": {
+      "checked_values": 2048,
+      "max_raw_error": 0,
+      "different_values": 0,
+      "outside_tolerance": 0,
+      "first_mismatches": []
+    },
+    "key_cache": {
+      "checked_values": 17152,
+      "max_raw_error": 0,
+      "different_values": 0,
+      "outside_tolerance": 0,
+      "first_mismatches": []
+    },
+    "value_cache": {
+      "checked_values": 17152,
+      "max_raw_error": 0,
+      "different_values": 0,
+      "outside_tolerance": 0,
+      "first_mismatches": []
+    }
+  },
+  "checked_values": 171520,
+  "max_raw_error": 0,
+  "reference_sha256": "7642e2f188910cecaecafe5540d19464803db22932351fc92741d0beb236738b",
+  "actual_sha256": "7642e2f188910cecaecafe5540d19464803db22932351fc92741d0beb236738b"
+}

@@ -101,12 +101,13 @@ The public package supports the following claims:
 | HLS CSynth | Local II, accumulator/resource, and timing estimates | Post-route Fmax, device utilization, or throughput |
 | CU planner | Resource-capacity and replication arithmetic | A complete multi-kernel link |
 
-There is no public HW-Emu run, physical-board result, scale application,
-checkpoint accuracy result, or full-model INT4/INT8 claim. Full-layer W4/W8
-controller integration remains development work pending validated public
-evidence. The current public source boundary is the two kernels and headers in
-this directory; see the [implementation map](../../docs/implementations.md)
-for the family status.
+This matrix-block case has no full-layer HW-Emu or physical-board result,
+scale application, checkpoint accuracy result, or full-model INT4/INT8 claim.
+The separate [full-layer development study](../../docs/quantized-layer-progress.md)
+publishes W4A4 controller/compute measurements and replayable analysis; that
+system's hardware source/build closure is not contained in this case. The
+current source boundary here remains the two kernels and headers in this
+directory; see the [implementation map](../../docs/implementations.md).
 
 ## Source map
 

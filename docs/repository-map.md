@@ -56,6 +56,12 @@ A case-local include or source file is not automatically part of the resident
 binary. Use the actual build script and source manifest to determine that
 closure.
 
+The [quantized full-layer development archive](../results/quantized-layer-w4-20260930/)
+contains measurement inputs and analysis tools. Its hardware source identities
+refer to the frozen development snapshot; they do not make the root or
+matrix-block case a source closure for rebuilding that system. See the
+[progress report](quantized-layer-progress.md) for the release boundary.
+
 ## Configuration ownership
 
 | Setting | Authority |

@@ -101,6 +101,11 @@ development work directory.
 Development includes W4A4/W8A8 full-layer controller profiles such as Baseline,
 Attention, Attention + pipeline and Integrated decode. They are **not** the
 published quantized matrix-block case and cannot inherit its validation status.
+The [September 30 progress report](quantized-layer-progress.md) publishes the
+completed W4A4 four-profile measurement and its analysis inputs. The archive
+preserves hardware source identities; it does not include a full-layer hardware
+source/build closure or add a fourth executable public family. These development
+profiles use four compute CUs, separately from the Fix16 resident CU topology.
 The [release workflow](release-workflow.md) defines how source, reproduction
 tools and evidence move together into the appropriate public family.
 

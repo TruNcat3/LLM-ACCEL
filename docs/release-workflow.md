@@ -43,6 +43,13 @@ source families. In particular, development W4A4/W8A8 full-layer controllers
 cannot be published as if the existing quantized block case already contained
 and validated them.
 
+An evidence-only development update may publish completed measurements before
+hardware source promotion, provided it explicitly identifies the missing
+source/build closure, retains the frozen source identities, and supplies the
+inputs and tools needed to reanalyze the reported result. Such an update does
+not add an executable implementation family or a hardware-reproduction claim.
+The [W4 full-layer comparison](quantized-layer-progress.md) follows this scope.
+
 ## Preserve and install evidence
 
 Result directories are immutable. A corrected interpretation may update the

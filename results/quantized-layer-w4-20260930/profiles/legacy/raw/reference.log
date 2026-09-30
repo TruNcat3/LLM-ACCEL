@@ -1,0 +1,6 @@
+C_MODEL_PHASE_START bits=4 decode=0 hidden=2048 prefill=66
+C_MODEL_PHASE_COMPLETE bits=4 decode=0 tasks=639,639,598,598
+C_MODEL_PHASE_START bits=4 decode=1 hidden=2048 prefill=66
+C_MODEL_PHASE_COMPLETE bits=4 decode=1 tasks=65,63,57,57
+C_MODEL_REFERENCE_COMPLETE real_unified_compute=1 seeded_outputs=0 rtl_validation_pending=1
+INFO [HLS SIM]: The maximum depth reached by any hls::stream() instance in the design is 45056
