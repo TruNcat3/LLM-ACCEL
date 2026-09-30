@@ -123,6 +123,9 @@ Vitis HLS and XRT 2022.2; the Alveo U50 is the evaluation platform. No physical
 card is needed to inspect results or run HLS/RTL hardware emulation.
 
 ```bash
+git clone https://github.com/TruNcat3/LLM-ACCEL.git
+cd LLM-ACCEL
+
 # Inspect the public tree and all archived result checksums.
 scripts/check_environment.sh publication
 make test_publication_tree
