@@ -11,6 +11,8 @@ evidence stages.
 
 Start with [Summary and example](summary-example.md) for a compact overview
 and a publication-only validation example.
+Use the [design-point generator](usage.md#design-point-generator) to select a
+configuration and obtain its source/evidence links and build commands.
 
 ## Overview
 

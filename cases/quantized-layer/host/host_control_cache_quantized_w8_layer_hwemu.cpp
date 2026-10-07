@@ -146,7 +146,7 @@ int main(int argc, const char* argv[]) {
         QUANTIZED_W8_RESIDENT_TOKEN_ROWS);
     if (xclbin.empty() || (weight_mode != "zero" && weight_mode != "random")) {
         std::cerr << "usage: " << argv[0]
-                  << " --xclbin <image> [--prefill 66] [--block-size 8]"
+                  << " --xclbin <image> [--prefill 66] [--block-size 4]"
                      " [--weights zero|random] [--dump-output path]\n";
         return EXIT_FAILURE;
     }
@@ -401,9 +401,10 @@ int main(int argc, const char* argv[]) {
     }
     if (!prefill_ok || !decode_ok || !kv_ok) return EXIT_FAILURE;
 
-    std::cout << "Q8 FULL-LAYER HW EMU PASS prefill=" << prefill
+    std::cout << "Q8 FULL-LAYER HW EMU EXECUTION PASS prefill=" << prefill
               << " decode=1 block_size=" << block_size
               << " weight_mode=" << weight_mode
+              << " numerical_validation=" << (weight_mode == "zero" ? "PASS" : "NOT_RUN")
               << " controller_owned_kv=1 host_intermediate_compute=0"
               << " prefill_checksum=" << prefill_checksum
               << " decode_checksum=" << decode_checksum << "\n";

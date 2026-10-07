@@ -23,11 +23,11 @@ kernel/quantized_decode_rows.cpp	snapshot-source; original-bytes-preserved
 kernel/quantized_layer_integration_closed_loop.cpp	snapshot-source; original-bytes-preserved
 kernel/quantized_layer_integration_w8_closed_loop.cpp	snapshot-source; original-bytes-preserved
 include/	snapshot-source; complete transitive header closure
-host/	snapshot-source; XRT Host closure
+host/	snapshot-source with execution/numerical status messages clarified; XRT computation unchanged
 common/include/	snapshot-source; Host utility closure
 tests/	snapshot-source; native and CoSim test closure
 tcl/	snapshot-source with portable output-default edits only
-scripts/quantized_layer_profiles.sh	snapshot-source; profile helper bytes preserved
+scripts/quantized_layer_profiles.sh	profile CFLAGS preserved; source, XO, link and Host identity checks added
 scripts/build_vitis_quantized_w4_layer.sh	portable wrapper; kernel and profile ABI unchanged
 scripts/build_vitis_quantized_w8_layer.sh	portable wrapper; kernel and profile ABI unchanged
 scripts/run_vitis_hls.sh	portable launcher; toolchain selected by environment

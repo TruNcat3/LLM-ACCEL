@@ -75,7 +75,11 @@ def verify_host(path, precision, prefill, block):
     # Archived failed-wrapper runs may be inspected diagnostically, but only
     # a clean worker exit is acceptable for new performance evidence.
     require(status[1] == "0", "Host worker did not exit successfully")
-    require(f"Q{precision[1]} FULL-LAYER HW EMU PASS prefill={prefill} decode=1 block_size={block}" in log,
+    markers = (f"Q{precision[1]} FULL-LAYER HW EMU {status} prefill={prefill} decode=1 block_size={block}"
+               for status in ("EXECUTION PASS", "PASS"))
+    # Legacy archives used PASS for execution completion as well. Numerical
+    # acceptance still requires the separate reference/output comparison.
+    require(any(marker in log for marker in markers),
             "Host workload or completion marker does not match")
     expected = {"prefill": (prefill, 0, 0, math.ceil(prefill / block)),
                 "decode": (1, prefill, prefill, 1)}

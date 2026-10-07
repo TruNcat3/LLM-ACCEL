@@ -35,4 +35,43 @@ for mode in publication hls hw-emu board; do
     fi
 done
 
+python3 - <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path.cwd()
+with tempfile.TemporaryDirectory(prefix="cowave-env-") as directory:
+    scratch = Path(directory)
+    good, bad = scratch / "good.sh", scratch / "bad.sh"
+    good.write_text("return 0\n")
+    bad.write_text("return 42\n")
+    platform = scratch / "custom.xpfm"
+    platform.write_text("fake platform for environment test\n")
+    env = dict(os.environ, XILINX_XRT=str(scratch / "xrt"),
+               XPLATFORM=str(platform), LLM_ACCEL_ENV_QUIET="1")
+    for settings, expected in ((good, 0), (bad, 42), (scratch / "missing.sh", 66)):
+        for conditional in (False, True):
+            command = ('if source scripts/setup_environment.sh; then rc=0; else rc=$?; fi'
+                       if conditional else 'source scripts/setup_environment.sh; rc=$?')
+            command += '; declare -F llm_accel_setup_environment >/dev/null && exit 99; exit "$rc"'
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-c", command],
+                                    env=dict(env, VITIS_ENV_SCRIPT=str(settings)), capture_output=True)
+            assert result.returncode == expected, (settings, conditional, result.returncode, result.stderr)
+    result = subprocess.run(["bash", "-c", "source scripts/setup_environment.sh"],
+                            env=dict(env, VITIS_ENV_SCRIPT=str(good), XPLATFORM=str(scratch / "absent.xpfm")),
+                            capture_output=True)
+    assert result.returncode == 66, result.stderr
+    # Query make's resolved variable without executing any recipe/toolchain.
+    query = '$(info REVIEW_PLATFORM=$(XPLATFORM))\n.PHONY: review_platform\nreview_platform:;@:\n'
+    for command_line in ([], ["XPLATFORM=" + str(platform)]):
+        result = subprocess.run(["make", "--no-print-directory", "-f", "Makefile", "-f", "-",
+                                 "review_platform", *command_line], input=query, text=True,
+                                env=dict(env, XPLATFORM=str(platform)), capture_output=True)
+        assert result.returncode == 0, result.stderr
+        assert "REVIEW_PLATFORM=" + str(platform) in result.stdout, result.stdout
+print("ENVIRONMENT ERROR PROPAGATION AND PLATFORM OVERRIDE PASS")
+PY
+
 echo "ENVIRONMENT CONTRACT PASS modes=publication,hls,hw-emu,board private_paths=0"

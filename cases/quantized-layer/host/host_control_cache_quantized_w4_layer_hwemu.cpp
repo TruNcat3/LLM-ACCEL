@@ -401,9 +401,10 @@ int main(int argc, const char* argv[]) {
     }
     if (!prefill_ok || !decode_ok || !kv_ok) return EXIT_FAILURE;
 
-    std::cout << "Q4 FULL-LAYER HW EMU PASS prefill=" << prefill
+    std::cout << "Q4 FULL-LAYER HW EMU EXECUTION PASS prefill=" << prefill
               << " decode=1 block_size=" << block_size
               << " weight_mode=" << weight_mode
+              << " numerical_validation=" << (weight_mode == "zero" ? "PASS" : "NOT_RUN")
               << " controller_owned_kv=1 host_intermediate_compute=0"
               << " prefill_checksum=" << prefill_checksum
               << " decode_checksum=" << decode_checksum << "\n";

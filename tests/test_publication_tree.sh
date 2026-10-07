@@ -274,6 +274,7 @@ for archive in "${result_archives[@]}"; do
 done
 
 scripts/verify_result_checksums.sh >/dev/null
+python3 scripts/verify_tracked_evidence.py
 tests/test_e2e_performance_semantics.sh >/dev/null
 tests/test_checkpoint_tolerance_contract.sh >/dev/null
 

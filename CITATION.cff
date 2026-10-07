@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use CoWave (LLM-ACCEL) in academic work, please cite Teng Wang and this repository."
 title: "CoWave: Controller-Orchestrated Streaming for LLM Acceleration"
 type: software
-version: 0.11.0
+version: 0.11.1
 date-released: 2026-10-07
 authors:
   - family-names: "Wang"

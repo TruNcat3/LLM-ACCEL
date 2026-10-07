@@ -12,6 +12,10 @@ source scripts/quantized_layer_profiles.sh
 quantized_layer_profile_apply w8
 
 env_script="${VITIS_ENV_SCRIPT:-}"
+if [[ -n "${env_script}" ]]; then
+    [[ -r "${env_script}" ]] || { echo "Missing Vitis environment: ${env_script}" >&2; exit 66; }
+    source "${env_script}" >/dev/null 2>&1
+fi
 device="${DEVICE:-xilinx_u50_gen3x16_xdma_5_202210_1}"
 platform="${XPLATFORM:-}"
 target="${TARGET:-hw_emu}"
@@ -40,11 +44,13 @@ host_exe="${build_dir}/host_control_cache_quantized_w8_layer_hwemu.exe"
 config_dir="${COWAVE_QUANTIZED_LAYER_CONFIG_DIR:-${repo_root}/config}"
 conn_cfg="${VITIS_QUANTIZED_W8_LAYER_CONN_CFG:-${config_dir}/cowave-int8-4-4-128.cfg}"
 
+export QUANTIZED_LAYER_ARTIFACT_TARGET="${target}"
+export QUANTIZED_LAYER_ARTIFACT_DEVICE="${device}"
+export QUANTIZED_LAYER_ARTIFACT_FREQUENCY="${frequency}"
+export QUANTIZED_LAYER_ARTIFACT_PLATFORM="${platform}"
+export QUANTIZED_LAYER_ARTIFACT_CONN_CFG="${conn_cfg}"
+
 [[ "${target}" == hw_emu || "${target}" == hw ]] || { echo "TARGET must be hw_emu or hw" >&2; exit 2; }
-if [[ -n "${env_script}" ]]; then
-    [[ -r "${env_script}" ]] || { echo "Missing Vitis environment: ${env_script}" >&2; exit 66; }
-    source "${env_script}" >/dev/null 2>&1
-fi
 hls_include="${VITIS_HLS_INCLUDE:-}"
 if [[ -z "${hls_include}" && -n "${XILINX_HLS:-}" ]]; then
     hls_include="${XILINX_HLS}/include"
@@ -59,8 +65,10 @@ fi
 [[ "${synth_only}" == 0 || "${synth_only}" == 1 ]] || {
     echo "QUANTIZED_LAYER_SYNTH_ONLY must be 0 or 1" >&2; exit 2;
 }
-quantized_layer_profile_check_xo_reuse w8 "${controller_xo}"
-quantized_layer_profile_check_xo_reuse w8 "${compute_xo}"
+if [[ "${phase}" == link || "${phase}" == all || "${phase}" == run ]]; then
+    quantized_layer_profile_check_xo_reuse w8 "${controller_xo}"
+    quantized_layer_profile_check_xo_reuse w8 "${compute_xo}"
+fi
 printf 'profile=%s attention_variant=%s synth_only=%s\n' \
     "${profile}" "${attention_variant}" "${synth_only}"
 printf 'profile_source_sha256=%s profile_cflags_sha256=%s\n' \
@@ -129,6 +137,8 @@ link_xclbin() {
         --vivado.synth.jobs "${threads}" --vivado.impl.jobs "${threads}" \
         --temp_dir "${temp_dir}" --report_dir "${report_dir}" \
         -o "${xclbin}" "${controller_xo}" "${compute_xo}"
+    quantized_layer_profile_write_xclbin_manifest w8 "${xclbin}" \
+        "${controller_xo}" "${compute_xo}" "${platform}" "${conn_cfg}"
 }
 
 build_host() {
@@ -151,6 +161,7 @@ build_host() {
         -o "${host_exe}" common/include/xcl2.cpp \
         host/host_control_cache_quantized_w8_layer_hwemu.cpp \
         -L"${XILINX_XRT}/lib" -lOpenCL -lpthread -lrt -ldl
+    quantized_layer_profile_write_host_manifest w8 "${host_exe}"
 }
 
 build_emconfig() {
@@ -163,6 +174,9 @@ build_emconfig() {
 
 run_hwemu() {
     [[ "${target}" == hw_emu ]] || { echo "run supports TARGET=hw_emu only" >&2; exit 2; }
+    quantized_layer_profile_check_xclbin_reuse w8 "${xclbin}" \
+        "${controller_xo}" "${compute_xo}" "${platform}" "${conn_cfg}"
+    quantized_layer_profile_check_host_reuse w8 "${host_exe}"
     for input in "${xclbin}" "${host_exe}" "${build_dir}/emconfig.json"; do
         [[ -s "${input}" ]] || { echo "Missing run input: ${input}" >&2; exit 66; }
     done

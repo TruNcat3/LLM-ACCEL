@@ -89,6 +89,9 @@ source scripts/setup_environment.sh
 
 The helper must be sourced. `XPLATFORM` is required for Vitis link and
 `sw_emu`; HLS-only quantized checks still use the same tool setup.
+The root Makefile preserves a nonempty exported `XPLATFORM`; automatic
+detection is used only when no platform path is supplied. A setup failure
+returns a nonzero status, including when `source` is used in an `if` condition.
 
 ## Generated data
 

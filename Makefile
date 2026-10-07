@@ -23,14 +23,18 @@ XILINX_HLS ?= $(DETECTED_HLS)
 DEVICE ?= xilinx_u50_gen3x16_xdma_5_202210_1
 
 CUR_DIR := $(abspath .)
-XPLATFORM := $(firstword \
+# Preserve explicit environment/command-line selections. Empty selections
+# request autodetection, including an explicitly empty command-line value.
+ifeq ($(strip $(XPLATFORM)),)
+override XPLATFORM := $(firstword \
 	$(wildcard $(DEVICE)) \
 	$(wildcard $(XILINX_VITIS)/platforms/$(DEVICE)/$(DEVICE).xpfm) \
 	$(wildcard /opt/xilinx/platforms/$(DEVICE)/$(DEVICE).xpfm))
 
 ifeq ($(XPLATFORM),)
 $(warning $(DEVICE) was not found in the default paths; v++ will use the device name directly)
-XPLATFORM := $(DEVICE)
+override XPLATFORM := $(DEVICE)
+endif
 endif
 
 XDEVICE := $(notdir $(basename $(XPLATFORM)))
@@ -234,7 +238,7 @@ test_publication_tree:
 verify_quantized_layer_evidence:
 	bash results/quantized-layer-w4-20260930/verify.sh
 
-test_publication_release: test_design_catalog test_quantized_layer_source verify_quantized_current_evidence test_environment_contract \
+test_publication_release: test_publication_tracking test_quantized_artifact_identity test_quantized_execution_status test_design_catalog test_quantized_layer_source verify_quantized_current_evidence test_environment_contract \
 		test_coarse_task_program \
 		test_host_task_program_trace_contract \
 		test_qwen3b_e2e_plan \
@@ -253,6 +257,22 @@ test_publication_release: test_design_catalog test_quantized_layer_source verify
 		verify_quantized_layer_evidence \
 		test_publication_tree
 	@echo "PUBLICATION RELEASE GATES PASS"
+
+.PHONY: test_publication_tracking test_publication_snapshot
+test_publication_tracking:
+	python3 tests/test_publication_tracking.py
+
+# Run separately to avoid recursively exporting the temporary snapshot.
+test_publication_snapshot:
+	scripts/verify_publication_snapshot.sh $(SNAPSHOT_ARGS)
+
+.PHONY: test_quantized_artifact_identity
+test_quantized_artifact_identity:
+	python3 tests/test_quantized_artifact_identity.py
+
+.PHONY: test_quantized_execution_status
+test_quantized_execution_status:
+	python3 tests/test_quantized_execution_status.py
 
 .PHONY: test_design_catalog
 test_design_catalog:

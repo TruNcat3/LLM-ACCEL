@@ -4,23 +4,122 @@
 # core, and C reference builds.  This file is sourceable; it deliberately
 # does not change the caller's working directory or source a toolchain.
 
+QUANTIZED_LAYER_PROFILE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+QUANTIZED_LAYER_CASE_ROOT="$(cd "${QUANTIZED_LAYER_PROFILE_SCRIPT_DIR}/.." && pwd -P)"
+
+quantized_layer_profile_case_root() {
+    printf '%s\n' "${QUANTIZED_LAYER_CASE_ROOT}"
+}
+
+quantized_layer_profile_file_sha256() {
+    local path="$1"
+    if [[ -s "${path}" ]]; then
+        sha256sum "${path}" | awk '{print $1}'
+    else
+        printf 'MISSING\n'
+    fi
+}
+
+# Return the source paths which can affect an HLS or Host artifact.  Keep the
+# list explicit at directory boundaries so generated .build files can never
+# become part of an artifact identity.  The full tree is intentional: HLS Tcl
+# helpers and headers are transitive inputs even when a top-level translation
+# unit does not include them directly.
+quantized_layer_profile_source_paths() {
+    local precision="${1:-${QUANTIZED_ALIGNMENT_PRECISION:-w4}}"
+    local role="${2:-xo}" root="${QUANTIZED_LAYER_CASE_ROOT}"
+    local host_source
+    [[ "${precision}" == w4 || "${precision}" == w8 ]] || return 2
+    [[ "${role}" == xo || "${role}" == host ]] || return 2
+    (cd "${root}" && find kernel include tcl -type f \
+        \( -name '*.cpp' -o -name '*.hpp' -o -name '*.tcl' \) -print)
+    printf '%s\n' \
+        'Makefile' \
+        'scripts/quantized_layer_profiles.sh' \
+        'scripts/run_vitis_hls.sh' \
+        "scripts/build_vitis_quantized_${precision}_layer.sh"
+    if [[ "${role}" == host ]]; then
+        host_source="host/host_control_cache_quantized_${precision}_layer_hwemu.cpp"
+        (cd "${root}" && find common/include -type f \
+            \( -name '*.cpp' -o -name '*.hpp' \) -print)
+        printf '%s\n' "${host_source}"
+    fi
+}
+
+quantized_layer_profile_source_file_count() {
+    quantized_layer_profile_source_paths "$@" | sort -u | wc -l | awk '{print $1}'
+}
+
+quantized_layer_profile_source_identity() {
+    local precision="${1:-${QUANTIZED_ALIGNMENT_PRECISION:-w4}}"
+    local role="${2:-xo}" root="${QUANTIZED_LAYER_CASE_ROOT}"
+    (
+        set -o pipefail
+        cd "${root}" || exit
+        mapfile -t source_paths < <(quantized_layer_profile_source_paths "${precision}" "${role}" | LC_ALL=C sort -u)
+        [[ ${#source_paths[@]} -gt 0 ]] || exit 2
+        sha256sum -- "${source_paths[@]}" | sha256sum | awk '{print $1}'
+    )
+}
+
+quantized_layer_profile_source_file_records() {
+    local precision="${1:-${QUANTIZED_ALIGNMENT_PRECISION:-w4}}"
+    local role="${2:-xo}" root="${QUANTIZED_LAYER_CASE_ROOT}" rel
+    while IFS= read -r rel; do
+        [[ -n "${rel}" ]] || continue
+        printf 'source_file=%s\t%s\n' "${rel}" \
+            "$(quantized_layer_profile_file_sha256 "${root}/${rel}")"
+    done < <(quantized_layer_profile_source_paths "${precision}" "${role}" | sort -u)
+}
+
+quantized_layer_profile_profile_helper_sha256() {
+    local shell_helper="${QUANTIZED_LAYER_PROFILE_SCRIPT_DIR}/quantized_layer_profiles.sh"
+    local tcl_helper="${QUANTIZED_LAYER_CASE_ROOT}/tcl/quantized_layer_profile.tcl"
+    [[ -r "${shell_helper}" && -r "${tcl_helper}" ]] || return 2
+    {
+        printf 'shell=%s\n' "$(sha256sum "${shell_helper}" | awk '{print $1}')"
+        printf 'tcl=%s\n' "$(sha256sum "${tcl_helper}" | awk '{print $1}')"
+    } | sha256sum | awk '{print $1}'
+}
+
+quantized_layer_profile_build_inputs_sha256() {
+    local precision="${1:-${QUANTIZED_ALIGNMENT_PRECISION:-w4}}"
+    local kind="${2:-xo}" name path
+    [[ "${precision}" == w4 || "${precision}" == w8 ]] || return 2
+    [[ "${kind}" == xo || "${kind}" == xclbin || "${kind}" == host ]] || return 2
+    {
+        printf 'kind=%s\n' "${kind}"
+        printf 'precision=%s\n' "${precision}"
+        printf 'profile=%s\n' "${QUANTIZED_LAYER_PROFILE:-}"
+        printf 'attention_variant=%s\n' "${QUANTIZED_LAYER_ATTENTION_VARIANT:-}"
+        printf 'profile_cflags_sha256=%s\n' "${QUANTIZED_LAYER_PROFILE_CFLAGS_SHA256:-}"
+        # Effective values are stable across a direct shell and tmux's explicit
+        # environment forwarding. THREADS is a job limit, not a design input.
+        for name in QUANTIZED_LAYER_ARTIFACT_TARGET QUANTIZED_LAYER_ARTIFACT_DEVICE \
+            QUANTIZED_LAYER_ARTIFACT_FREQUENCY; do
+            printf '%s=%s\n' "${name}" "${!name:-}"
+        done
+        if [[ "${kind}" == xclbin ]]; then
+            for path in "${QUANTIZED_LAYER_ARTIFACT_PLATFORM:-}" \
+                        "${QUANTIZED_LAYER_ARTIFACT_CONN_CFG:-}"; do
+                if [[ -n "${path}" ]]; then
+                    printf 'input=%s\t%s\n' "${path}" \
+                        "$(quantized_layer_profile_file_sha256 "${path}")"
+                else
+                    printf 'input=\tMISSING\n'
+                fi
+            done
+        fi
+    } | sha256sum | awk '{print $1}'
+}
+
 quantized_layer_profile_die() {
     echo "quantized layer profile: $*" >&2
     return 2
 }
 
 quantized_layer_profile_source_sha256() {
-    local shell_helper tcl_helper
-    shell_helper="$(realpath "${BASH_SOURCE[0]}")"
-    tcl_helper="$(dirname "${shell_helper}")/../tcl/quantized_layer_profile.tcl"
-    [[ -r "${tcl_helper}" ]] || {
-        quantized_layer_profile_die "missing Tcl profile helper: ${tcl_helper}"
-        return 2
-    }
-    {
-        printf 'shell=%s\n' "$(sha256sum "${shell_helper}" | awk '{print $1}')"
-        printf 'tcl=%s\n' "$(sha256sum "${tcl_helper}" | awk '{print $1}')"
-    } | sha256sum | awk '{print $1}'
+    quantized_layer_profile_profile_helper_sha256
 }
 
 quantized_layer_profile_is_managed() {
@@ -294,6 +393,9 @@ quantized_layer_profile_apply() {
     done
     export QUANTIZED_LAYER_PROFILE_MANAGED_NAMES
     export QUANTIZED_LAYER_PROFILE_SOURCE_SHA256="$(quantized_layer_profile_source_sha256)"
+    export QUANTIZED_LAYER_SOURCE_IDENTITY_SHA256="$(
+        quantized_layer_profile_source_identity "${precision}" xo
+    )"
     export QUANTIZED_LAYER_PROFILE_CFLAGS_SHA256="$(printf '%s\n' "${QUANTIZED_LAYER_PROFILE_CFLAGS[@]}" | sha256sum | awk '{print $1}')"
 }
 
@@ -307,200 +409,131 @@ quantized_layer_profile_manifest_for_xo() {
     printf '%s.profile.manifest\n' "$1"
 }
 
+# Artifact identities bind the current source closure, selected build inputs,
+# and generated bytes. Older profile-only manifests require an explicit rebuild.
+quantized_layer_profile_manifest_for_xclbin() {
+    [[ $# == 1 ]] || { quantized_layer_profile_die "manifest helper takes one xclbin path"; return 2; }
+    printf '%s.link.manifest\n' "$1"
+}
+
+quantized_layer_profile_manifest_for_host() {
+    [[ $# == 1 ]] || { quantized_layer_profile_die "manifest helper takes one Host path"; return 2; }
+    printf '%s.host.manifest\n' "$1"
+}
+
+quantized_layer_profile_manifest_value() {
+    local manifest="$1" key="$2"
+    sed -n "s/^${key}=//p" "${manifest}" | head -n 1
+}
+
+quantized_layer_profile_link_inputs_sha256() {
+    local controller_xo="$1" compute_xo="$2" platform="$3" conn_cfg="$4"
+    {
+        printf 'controller_xo=%s\t%s\n' "${controller_xo}" \
+            "$(quantized_layer_profile_file_sha256 "${controller_xo}")"
+        printf 'compute_xo=%s\t%s\n' "${compute_xo}" \
+            "$(quantized_layer_profile_file_sha256 "${compute_xo}")"
+        printf 'platform=%s\t%s\n' "${platform}" \
+            "$(quantized_layer_profile_file_sha256 "${platform}")"
+        printf 'conn_cfg=%s\t%s\n' "${conn_cfg}" \
+            "$(quantized_layer_profile_file_sha256 "${conn_cfg}")"
+    } | sha256sum | awk '{print $1}'
+}
+
 quantized_layer_profile_check_xo_reuse() {
-    local precision="$1" xo="$2" manifest schema manifest_precision profile
-    local source_digest flags_digest xo_digest manifest_silu_lanes expected_silu_lanes
-    local manifest_rms_lanes expected_rms_lanes default_rms_lanes
-    local manifest_weight_outstanding manifest_attention_wave
-    local manifest_prefill_ffn_overlap
-    local expected_weight_outstanding expected_attention_wave
-    local expected_prefill_ffn_overlap
-    local default_weight_outstanding default_attention_wave
-    local default_prefill_ffn_overlap
+    local precision="$1" xo="$2" manifest schema manifest_precision
+    local profile source_digest flags_digest source_identity build_inputs xo_digest
+    local expected_silu expected_rms expected_outstanding expected_wave expected_overlap
     [[ "${precision}" == w4 || "${precision}" == w8 ]] || return 2
-    expected_silu_lanes="${CU_NL_LANES_CONFIG:-1}"
-    expected_rms_lanes="${CU_RMS_LANES_CONFIG:-1}"
-    expected_weight_outstanding="${QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING:-16}"
-    expected_attention_wave="${QUANTIZED_ATTENTION_WAVE_PIPELINE:-0}"
-    expected_prefill_ffn_overlap="${QUANTIZED_PREFILL_FFN_OVERLAP:-0}"
-    default_weight_outstanding=16
-    [[ "${QUANTIZED_LAYER_PROFILE}" == integrated ]] && default_weight_outstanding=32
-    default_attention_wave=0
-    [[ "${QUANTIZED_LAYER_PROFILE}" == attention_wave ]] && default_attention_wave=1
-    default_prefill_ffn_overlap=0
-    default_rms_lanes=1
-    # A stale manifest is harmless when the artifact itself is absent: the
-    # caller will synthesize a replacement before attempting to link it.
     [[ -s "${xo}" ]] || return 0
     manifest="$(quantized_layer_profile_manifest_for_xo "${xo}")"
-    if [[ ! -e "${manifest}" ]]; then
-        if [[ -s "${xo}" ]]; then
-            echo "profile_identity=unverified_legacy_xo precision=${precision} xo=${xo}" >&2
-            export QUANTIZED_LAYER_PROFILE_UNVERIFIED_XO=1
-            if [[ "${QUANTIZED_LAYER_PROFILE_REQUESTED:-0}" == 1 &&
-                  "${QUANTIZED_LAYER_PROFILE}" == attention_wave ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit profile ${QUANTIZED_LAYER_PROFILE}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_PROFILE_REQUESTED:-0}" == 1 &&
-                  ( "${QUANTIZED_LAYER_PROFILE}" == pipeline ||
-                    "${QUANTIZED_LAYER_PROFILE}" == integrated ) &&
-                  "${QUANTIZED_LAYER_ALLOW_LEGACY_XO_REUSE:-0}" != 1 ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit profile ${QUANTIZED_LAYER_PROFILE}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_SILU_LANES_REQUESTED:-0}" == 1 ||
-                  "${expected_silu_lanes}" != 1 ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit SiLU lanes=${expected_silu_lanes}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_RMS_LANES_REQUESTED:-0}" == 1 ||
-                  "${expected_rms_lanes}" != "${default_rms_lanes}" ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit RMS lanes=${expected_rms_lanes}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_WEIGHT_READ_OUTSTANDING_REQUESTED:-0}" == 1 ||
-                  "${expected_weight_outstanding}" != "${default_weight_outstanding}" ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit weight read outstanding=${expected_weight_outstanding}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_ATTENTION_WAVE_REQUESTED:-0}" == 1 ||
-                  "${expected_attention_wave}" != "${default_attention_wave}" ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit attention wave=${expected_attention_wave}: ${xo}"
-                return 2
-            fi
-            if [[ "${QUANTIZED_LAYER_PREFILL_FFN_OVERLAP_REQUESTED:-0}" == 1 ||
-                  "${expected_prefill_ffn_overlap}" != "${default_prefill_ffn_overlap}" ]]; then
-                quantized_layer_profile_die \
-                    "cannot reuse XO without a profile manifest for explicit Prefill FFN overlap=${expected_prefill_ffn_overlap}: ${xo}"
-                return 2
-            fi
-        fi
-        return 0
-    fi
     [[ -s "${manifest}" ]] || {
-        quantized_layer_profile_die "empty XO profile manifest: ${manifest}"
+        quantized_layer_profile_die \
+            "XO identity manifest missing or empty: ${manifest}; rebuild explicitly with controller-xo or compute-xo"
         return 2
     }
-    schema="$(sed -n 's/^schema=//p' "${manifest}" | head -n 1)"
-    [[ "${schema}" == quantized_layer_profile_v1 ]] || {
-        quantized_layer_profile_die "unsupported XO profile manifest: ${manifest}"
+    schema="$(quantized_layer_profile_manifest_value "${manifest}" schema)"
+    [[ "${schema}" == quantized_layer_profile_xo_v2 ]] || {
+        quantized_layer_profile_die \
+            "unsupported/incomplete XO identity manifest: ${manifest}; rebuild with controller-xo or compute-xo"
         return 2
     }
-    manifest_precision="$(sed -n 's/^precision=//p' "${manifest}" | head -n 1)"
+    manifest_precision="$(quantized_layer_profile_manifest_value "${manifest}" precision)"
     [[ "${manifest_precision}" == "${precision}" ]] || {
         quantized_layer_profile_die \
-            "XO precision mismatch for ${xo}: manifest=${manifest_precision:-missing} requested=${precision}"
+            "XO precision mismatch for ${xo}: manifest=${manifest_precision:-missing} requested=${precision}; rebuild it"
         return 2
     }
-    profile="$(sed -n 's/^profile=//p' "${manifest}" | head -n 1)"
-    manifest_silu_lanes="$(sed -n 's/^silu_lanes=//p' "${manifest}" | head -n 1)"
-    manifest_rms_lanes="$(sed -n 's/^rms_lanes=//p' "${manifest}" | head -n 1)"
-    manifest_weight_outstanding="$(sed -n 's/^weight_read_outstanding=//p' "${manifest}" | head -n 1)"
-    manifest_attention_wave="$(sed -n 's/^attention_wave=//p' "${manifest}" | head -n 1)"
-    manifest_prefill_ffn_overlap="$(sed -n 's/^prefill_ffn_overlap=//p' "${manifest}" | head -n 1)"
-    source_digest="$(sed -n 's/^profile_source_sha256=//p' "${manifest}" | head -n 1)"
-    flags_digest="$(sed -n 's/^profile_cflags_sha256=//p' "${manifest}" | head -n 1)"
-    xo_digest="$(sed -n 's/^xo_sha256=//p' "${manifest}" | head -n 1)"
+    profile="$(quantized_layer_profile_manifest_value "${manifest}" profile)"
     [[ "${profile}" == "${QUANTIZED_LAYER_PROFILE}" ]] || {
         quantized_layer_profile_die \
-            "XO profile mismatch for ${xo}: manifest=${profile:-missing} requested=${QUANTIZED_LAYER_PROFILE}"
+            "XO profile mismatch for ${xo}: manifest=${profile:-missing} requested=${QUANTIZED_LAYER_PROFILE}; rebuild it"
         return 2
     }
-    if [[ -z "${manifest_silu_lanes}" ]]; then
-        if [[ "${QUANTIZED_LAYER_SILU_LANES_REQUESTED:-0}" == 1 ||
-              "${expected_silu_lanes}" != 1 ]]; then
+    expected_silu="${CU_NL_LANES_CONFIG:-1}"
+    expected_rms="${CU_RMS_LANES_CONFIG:-1}"
+    expected_outstanding="${QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING:-16}"
+    expected_wave="${QUANTIZED_ATTENTION_WAVE_PIPELINE:-0}"
+    expected_overlap="${QUANTIZED_PREFILL_FFN_OVERLAP:-0}"
+    for pair in \
+        "silu_lanes=${expected_silu}" \
+        "rms_lanes=${expected_rms}" \
+        "weight_read_outstanding=${expected_outstanding}" \
+        "attention_wave=${expected_wave}" \
+        "prefill_ffn_overlap=${expected_overlap}"; do
+        local key="${pair%%=*}" expected="${pair#*=}" actual
+        actual="$(quantized_layer_profile_manifest_value "${manifest}" "${key}")"
+        [[ "${actual}" == "${expected}" ]] || {
             quantized_layer_profile_die \
-                "XO SiLU lane identity missing for explicit lanes=${expected_silu_lanes}: ${xo}"
+                "XO ${key} mismatch for ${xo}: manifest=${actual:-missing} requested=${expected}; rebuild it"
             return 2
-        fi
-    elif [[ "${manifest_silu_lanes}" != "${expected_silu_lanes}" ]]; then
-        quantized_layer_profile_die \
-            "XO SiLU lane mismatch for ${xo}: manifest=${manifest_silu_lanes} requested=${expected_silu_lanes}"
-        return 2
-    fi
-    if [[ -z "${manifest_rms_lanes}" ]]; then
-        if [[ "${QUANTIZED_LAYER_RMS_LANES_REQUESTED:-0}" == 1 ||
-              "${expected_rms_lanes}" != "${default_rms_lanes}" ]]; then
-            quantized_layer_profile_die \
-                "XO RMS lane identity missing for explicit lanes=${expected_rms_lanes}: ${xo}"
-            return 2
-        fi
-    elif [[ "${manifest_rms_lanes}" != "${expected_rms_lanes}" ]]; then
-        quantized_layer_profile_die \
-            "XO RMS lane mismatch for ${xo}: manifest=${manifest_rms_lanes} requested=${expected_rms_lanes}"
-        return 2
-    fi
-    if [[ -z "${manifest_weight_outstanding}" ]]; then
-        if [[ "${QUANTIZED_LAYER_WEIGHT_READ_OUTSTANDING_REQUESTED:-0}" == 1 ||
-              "${expected_weight_outstanding}" != "${default_weight_outstanding}" ]]; then
-            quantized_layer_profile_die \
-                "XO weight-read identity missing for explicit outstanding=${expected_weight_outstanding}: ${xo}"
-            return 2
-        fi
-    elif [[ "${manifest_weight_outstanding}" != "${expected_weight_outstanding}" ]]; then
-        quantized_layer_profile_die \
-            "XO weight-read outstanding mismatch for ${xo}: manifest=${manifest_weight_outstanding} requested=${expected_weight_outstanding}"
-        return 2
-    fi
-    if [[ -z "${manifest_attention_wave}" ]]; then
-        if [[ "${QUANTIZED_LAYER_ATTENTION_WAVE_REQUESTED:-0}" == 1 ||
-              "${expected_attention_wave}" != "${default_attention_wave}" ]]; then
-            quantized_layer_profile_die \
-                "XO attention-wave identity missing for explicit wave=${expected_attention_wave}: ${xo}"
-            return 2
-        fi
-    elif [[ "${manifest_attention_wave}" != "${expected_attention_wave}" ]]; then
-        quantized_layer_profile_die \
-            "XO attention wave mismatch for ${xo}: manifest=${manifest_attention_wave} requested=${expected_attention_wave}"
-        return 2
-    fi
-    if [[ -z "${manifest_prefill_ffn_overlap}" ]]; then
-        if [[ "${QUANTIZED_LAYER_PREFILL_FFN_OVERLAP_REQUESTED:-0}" == 1 ||
-              "${expected_prefill_ffn_overlap}" != "${default_prefill_ffn_overlap}" ]]; then
-            quantized_layer_profile_die \
-                "XO Prefill FFN overlap identity missing for explicit overlap=${expected_prefill_ffn_overlap}: ${xo}"
-            return 2
-        fi
-    elif [[ "${manifest_prefill_ffn_overlap}" != "${expected_prefill_ffn_overlap}" ]]; then
-        quantized_layer_profile_die \
-            "XO Prefill FFN overlap mismatch for ${xo}: manifest=${manifest_prefill_ffn_overlap} requested=${expected_prefill_ffn_overlap}"
-        return 2
-    fi
+        }
+    done
+    source_digest="$(quantized_layer_profile_manifest_value "${manifest}" profile_source_sha256)"
     [[ "${source_digest}" == "${QUANTIZED_LAYER_PROFILE_SOURCE_SHA256}" ]] || {
         quantized_layer_profile_die "profile helper source changed for ${xo}; rebuild it"
         return 2
     }
+    flags_digest="$(quantized_layer_profile_manifest_value "${manifest}" profile_cflags_sha256)"
     [[ "${flags_digest}" == "${QUANTIZED_LAYER_PROFILE_CFLAGS_SHA256}" ]] || {
         quantized_layer_profile_die "profile flags changed for ${xo}; rebuild it"
         return 2
     }
-    if [[ -s "${xo}" ]]; then
-        [[ "${xo_digest}" == "$(sha256sum "${xo}" | awk '{print $1}')" ]] || {
-            quantized_layer_profile_die "XO bytes do not match its profile manifest: ${xo}"
-            return 2
-        }
-    else
-        quantized_layer_profile_die "profile manifest has no XO: ${xo}"
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" source_file_count)" =~ ^[1-9][0-9]*$ ]] || {
+        quantized_layer_profile_die \
+            "XO source closure is missing from ${manifest}; rebuild explicitly with controller-xo or compute-xo"
         return 2
-    fi
+    }
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" xo)"
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" source_identity_sha256)" == "${source_identity}" ]] || {
+        quantized_layer_profile_die \
+            "XO source inputs changed for ${xo}; rebuild it with controller-xo or compute-xo"
+        return 2
+    }
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" xo)"
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" build_inputs_sha256)" == "${build_inputs}" ]] || {
+        quantized_layer_profile_die \
+            "XO build/profile inputs changed for ${xo}; rebuild it with controller-xo or compute-xo"
+        return 2
+    }
+    xo_digest="$(quantized_layer_profile_manifest_value "${manifest}" xo_sha256)"
+    [[ "${xo_digest}" == "$(sha256sum "${xo}" | awk '{print $1}')" ]] || {
+        quantized_layer_profile_die "XO bytes do not match its identity manifest: ${xo}; rebuild it"
+        return 2
+    }
 }
 
 quantized_layer_profile_write_xo_manifest() {
-    local precision="$1" xo="$2" manifest
+    local precision="$1" xo="$2" manifest source_identity build_inputs
     manifest="$(quantized_layer_profile_manifest_for_xo "${xo}")"
     [[ -s "${xo}" ]] || {
         quantized_layer_profile_die "cannot manifest missing XO: ${xo}"
         return 2
     }
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" xo)"
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" xo)"
     {
-        printf 'schema=quantized_layer_profile_v1\n'
+        printf 'schema=quantized_layer_profile_xo_v2\n'
         printf 'precision=%s\n' "${precision}"
         printf 'profile=%s\n' "${QUANTIZED_LAYER_PROFILE}"
         printf 'attention_variant=%s\n' "${QUANTIZED_LAYER_ATTENTION_VARIANT}"
@@ -511,6 +544,168 @@ quantized_layer_profile_write_xo_manifest() {
         printf 'prefill_ffn_overlap=%s\n' "${QUANTIZED_PREFILL_FFN_OVERLAP}"
         printf 'profile_source_sha256=%s\n' "${QUANTIZED_LAYER_PROFILE_SOURCE_SHA256}"
         printf 'profile_cflags_sha256=%s\n' "${QUANTIZED_LAYER_PROFILE_CFLAGS_SHA256}"
+        printf 'source_identity_sha256=%s\n' "${source_identity}"
+        printf 'source_file_count=%s\n' "$(quantized_layer_profile_source_file_count "${precision}" xo)"
+        printf 'build_inputs_sha256=%s\n' "${build_inputs}"
         printf 'xo_sha256=%s\n' "$(sha256sum "${xo}" | awk '{print $1}')"
+    } >"${manifest}"
+}
+
+quantized_layer_profile_check_xclbin_reuse() {
+    local precision="$1" xclbin="$2" controller_xo="$3" compute_xo="$4"
+    local platform="$5" conn_cfg="$6" manifest schema manifest_precision
+    local source_identity build_inputs link_inputs
+    [[ "${precision}" == w4 || "${precision}" == w8 ]] || return 2
+    [[ -s "${xclbin}" ]] || {
+        quantized_layer_profile_die "missing xclbin: ${xclbin}; link it before run"
+        return 2
+    }
+    manifest="$(quantized_layer_profile_manifest_for_xclbin "${xclbin}")"
+    [[ -s "${manifest}" ]] || {
+        quantized_layer_profile_die \
+            "xclbin link manifest missing or empty: ${manifest}; relink before run"
+        return 2
+    }
+    schema="$(quantized_layer_profile_manifest_value "${manifest}" schema)"
+    [[ "${schema}" == quantized_layer_link_v1 ]] || {
+        quantized_layer_profile_die "unsupported xclbin link manifest: ${manifest}; relink before run"
+        return 2
+    }
+    manifest_precision="$(quantized_layer_profile_manifest_value "${manifest}" precision)"
+    [[ "${manifest_precision}" == "${precision}" ]] || {
+        quantized_layer_profile_die \
+            "xclbin precision mismatch: manifest=${manifest_precision:-missing} requested=${precision}; relink it"
+        return 2
+    }
+    quantized_layer_profile_check_xo_reuse "${precision}" "${controller_xo}" || return
+    quantized_layer_profile_check_xo_reuse "${precision}" "${compute_xo}" || return
+    for path in "${platform}" "${conn_cfg}"; do
+        [[ -s "${path}" ]] || {
+            quantized_layer_profile_die "missing current link input: ${path}; relink xclbin"
+            return 2
+        }
+    done
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" xo)"
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" xclbin)"
+    link_inputs="$(quantized_layer_profile_link_inputs_sha256 \
+        "${controller_xo}" "${compute_xo}" "${platform}" "${conn_cfg}")"
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" source_identity_sha256)" == "${source_identity}" ]] || {
+        quantized_layer_profile_die "xclbin source inputs changed; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" build_inputs_sha256)" == "${build_inputs}" ]] || {
+        quantized_layer_profile_die "xclbin build/platform inputs changed; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" link_inputs_sha256)" == "${link_inputs}" ]] || {
+        quantized_layer_profile_die "XO/platform/connection inputs changed for ${xclbin}; relink it"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" controller_xo_sha256)" == "$(quantized_layer_profile_file_sha256 "${controller_xo}")" ]] || {
+        quantized_layer_profile_die "controller XO changed after link; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" compute_xo_sha256)" == "$(quantized_layer_profile_file_sha256 "${compute_xo}")" ]] || {
+        quantized_layer_profile_die "compute XO changed after link; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" platform_sha256)" == "$(quantized_layer_profile_file_sha256 "${platform}")" ]] || {
+        quantized_layer_profile_die "platform changed after link; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" conn_cfg_sha256)" == "$(quantized_layer_profile_file_sha256 "${conn_cfg}")" ]] || {
+        quantized_layer_profile_die "connection config changed after link; relink ${xclbin}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" xclbin_sha256)" == "$(sha256sum "${xclbin}" | awk '{print $1}')" ]] || {
+        quantized_layer_profile_die "xclbin bytes do not match its link manifest; relink it"
+        return 2
+    }
+}
+
+quantized_layer_profile_write_xclbin_manifest() {
+    local precision="$1" xclbin="$2" controller_xo="$3" compute_xo="$4"
+    local platform="$5" conn_cfg="$6" manifest source_identity build_inputs link_inputs
+    manifest="$(quantized_layer_profile_manifest_for_xclbin "${xclbin}")"
+    for path in "${xclbin}" "${controller_xo}" "${compute_xo}" "${platform}" "${conn_cfg}"; do
+        [[ -s "${path}" ]] || {
+            quantized_layer_profile_die "cannot write link manifest; missing input: ${path}"
+            return 2
+        }
+    done
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" xo)"
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" xclbin)"
+    link_inputs="$(quantized_layer_profile_link_inputs_sha256 \
+        "${controller_xo}" "${compute_xo}" "${platform}" "${conn_cfg}")"
+    {
+        printf 'schema=quantized_layer_link_v1\n'
+        printf 'precision=%s\n' "${precision}"
+        printf 'profile=%s\n' "${QUANTIZED_LAYER_PROFILE}"
+        printf 'attention_variant=%s\n' "${QUANTIZED_LAYER_ATTENTION_VARIANT}"
+        printf 'source_identity_sha256=%s\n' "${source_identity}"
+        printf 'build_inputs_sha256=%s\n' "${build_inputs}"
+        printf 'link_inputs_sha256=%s\n' "${link_inputs}"
+        printf 'controller_xo=%s\n' "${controller_xo}"
+        printf 'controller_xo_sha256=%s\n' "$(quantized_layer_profile_file_sha256 "${controller_xo}")"
+        printf 'compute_xo=%s\n' "${compute_xo}"
+        printf 'compute_xo_sha256=%s\n' "$(quantized_layer_profile_file_sha256 "${compute_xo}")"
+        printf 'platform=%s\n' "${platform}"
+        printf 'platform_sha256=%s\n' "$(quantized_layer_profile_file_sha256 "${platform}")"
+        printf 'conn_cfg=%s\n' "${conn_cfg}"
+        printf 'conn_cfg_sha256=%s\n' "$(quantized_layer_profile_file_sha256 "${conn_cfg}")"
+        printf 'xclbin_sha256=%s\n' "$(sha256sum "${xclbin}" | awk '{print $1}')"
+    } >"${manifest}"
+}
+
+quantized_layer_profile_check_host_reuse() {
+    local precision="$1" host_exe="$2" manifest schema source_identity build_inputs
+    [[ -s "${host_exe}" ]] || {
+        quantized_layer_profile_die "missing Host executable: ${host_exe}; build host before run"
+        return 2
+    }
+    manifest="$(quantized_layer_profile_manifest_for_host "${host_exe}")"
+    [[ -s "${manifest}" ]] || {
+        quantized_layer_profile_die \
+            "Host identity manifest missing or empty: ${manifest}; rebuild host before run"
+        return 2
+    }
+    schema="$(quantized_layer_profile_manifest_value "${manifest}" schema)"
+    [[ "${schema}" == quantized_layer_host_v1 ]] || {
+        quantized_layer_profile_die "unsupported Host identity manifest: ${manifest}; rebuild host"
+        return 2
+    }
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" host)"
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" host)"
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" source_identity_sha256)" == "${source_identity}" ]] || {
+        quantized_layer_profile_die "Host source inputs changed; rebuild ${host_exe}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" build_inputs_sha256)" == "${build_inputs}" ]] || {
+        quantized_layer_profile_die "Host build/profile inputs changed; rebuild ${host_exe}"
+        return 2
+    }
+    [[ "$(quantized_layer_profile_manifest_value "${manifest}" host_sha256)" == "$(sha256sum "${host_exe}" | awk '{print $1}')" ]] || {
+        quantized_layer_profile_die "Host bytes do not match its identity manifest; rebuild ${host_exe}"
+        return 2
+    }
+}
+
+quantized_layer_profile_write_host_manifest() {
+    local precision="$1" host_exe="$2" manifest source_identity build_inputs
+    manifest="$(quantized_layer_profile_manifest_for_host "${host_exe}")"
+    [[ -s "${host_exe}" ]] || {
+        quantized_layer_profile_die "cannot manifest missing Host executable: ${host_exe}"
+        return 2
+    }
+    source_identity="$(quantized_layer_profile_source_identity "${precision}" host)"
+    build_inputs="$(quantized_layer_profile_build_inputs_sha256 "${precision}" host)"
+    {
+        printf 'schema=quantized_layer_host_v1\n'
+        printf 'precision=%s\n' "${precision}"
+        printf 'profile=%s\n' "${QUANTIZED_LAYER_PROFILE}"
+        printf 'attention_variant=%s\n' "${QUANTIZED_LAYER_ATTENTION_VARIANT}"
+        printf 'source_identity_sha256=%s\n' "${source_identity}"
+        printf 'build_inputs_sha256=%s\n' "${build_inputs}"
+        printf 'host_sha256=%s\n' "$(sha256sum "${host_exe}" | awk '{print $1}')"
     } >"${manifest}"
 }

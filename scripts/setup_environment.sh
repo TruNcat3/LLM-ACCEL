@@ -53,14 +53,14 @@ llm_accel_setup_environment() {
     export VITIS_ENV_SCRIPT="${env_script}"
     # Vendor setup output is omitted so experiment logs start with resolved
     # identities rather than installation banners.
-    source "${VITIS_ENV_SCRIPT}" >/dev/null 2>&1
+    source "${VITIS_ENV_SCRIPT}" >/dev/null 2>&1 || return $?
 
     local xrt_root="${XILINX_XRT:-}"
     if [ -z "${xrt_root}" ] && [ -r /opt/xilinx/xrt/setup.sh ]; then
         xrt_root=/opt/xilinx/xrt
     fi
     if [ -n "${xrt_root}" ] && [ -r "${xrt_root}/setup.sh" ]; then
-        source "${xrt_root}/setup.sh" >/dev/null 2>&1
+        source "${xrt_root}/setup.sh" >/dev/null 2>&1 || return $?
         export XILINX_XRT="${xrt_root}"
     fi
 
@@ -97,5 +97,12 @@ llm_accel_setup_environment() {
     fi
 }
 
-llm_accel_setup_environment
-unset -f llm_accel_setup_environment
+# Keep the original status even in an interactive shell or an `if source ...`
+# caller, where errexit cannot propagate a failed vendor setup for us.
+llm_accel_finish_setup() {
+    local setup_status=0
+    llm_accel_setup_environment || setup_status=$?
+    unset -f llm_accel_setup_environment llm_accel_finish_setup
+    return "${setup_status}"
+}
+llm_accel_finish_setup

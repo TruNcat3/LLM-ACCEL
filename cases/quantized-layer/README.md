@@ -15,13 +15,17 @@ The published hardware bytes come from two frozen follow-up snapshots:
 | W4 `cowave-int4-4-8-128` | `quantized_layer_combinations_20261005_082444_v4FXjs` | `integrated_rms2_overlap_ref` |
 | W8 `cowave-int8-4-4-128` | `quantized_layer_combinations_20261003_225644_r6FNxq` | `integrated_rms2_overlap_ref` |
 
-The required source files are byte-identical between those snapshots. The
+The required hardware files are byte-identical between those snapshots. The
 per-precision snapshot choice is retained here because validation evidence was
 archived independently. The released profile is `integrated` with SiLU lanes
 4, RMS lanes 2, weight-read outstanding 32, attention-wave 0, and prefill FFN
 overlap 1. The independently validated `integrated_rms2_overlap_wave` is also
 recorded in the provenance and results package; it is a separate configuration
 label over the same source closure, not a silent source substitution.
+The public build scripts add source/artifact identity checks, and Host messages
+distinguish execution completion from numerical acceptance. Kernel and header
+bytes retain the validated hardware implementation; the archived binaries keep
+their original identities.
 
 ## Layout and dependencies
 
@@ -115,6 +119,25 @@ QUANTIZED_LAYER_EVAL_PREFILL=66 make performance
 The debug build is required for the performance trace preflight. The final
 launch uses random weights and P66 for both precisions; its evaluation output
 is placed below `COWAVE_QUANTIZED_LAYER_OUTPUT_DIR`.
+
+## Artifact reuse and numerical status
+
+XO sidecars bind the current kernel/header/Tcl source closure and effective
+configuration to the exported bytes. The xclbin sidecar additionally binds the
+two XO inputs, platform and connection file. A Host sidecar binds its source,
+configuration and executable. Run checks these identities before invoking XRT.
+Old profile-only sidecars are insufficient: rebuild with `controller-xo` and
+`compute-xo`, then `link` and `host` using the same configuration. Explicit XO
+rebuild phases bypass checks of the artifact they replace; Host-only builds do
+not require current XO artifacts. A Host diagnostic-only edit requires a new
+Host and does not invalidate an otherwise matching xclbin.
+
+`FULL-LAYER HW EMU EXECUTION PASS` reports completed execution. For random
+weights it includes `numerical_validation=NOT_RUN`; the performance workflow
+must still compare the hidden/KV dump against the completed C reference. The
+zero-weight smoke path checks residual and KV values directly. Historical logs
+remain readable, but their old `PASS` label alone never counts as random-weight
+numerical acceptance.
 
 ## Provenance
 

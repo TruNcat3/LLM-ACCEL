@@ -1,0 +1,5 @@
+selected source log markers (paths intentionally omitted from the public package)
+w4 integrated_rms2_overlap_ref: QLI_TRANSACTION caseID=P10_tail2_then_D1_repeat status=PASS hidden=H128 intermediate=I1280 seq_capacity=32 block_size=8 cus=4 exact_snapshots=3 seeded_outputs=0 deadlock_detection=enabled; C/RTL co-simulation PASS
+w4 integrated_rms2_overlap_wave: QLI_TRANSACTION caseID=P10_tail2_then_D1_repeat status=PASS hidden=H128 intermediate=I1280 seq_capacity=32 block_size=8 cus=4 exact_snapshots=3 seeded_outputs=0 deadlock_detection=enabled; attention CoSim PASS; C/RTL co-simulation PASS
+w8 integrated_rms2_overlap_ref: QLI_TRANSACTION caseID=P10_tail2_then_D1_repeat status=PASS hidden=H128 intermediate=I1280 seq_capacity=32 block_size=4 cus=4 exact_snapshots=3 seeded_outputs=0 deadlock_detection=enabled; C/RTL co-simulation PASS
+w8 integrated_rms2_overlap_wave: QLI_TRANSACTION caseID=P10_tail2_then_D1_repeat status=PASS hidden=H128 intermediate=I1280 seq_capacity=32 block_size=4 cus=4 exact_snapshots=3 seeded_outputs=0 deadlock_detection=enabled; attention CoSim PASS; C/RTL co-simulation PASS

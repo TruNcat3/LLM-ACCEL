@@ -46,6 +46,39 @@ output columns; controller/status kernels and DSP packing are excluded from
 that count. Root Makefile targets and kernel ABI retain the historical `8x64`
 paths.
 
+## Design-point generator
+
+The catalog is the shared input for documentation, the command helper and a
+browser selector. Generate a resolved point before running a build:
+
+```bash
+python3 scripts/cowave.py point cowave-int4-4-8-128 \
+  integrated-rms2-silu4-prefill-overlap --prefill 66 --weights random \
+  --output /tmp/cowave-build
+```
+
+The result identifies the architecture, configuration, workload, source and
+evidence links, and resolved commands. A recorded measurement applies only to
+its archived workload; choosing another prompt length does not create a new
+performance result. Fix16 and component entries link their own recipes where
+the unified quantized builder does not apply.
+
+For interactive selection, serve the checkout using Python's standard library:
+
+```bash
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8000/docs/design-point-generator.html` in a browser.
+The [generated selector](design-point-generator.html) works without external
+JavaScript libraries or a remote configuration service. It generates commands;
+building remains an explicit terminal action. GitHub's file view shows the
+HTML source, so use this local server to interact with it.
+
+After editing `designs/catalog.json` or refreshing the public source manifest,
+run `python3 scripts/cowave.py render`. `make test_design_catalog` checks that
+the generated documentation and selector agree with the catalog.
+
 ## CoWave command helper
 
 The repository-level helper exposes a short, dry-run-friendly route for the

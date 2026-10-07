@@ -8,6 +8,15 @@
       "compute_cus": 2, "rows": 8, "columns": 64, "peak_mac_per_cycle": 1024,
       "source": "kernel", "guide": "docs/designs/fix16.md", "recipe": "docs/reproduction-resident.md",
       "scope": "Resident decoder subgraphs and coarse-task model runtime",
+      "capabilities": {"point": true, "build": false, "geometry": true},
+      "workload": {
+        "prefill_tokens": {"default": 8, "min": 1, "max": 2048},
+        "decode_tokens": {"default": 1, "min": 1, "max": 2},
+        "sequence_batch": {"default": 1, "min": 1, "max": 1},
+        "layers": {"default": 1, "min": 1, "max": 36},
+        "weights": {"default": "random", "choices": ["zero", "random"]},
+        "clock_mhz": {"default": 200, "min": 200, "max": 200}
+      },
       "aliases": ["Fix16 resident", "FP version", "FP16 (historical informal name)", "R1", "Case 1"],
       "configurations": [
         {"name": "resident-q214", "description": "Resident subgraphs with Q2.14 attention probabilities; archived builds retain their own source identities", "evidence": ["results/qwen3b-e2e-l2-20260821", "results/q214-resident-fix-20260818"]}
@@ -18,13 +27,23 @@
       "arithmetic": "W4A4 matrix operands; fixed-point vector, scale and KV paths",
       "compute_cus": 4, "rows": 8, "columns": 128, "peak_mac_per_cycle": 4096,
       "matrix_products_per_dsp": 4, "precision_selector": "w4",
+      "capabilities": {"point": true, "build": true, "geometry": true},
+      "build": {"script": "cases/quantized-layer/scripts/build_vitis_quantized_w4_layer.sh", "phases": ["controller-xo", "compute-xo", "link", "host", "emconfig", "run", "all"]},
+      "workload": {
+        "prefill_tokens": {"default": 66, "min": 1, "max": 2047},
+        "decode_tokens": {"default": 1, "min": 1, "max": 1},
+        "sequence_batch": {"default": 1, "min": 1, "max": 1},
+        "layers": {"default": 1, "min": 1, "max": 1},
+        "weights": {"default": "random", "choices": ["zero", "random"]},
+        "clock_mhz": {"default": 200, "min": 200, "max": 200}
+      },
       "source_manifest": "cases/quantized-layer/provenance/source.sha256",
       "source": "cases/quantized-layer", "guide": "docs/designs/quantized.md", "recipe": "cases/quantized-layer/README.md",
       "scope": "Complete single-layer Prefill plus Decode; B1 production Host",
       "aliases": ["W4A4 full layer", "W4 full layer"],
       "configurations": [
-        {"name": "integrated-rms2-silu4-prefill-overlap", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 0, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_case": "w4/integrated_rms2_overlap_ref"},
-        {"name": "integrated-rms2-silu4-prefill-overlap-wave", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 1, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_case": "w4/integrated_rms2_overlap_wave"}
+        {"name": "integrated-rms2-silu4-prefill-overlap", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 0, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_summary": "results/quantized-layer-20261007/summary.json", "evidence_case": "w4-ref"},
+        {"name": "integrated-rms2-silu4-prefill-overlap-wave", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 1, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_summary": "results/quantized-layer-20261007/summary.json", "evidence_case": "w4-wave"}
       ]
     },
     {
@@ -32,13 +51,23 @@
       "arithmetic": "W8A8 matrix operands; fixed-point vector, scale and KV paths",
       "compute_cus": 4, "rows": 4, "columns": 128, "peak_mac_per_cycle": 2048,
       "matrix_products_per_dsp": 1, "precision_selector": "w8",
+      "capabilities": {"point": true, "build": true, "geometry": true},
+      "build": {"script": "cases/quantized-layer/scripts/build_vitis_quantized_w8_layer.sh", "phases": ["controller-xo", "compute-xo", "link", "host", "emconfig", "run", "all"]},
+      "workload": {
+        "prefill_tokens": {"default": 66, "min": 1, "max": 2047},
+        "decode_tokens": {"default": 1, "min": 1, "max": 1},
+        "sequence_batch": {"default": 1, "min": 1, "max": 1},
+        "layers": {"default": 1, "min": 1, "max": 1},
+        "weights": {"default": "random", "choices": ["zero", "random"]},
+        "clock_mhz": {"default": 200, "min": 200, "max": 200}
+      },
       "source_manifest": "cases/quantized-layer/provenance/source.sha256",
       "source": "cases/quantized-layer", "guide": "docs/designs/quantized.md", "recipe": "cases/quantized-layer/README.md",
       "scope": "Complete single-layer Prefill plus Decode; B1 production Host",
       "aliases": ["W8A8 full layer", "W8 full layer"],
       "configurations": [
-        {"name": "integrated-rms2-silu4-prefill-overlap", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 0, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_case": "w8/integrated_rms2_overlap_ref"},
-        {"name": "integrated-rms2-silu4-prefill-overlap-wave", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 1, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_case": "w8/integrated_rms2_overlap_wave"}
+        {"name": "integrated-rms2-silu4-prefill-overlap", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 0, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_summary": "results/quantized-layer-20261007/summary.json", "evidence_case": "w8-ref"},
+        {"name": "integrated-rms2-silu4-prefill-overlap-wave", "profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 32, "attention_wave": 1, "prefill_ffn_overlap": 1, "evidence": ["results/quantized-layer-20261007"], "evidence_summary": "results/quantized-layer-20261007/summary.json", "evidence_case": "w8-wave"}
       ]
     },
     {
@@ -46,6 +75,15 @@
       "arithmetic": "Fixed-point streaming architecture with a different tile organization",
       "source": "cases/streaming-split", "guide": "docs/designs/streaming-split.md", "recipe": "cases/streaming-split/README.md",
       "scope": "Alternative architecture: linear-operation validation and analytical layer projections",
+      "capabilities": {"point": true, "build": false, "geometry": false},
+      "workload": {
+        "prefill_tokens": {"default": 8, "min": 1, "max": 2048},
+        "decode_tokens": {"default": 1, "min": 1, "max": 2},
+        "sequence_batch": {"default": 1, "min": 1, "max": 1},
+        "layers": {"default": 1, "min": 1, "max": 1},
+        "weights": {"default": "random", "choices": ["zero", "random"]},
+        "clock_mhz": {"default": 200, "min": 200, "max": 200}
+      },
       "aliases": ["Streaming split", "S1", "Case 2", "V8-2_s"], "configurations": []
     },
     {
@@ -53,6 +91,15 @@
       "arithmetic": "W4A4 / W8A8 isolated matrix components",
       "source": "cases/quantized-block", "guide": "cases/quantized-block/README.md", "recipe": "cases/quantized-block/README.md",
       "scope": "Component arithmetic, accumulator and packing studies; not a decoder runtime",
+      "capabilities": {"point": true, "build": false, "geometry": false},
+      "workload": {
+        "prefill_tokens": {"default": 1, "min": 1, "max": 1},
+        "decode_tokens": {"default": 0, "min": 0, "max": 0},
+        "sequence_batch": {"default": 1, "min": 1, "max": 1},
+        "layers": {"default": 1, "min": 1, "max": 1},
+        "weights": {"default": "random", "choices": ["zero", "random"]},
+        "clock_mhz": {"default": 200, "min": 200, "max": 200}
+      },
       "aliases": ["Quantized matrix blocks", "Q1"], "configurations": []
     }
   ],

@@ -14,6 +14,9 @@ New to Vitis? Start with our [Vitis workflow tutorial](https://github.com/Reconf
 [Design choices](docs/design-space.md) · [Evaluation](docs/experiments.md) ·
 [Getting started](docs/usage.md) · [Citation](#citation)
 
+Choose parameters with the [design-point generator](docs/usage.md#design-point-generator).
+It resolves configurations, source/evidence links and reproducible commands from one catalog.
+
 ## Architecture
 
 ```mermaid
@@ -115,7 +118,7 @@ Please cite Teng Wang and this repository using [CITATION.cff](CITATION.cff):
   institution  = {High Efficient Intelligent Computing Lab, Suzhou Institute for Advanced Research of USTC, Suzhou, China},
   email        = {wangt635@ustc.edu.cn},
   url          = {https://github.com/TruNcat3/LLM-ACCEL},
-  version      = {0.11.0}
+  version      = {0.11.1}
 }
 ```
 

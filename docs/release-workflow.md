@@ -123,6 +123,7 @@ git status --short
 scripts/regenerate_root_checksums.sh
 git add CHECKSUMS.sha256
 VERIFY_ROOT_CHECKSUMS=1 make test_publication_release
+make test_publication_snapshot SNAPSHOT_ARGS=--index
 git diff --cached --check
 ```
 
@@ -130,6 +131,12 @@ Commit and publish the reviewed candidate through the repository's Git
 workflow. Running a watcher, completing a simulator job or installing a local
 archive does not itself publish a GitHub change. After publication, verify the
 remote commit against the local commit being cited.
+
+The snapshot check exports the Git index into a temporary checkout, compiles
+the Host plan there, and runs the release checks using only staged files. It
+cannot borrow ignored logs or stale local binaries. With no `SNAPSHOT_ARGS`,
+the command checks `HEAD` instead. Evidence files must be tracked even when
+local checksums already pass; `verify_tracked_evidence.py` enforces that rule.
 
 Historical source verifiers check the archived identities by default.
 `Q214_VERIFY_CURRENT_SOURCE=1 make verify_q214_resident_release` additionally
