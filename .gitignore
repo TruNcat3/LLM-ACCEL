@@ -1,4 +1,6 @@
 # HLS projects and reports
+artifacts/
+.build/
 qwen_hls*_prj*/
 reports/
 logs/

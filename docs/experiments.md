@@ -1,217 +1,150 @@
-# Experimental Results
+# Evaluation and experiments
 
-[Documentation index](README.md) | [Implementation map](implementations.md) |
-[Evidence index](../results/README.md) | [Detailed report](experiment-details.md) |
-[Setup](environment.md) | [Reproduction](usage.md) | [Repository](../README.md)
+[Documentation index](README.md) | [Architecture](architecture.md) |
+[Design space](design-space.md) | [Evidence index](../results/README.md) |
+[Getting started](usage.md) | [Reference/history](reference.md)
 
-This page is the release-first evidence map. It names the source family,
-workload, timing boundary, and claim supported by each published package. It
-does not turn an operator diagnostic, small-shape protocol test, checkpoint
-readback, HLS estimate, or isolated kernel into a whole-system release.
+This page is the release-first evaluation map. It keeps source family,
+configuration, workload, timing boundary, and evidence stage together. It does
+not turn a component probe, analytical projection, HLS estimate, or diagnostic
+into a whole-system result.
 
-## Evidence taxonomy
+## Evaluation vocabulary
 
-The public repository has three executable hardware source families:
+Use these fields in new reports:
 
-| Family | Source boundary | Public evidence status |
+| Field | Meaning |
+| --- | --- |
+| `prompt_tokens` | Total prompt length supplied to the workload |
+| `query_rows` | Active rows in the current prefill/decode block |
+| `sequence_batch` | Number of independent sequences; not the same as rows |
+| `context` | KV entries visible to the current query |
+| `layers` | Decoder layers actually executed |
+| `decode_forwards` | Real one-row decode forwards after prompt processing |
+| `timing_scope` | Explicit Host, controller, CU, or common interval boundary |
+
+Historical `P8`, `G2`, and `D1` labels remain in immutable package paths. In
+resident packages, `P8` is eight rows from one sequence, `G2` is the prompt
+sample plus one real decode forward, and `D1` is one decode row. Q2.14's
+`P1024`/`D1024` are local context labels for one final block and one decode row;
+they are not universal prompt lengths or implementation names.
+
+## Public design families
+
+| Canonical design | Source and tested scope | Current evidence boundary |
 | --- | --- | --- |
-| **Fix16 resident** | Controller-resident hidden/KV state, Tasks 18/19/20, and two regular 8x64 compute CUs | Current released mainline for bounded P8 and P8/G2/L1/L2 HW-Emu evidence |
-| **Streaming split** | Earlier control/cache plus fixed-compute split in [`cases/streaming-split/`](../cases/streaming-split/) | Alternative family; full-layer values are analytical projections, not released full-system measurements |
-| **Quantized matrix blocks** | Isolated INT4/INT8 matrix blocks in [`cases/quantized-block/`](../cases/quantized-block/) | Component candidates with HLS and bounded RTL evidence; no full-layer release |
+| [`cowave-fix16-2-8-64`](designs/fix16.md) | Root controller-resident hidden/KV state, Tasks 18/19/20, two 8x64 compute CUs | Bounded resident HW-Emu, CSim, finite-FIFO CoSim, HLS, and operator/protocol diagnostics |
+| [`cowave-streaming-split`](designs/streaming-split.md) | Case-local control/cache plus fixed V8-2_s service | CSim/sw_emu, HLS, bounded emulation, and analytical composition; no released full-layer system claim |
+| [`cowave-int4-4-8-128`](designs/quantized.md) | Public W4A4 complete-layer source in `cases/quantized-layer/` | P66+D1 full-layer evidence with profile/source identity; component probes are separate |
+| [`cowave-int8-4-4-128`](designs/quantized.md) | Public W8A8 complete-layer source in `cases/quantized-layer/` | P66+D1 full-layer evidence with profile/source identity; component probes are separate |
+| `cowave-quantized-blocks` | Isolated W4A4/W8A8 matrix blocks in `cases/quantized-block/` | Component stream/resource evidence only |
 
-The following names are evidence scopes under Fix16 resident, not additional
-hardware generations:
+The profile dimensions count compute CUs and logical products only. Controller
+and status kernels are excluded. DSP packing changes physical resource cost,
+not logical work, and is never counted twice.
 
-- **Fix16 operator diagnostics:** Host-sequenced operator calls and Q2.14
-  context-length measurements.
-- **Small-shape protocol tests:** Reduced profiles for finite FIFOs, block
-  tails, HBM residency, controller-owned KV, and task composition.
-- **Checkpoint diagnostics:** Per-task Host readback used to localize numeric
-  drift; it is not a performance result or checkpoint-accuracy release.
+## Released resident evidence
 
-The [implementation map](implementations.md) is authoritative for legacy
-aliases such as `R1`, `D1`, `P1`, `S1`, and `Q1`. In new prose, `D1` is only a
-workload name for one real one-row decode forward; it is not an implementation
-family.
+These immutable packages use the common four-CU modeled HW-Emu interval for the
+resident controller, two compute CUs, and status sink. The interval is not
+physical-board timing.
 
-## Released resident results
-
-These are the current Fix16 resident packages, ordered from the single-layer
-gate to bounded generation composition. All three use a common four-CU
-hardware-emulation interval; the interval is modeled RTL evidence, not physical
-board timing.
-
-| Package | Workload | Numerical/protocol result | Measured boundary and limitation |
+| Package | Workload | Recorded result | Boundary |
 | --- | --- | --- | --- |
-| [`q214-resident-fix-20260818/`](../results/q214-resident-fix-20260818/) | Standard Qwen-shaped P8, one layer, Tasks 18/19/20 | 16,384 values exact; 651,621 cycles at 200 MHz projection; 189.285 GMAC/s; 92.424% modeled efficiency | Common four-CU modeled interval; Host embedding/LM head, setup, and CPU oracle excluded; no physical-board or 36-layer claim |
-| [`qwen3b-e2e-20260820/`](../results/qwen3b-e2e-20260820/) | P8/G2/L1, one sequence, one real D1 forward | 4,096 values exact; six tasks; 1,190,693 modeled cycles; 56.904% modeled efficiency | Common four-CU interval; Host embedding, sampling, and validation excluded; output-token rate includes prefill and is not steady D1 |
-| [`qwen3b-e2e-l2-20260821/`](../results/qwen3b-e2e-l2-20260821/) | P8/G2/L2, one sequence, two decoder layers | 4,096 values exact; ten tasks; 2,319,441.4 modeled cycles; 58.424% modeled efficiency | Same boundary as L1; bounded two-layer composition, not a 36-layer or physical-board result |
+| [`q214-resident-fix-20260818`](../results/q214-resident-fix-20260818/) | Qwen-shaped P8, one layer, Tasks 18/19/20 | 16,384 values exact; 651,621 cycles at modeled 200 MHz; 189.285 GMAC/s; 92.424% modeled efficiency | Host embedding/LM head, setup, and CPU oracle excluded; no board or 36-layer claim |
+| [`qwen3b-e2e-20260820`](../results/qwen3b-e2e-20260820/) | P8/G2/L1, one sequence, one real D1 | 4,096 values exact; six tasks; 1,190,693 modeled cycles; 56.904% modeled efficiency | Host embedding, sampling, and validation excluded; output-token rate includes prefill |
+| [`qwen3b-e2e-l2-20260821`](../results/qwen3b-e2e-l2-20260821/) | P8/G2/L2, one sequence, two layers | 4,096 values exact; ten tasks; 2,319,441.4 modeled cycles; 58.424% modeled efficiency | Bounded two-layer composition, not 36-layer or board timing |
 
-The resident packages use deterministic random Fix16 weights. The L1/L2
-generation packages additionally use tied embeddings. Their CPU fixed-point
-oracle runs after inference and is excluded from the accelerator useful-work
-numerator. They validate shape, arithmetic, task composition, and HBM/KV
-ownership; they do not establish trained-model checkpoint accuracy.
+The resident packages use deterministic random Fix16 weights; L1/L2 also use
+tied embeddings. They validate shape, arithmetic, task composition, and HBM/KV
+ownership. They do not establish trained-checkpoint accuracy.
 
-## Other released evidence
+## Other published scopes
 
-| Package | Family / evidence scope | Workload and source | Supported claim | Boundary or non-claim |
-| --- | --- | --- | --- | --- |
-| [`q214-pd-20260811/`](../results/q214-pd-20260811/) | Fix16 operator diagnostics | Host-orchestrated Q2.14 operator path; P/D contexts 64, 256, 512, 1024 | Context scaling, precision checks, and modeled useful-MAC efficiency | Aggregate `cc8_ctrl` Running Time for sequential operator calls; Host gaps, fixture migration, and CPU oracle excluded; not resident common-four-CU timing |
-| [`coarse-task-20260816/`](../results/coarse-task-20260816/) | Fix16 small-shape protocol tests | Small two-layer Task 18/19/20 and serial prompt/decode composition | Cross-task/cross-layer HBM residency and controller-owned KV | Not Qwen2.5-3B throughput, 36-layer performance, or trained-model accuracy |
-| [`block-prefill-20260817/`](../results/block-prefill-20260817/) | Fix16 small-shape protocol tests | Small P8, P16, P11 tail, and P8/G2 block contracts | One-to-eight-row semantics, causal KV state, and finite-stream closure | Not standard large-shape performance, 36-layer timing, or physical-board timing |
-| [`qwen3b-checkpoint-20260830/`](../results/qwen3b-checkpoint-20260830/) | Fix16 checkpoint diagnostics | P8 with per-task Host readback | Layers 0--2 bit exact; first observed one-unit divergence at layer 3 Attention | Not throughput, full 36-layer numerical closure, or checkpoint accuracy |
-| [`quantized-single-bank-20260907/`](../results/quantized-single-bank-20260907/) | Quantized matrix blocks | Controller-facing W4A4 and W8A8 single-bank kernels | `II=1`, 3/3 bounded CoSim cases, local HLS estimates, and resource sums | Published component evidence; controller integration, HW-Emu, full-layer timing, and deployable system release remain open |
+| Package | Scope | Supported claim | Not a claim |
+| --- | --- | --- | --- |
+| [`q214-pd-20260811`](../results/q214-pd-20260811/) | Fix16 Q2.14 operator diagnostics at contexts 64/256/512/1024 | Context scaling, precision checks, modeled useful-MAC efficiency | Resident common-four-CU production timing |
+| [`coarse-task-20260816`](../results/coarse-task-20260816/) | Small Task 18/19/20 composition | HBM residency and controller-owned KV | Qwen2.5-3B throughput or trained accuracy |
+| [`block-prefill-20260817`](../results/block-prefill-20260817/) | Small P8/P16/P11 block contracts | Row/tail semantics and finite-stream closure | Standard large-shape or board timing |
+| [`qwen3b-checkpoint-20260830`](../results/qwen3b-checkpoint-20260830/) | Per-task P8 checkpoint diagnostics | Layers 0--2 bit exact; first one-unit divergence at layer 3 Attention | Throughput or full-model accuracy |
+| [`quantized-single-bank-20260907`](../results/quantized-single-bank-20260907/) | W4A4/W8A8 component blocks | II=1, bounded CoSim, local HLS estimates, resource sums | Controller integration, HW-Emu, or full-layer timing |
 
-The streaming-split family is documented in
-[`cases/streaming-split/docs/design.md`](../cases/streaming-split/docs/design.md).
-Its projected full-layer values are analytical and must not be mixed with the
-measured resident packages above.
+The streaming split's case README and design record own its local evidence;
+its analytical compositions must not be mixed with the resident rows above.
 
-## Quantized full-layer development measurement
+## Current quantized mainline package
 
-The [W4A4 full-layer package](../results/quantized-layer-w4-20260930/) adds a
-completed, matched P66+D1 comparison across Baseline, Attention, block pipeline
-and Integrated decode. All four runs check 171,520 hidden/KV values exactly
-against the corresponding production C model. Integrated reduces the sum of
-Prefill and Decode cycles from 3,326,289 to 2,851,423, a 14.28% reduction.
-Its modeled Prefill/Decode efficiencies are 46.998% / 9.239%.
+The [`quantized-layer-20261007`](../results/quantized-layer-20261007/) package
+records the public complete-layer W4/W8 P66+D1 runs. Its recorded modeled
+cycles are:
 
-These are one-layer, one-sequence measurements with four W4 compute CUs,
-deterministic random weights and a 4,096-MAC/cycle denominator. Raw RTL
-transitions, complete numerical dumps and analysis tools are published; the
-full-layer hardware source/build closure remains a development snapshot.
-It is not the executable quantized matrix-block case or a full-model hardware
-release. The [progress report](quantized-layer-progress.md) maps configurations,
-defines the timing boundary and separates ongoing W8/AXI/SiLU/RMS work from
-completed results.
+| Profile | Configuration | Workload | Prefill cycles | Decode cycles | P+D cycles | P+D modeled efficiency | Source/evidence boundary |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| `cowave-int4-4-8-128` | `integrated-rms2-silu4-prefill-overlap` | P66 + one D1 | 2,288,540 | 187,844 | 2,476,384 | 50.999764% | Four-CU complete-layer source; see package manifest |
+| `cowave-int4-4-8-128` | `integrated-rms2-silu4-prefill-overlap-wave` | P66 + one D1 | 2,284,511 | 187,557 | 2,472,068 | 51.088805% | Four-CU complete-layer source; see package manifest |
+| `cowave-int8-4-4-128` | `integrated-rms2-silu4-prefill-overlap` | P66 + one D1 | 3,592,954 | 187,220 | 3,780,174 | 66.819675% | Four-CU complete-layer source; see package manifest |
+| `cowave-int8-4-4-128` | `integrated-rms2-silu4-prefill-overlap-wave` | P66 + one D1 | 3,582,758 | 186,332 | 3,769,090 | 67.016176% | Four-CU complete-layer source; see package manifest |
 
-## Measurement conventions
+These rows are package claims for the named source/configuration and are not
+board timing or a 36-layer projection. Use the package's profile identity and
+raw evidence rather than inferring additional rows here.
+The package reports the four-CU HLS estimate exceeding the device BRAM/LUT
+capacity before platform resources; it therefore makes no routed,
+deployability, PE-occupancy, power, or board claim.
 
-The following terms are deliberately explicit because historical reports use
-short local labels:
+## Quantized full-layer evidence and source identity
 
-- `P8` in resident packages means eight consecutive query rows from one
-  sequence in one block. It is not sequence batch eight and not eight decoded
-  outputs. `G2` means the prompt sample plus one real one-row decode forward.
-- A common four-CU HW-Emu interval is the same run-local profiler Running Time
-  for controller, both compute CUs, and status sink. It does not resolve
-  separable CU occupancy or inter-task issue gaps. OpenCL event and Host wall
-  times under HW Emu are simulator proxies, not device latency.
-- Where a package records a 300-MHz XSim clock, its cycles are first derived
-  from that run-local clock and then projected to the 200-MHz implementation
-  target. A 200-MHz table is therefore a modeled target-equivalent latency,
-  not a routed clock measurement.
-- Modeled useful-MAC efficiency is shape-counted useful MAC divided by the
-  measured modeled interval and the declared peak: 1,024 MAC/cycle for the
-  two-compute-CU Fix16 resident packages, and 4,096 MAC/cycle for the
-  four-compute-CU W4 full-layer development comparison.
-  Padding, vector work, Host operations, and CPU-oracle work are not silently
-  added to the numerator; this metric is not physical utilization or power.
-- Operator diagnostics and production resident runs have different Host
-  boundaries. Q2.14 includes Host sequencing, packing, KV fixture migration,
-  and golden checks outside its controller intervals; the resident Task
-  18/19/20 path keeps intermediate hidden state and KV in controller-owned HBM.
-- The CPU fixed-point oracle is an out-of-band correctness check. It can prove
-  the recorded output comparison for the selected workload, but it does not
-  prove a performance result or change the timing boundary.
-- Released end-to-end resident evidence reaches two decoder layers (`L2`). A
-  `P8/G2/L36` task expansion or a checkpoint run stopped at layer 3 is not a
-  measured 36-layer result.
-- The historical full-profile composition completed its 146-task scheduling
-  contract, but its numeric gate was not accepted. Preserve that as protocol
-  evidence only; do not promote it to a 36-layer numerical or performance
-  result.
-- No package in this repository is a physical-board timing or power result.
-  HLS CSynth is local timing/resource evidence; quantized four-CU rows are
-  resource sums and not a placed-and-routed system.
+The dated [`quantized-layer-w4-20260930`](../results/quantized-layer-w4-20260930/)
+package is a frozen W4A4 development snapshot. It records a matched P66+D1
+comparison across Baseline, Attention, block pipeline, and Integrated decode:
+all four runs compare 171,520 hidden/KV values exactly against the production C
+model; Integrated reduces the recorded Prefill+Decode cycles from 3,326,289 to
+2,851,423 (14.28%); its modeled Prefill/Decode efficiencies are 46.998% and
+9.239%. These values belong to the frozen source identity in that package.
 
-For the Q2.14 report, `P<n>` and `D<n>` are a local historical context
-convention: `P1024` is the final eight query rows at positions 1016--1023,
-and `D1024` is one decode row at position 1024 against 1025 KV entries. They
-are not universal prompt length, sequence batch, or implementation names. See
-[`q214-pd-length-hwemu.md`](q214-pd-length-hwemu.md) for the complete local
-definition.
+The public quantized-layer source is a separate closure under
+[`cases/quantized-layer/`](../cases/quantized-layer/). The newer
+[`quantized-layer-20261007`](../results/quantized-layer-20261007/) package
+records its W4/W8 P66+D1 evidence and configuration identities. A new source
+does not inherit the September snapshot's results: use the package manifest,
+checksums, and source identity before attributing any row. The dated progress
+page retains the detailed comparison and its historical pending-work context.
 
-## Detailed and historical records
+## Metric conventions
 
-The original long report, including dated comparisons, resource tables,
-commands, package paths, and historical next/in-progress language, is retained
-in [`experiment-details.md`](experiment-details.md). The maintained
-coarse-task contract is [`coarse-task-runtime.md`](coarse-task-runtime.md);
-its relocated result tables and commands remain in
-[`coarse-task-runtime-history.md`](coarse-task-runtime-history.md).
+For a declared logical matrix shape, the compute numerator is based on logical
+products per cycle. The canonical profile names give compute count, rows, and
+output columns. DSP packing is a resource optimization and must not multiply
+that numerator again. Vector operations, padding, Host work, setup, and CPU
+oracle work are excluded unless a package explicitly says otherwise.
 
-## Legacy anchors
+Modeled useful-MAC efficiency is:
 
-The headings below remain as redirects so links into the former long report
-continue to resolve without making historical sections look current.
+```text
+shape-counted useful logical MACs
+---------------------------------
+declared logical peak * named modeled interval
+```
 
-<details>
-<summary>Show legacy heading redirects</summary>
+Resident package rows use the common profiler Running Time for controller,
+compute CUs, and status sink. Q2.14 operator rows sum sequential controller
+intervals and exclude Host gaps, fixture migration, and golden checks. HLS
+resource/Fmax values are local estimates. HW-Emu CPU wall time is simulator
+runtime, not device latency; a 300-MHz XSim interval projected to 200 MHz is a
+modeled target-equivalent value, not routed timing.
 
-## 1. Reporting policy
+No package in this repository is a physical-board power or timing result.
 
-[Historical detail](experiment-details.md#1-reporting-policy).
+## Reanalysis and detailed history
 
-## 2. Reference configuration
+The dated W4 package can be reanalyzed without Vitis:
 
-[Historical detail](experiment-details.md#2-reference-configuration).
+```bash
+bash results/quantized-layer-w4-20260930/verify.sh
+```
 
-## 3. Verification summary
-
-[Historical detail](experiment-details.md#3-verification-summary).
-
-## 4. Single-token resident layer
-
-[Historical detail](experiment-details.md#4-single-token-resident-layer).
-
-## 5. Projection steady state
-
-[Historical detail](experiment-details.md#5-projection-steady-state).
-
-## 6. Attention scaling experiments
-
-[Historical detail](experiment-details.md#6-attention-scaling-experiments).
-
-## 7. Eight-row prefill-block baseline
-
-[Historical detail](experiment-details.md#7-eight-row-prefill-block-baseline).
-
-### Functional workload
-
-[Historical detail](experiment-details.md#functional-workload).
-
-### Cycle calculation
-
-[Historical detail](experiment-details.md#cycle-calculation).
-
-### Resource qualification
-
-[Historical detail](experiment-details.md#resource-qualification).
-
-## 8. Q2.14 multi-length P/D sweep
-
-[Historical detail](experiment-details.md#8-q214-multi-length-pd-sweep).
-
-### Measurement boundary
-
-[Historical detail](experiment-details.md#measurement-boundary).
-
-## 9. Coarse-task resident runtime
-
-[Historical detail](experiment-details.md#9-coarse-task-resident-runtime).
-
-## 10. Interpretation
-
-[Historical detail](experiment-details.md#10-interpretation).
-
-## 11. Current experimental boundaries
-
-[Historical detail](experiment-details.md#11-current-experimental-boundaries).
-
-## 12. Next experiments
-
-[Historical detail](experiment-details.md#12-next-experiments).
-
-</details>
+Use [experiment-details](experiment-details.md) for the original long tables,
+[coarse-task-runtime-history](coarse-task-runtime-history.md) for relocated
+runtime commands, and [Q2.14 diagnostics](q214-pd-length-hwemu.md) for the
+local context sweep. Those pages preserve cited detail; this page remains the
+single comparison entry for current reading.

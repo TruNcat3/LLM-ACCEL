@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "scope": "Vitis 2022.2 CSynth estimates before platform/interconnect; not post-route closure",
+  "part": "xcu50-fsvh2104-2-e",
+  "target_ns": 5.0,
+  "uncertainty_ns": 1.35,
+  "compute_cus": 4,
+  "cases": {
+    "w4-ref": {
+      "controller": {"top": "control_cache_quantized_w4_layer", "estimated_ns": 3.65, "resources": {"BRAM_18K": 2906, "DSP": 1574, "FF": 416879, "LUT": 668598, "URAM": 0}},
+      "compute": {"top": "compute_core_quantized_w4_unified_nk", "estimated_ns": 3.604, "resources": {"BRAM_18K": 109, "DSP": 393, "FF": 156884, "LUT": 216043, "URAM": 0}},
+      "system_resources": {"BRAM_18K": {"total": 3342, "device_available": 2688, "percent": 124.33035714285714}, "DSP": {"total": 3146, "device_available": 5952, "percent": 52.85618279569893}, "FF": {"total": 1044415, "device_available": 1743360, "percent": 59.90816584067548}, "LUT": {"total": 1532770, "device_available": 871680, "percent": 175.8409049192364}, "URAM": {"total": 0, "device_available": 640, "percent": 0.0}},
+      "all_hls_scheduling_budgets_met": true,
+      "device_capacity_exceeded": true
+    },
+    "w4-wave": {
+      "controller": {"top": "control_cache_quantized_w4_layer", "estimated_ns": 3.65, "resources": {"BRAM_18K": 3022, "DSP": 1574, "FF": 441159, "LUT": 684826, "URAM": 0}},
+      "compute": {"top": "compute_core_quantized_w4_unified_nk", "estimated_ns": 3.604, "resources": {"BRAM_18K": 109, "DSP": 393, "FF": 156884, "LUT": 216043, "URAM": 0}},
+      "system_resources": {"BRAM_18K": {"total": 3458, "device_available": 2688, "percent": 128.64583333333334}, "DSP": {"total": 3146, "device_available": 5952, "percent": 52.85618279569893}, "FF": {"total": 1068695, "device_available": 1743360, "percent": 61.300878762848754}, "LUT": {"total": 1548998, "device_available": 871680, "percent": 177.70259728340676}, "URAM": {"total": 0, "device_available": 640, "percent": 0.0}},
+      "all_hls_scheduling_budgets_met": true,
+      "device_capacity_exceeded": true
+    },
+    "w8-ref": {
+      "controller": {"top": "control_cache_quantized_w8_layer", "estimated_ns": 3.65, "resources": {"BRAM_18K": 2246, "DSP": 1814, "FF": 480145, "LUT": 705405, "URAM": 0}},
+      "compute": {"top": "compute_core_quantized_w8_unified_nk", "estimated_ns": 3.604, "resources": {"BRAM_18K": 151, "DSP": 649, "FF": 85671, "LUT": 101323, "URAM": 0}},
+      "system_resources": {"BRAM_18K": {"total": 2850, "device_available": 2688, "percent": 106.02678571428571}, "DSP": {"total": 4410, "device_available": 5952, "percent": 74.09274193548387}, "FF": {"total": 822829, "device_available": 1743360, "percent": 47.19788225036711}, "LUT": {"total": 1110697, "device_available": 871680, "percent": 127.42026890602055}, "URAM": {"total": 0, "device_available": 640, "percent": 0.0}},
+      "all_hls_scheduling_budgets_met": true,
+      "device_capacity_exceeded": true
+    },
+    "w8-wave": {
+      "controller": {"top": "control_cache_quantized_w8_layer", "estimated_ns": 3.65, "resources": {"BRAM_18K": 2362, "DSP": 1814, "FF": 504455, "LUT": 721521, "URAM": 0}},
+      "compute": {"top": "compute_core_quantized_w8_unified_nk", "estimated_ns": 3.604, "resources": {"BRAM_18K": 151, "DSP": 649, "FF": 85671, "LUT": 101323, "URAM": 0}},
+      "system_resources": {"BRAM_18K": {"total": 2966, "device_available": 2688, "percent": 110.3422619047619}, "DSP": {"total": 4410, "device_available": 5952, "percent": 74.09274193548387}, "FF": {"total": 847139, "device_available": 1743360, "percent": 48.592315987518354}, "LUT": {"total": 1126813, "device_available": 871680, "percent": 129.26911251835537}, "URAM": {"total": 0, "device_available": 640, "percent": 0.0}},
+      "all_hls_scheduling_budgets_met": true,
+      "device_capacity_exceeded": true
+    }
+  }
+}

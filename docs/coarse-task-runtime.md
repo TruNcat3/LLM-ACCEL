@@ -1,11 +1,12 @@
-# Controller-Resident Coarse-Task Runtime
+# Resident coarse-task runtime
 
 [Documentation index](README.md) | [Architecture](architecture.md) |
-[Experiments](experiments.md) | [Evidence index](../results/README.md) |
-[Setup](environment.md) | [Reproduction](usage.md) |
-[Historical runtime detail](coarse-task-runtime-history.md)
+[Design entry](designs/fix16.md) | [Experiments](experiments.md) |
+[Evidence index](../results/README.md) | [Setup](environment.md) |
+[Reproduction](usage.md) | [Historical runtime detail](coarse-task-runtime-history.md)
 
-This page defines the maintained Fix16 resident runtime contract. It describes
+This page defines the maintained runtime contract for
+[`cowave-fix16-2-8-64`](designs/fix16.md). It describes
 who owns each operation, how hidden state and KV stay resident, how a Host task
 program is composed, and how timing evidence is bounded. It is not a result
 table or a live queue; released numeric claims belong to the immutable packages
@@ -30,7 +31,7 @@ The current decode path defines three Host-visible operations:
 | 20 | Final norm | Model-level final RMSNorm after the last decoder layer |
 
 Operation 16, the earlier single-launch decoder-layer path, remains a
-compatibility/equivalence reference only. It is not a fourth public family.
+compatibility/equivalence reference only. It is not a separate public design.
 
 ## HBM-resident composition
 

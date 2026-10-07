@@ -1,0 +1,41 @@
+record	value
+case_identity	cowave-int4-4-8-128
+w4_design	cowave-int4-4-8-128
+w8_design	cowave-int8-4-4-128
+source_closure	include kernel host common tests tcl scripts config
+w4_snapshot	quantized_layer_combinations_20261005_082444_v4FXjs
+w4_snapshot_manifest_sha256	e5937047f2558aeada5372f7641ca7bcbed610d402d40fb0d3cf6d39421e9661
+w8_snapshot	quantized_layer_combinations_20261003_225644_r6FNxq
+w8_snapshot_manifest_sha256	17bfb13a147ca03949e1924b368999c6387d69626b8e83126b947a6c28909103
+selected_candidate_w4	integrated_rms2_overlap_ref
+selected_candidate_w8	integrated_rms2_overlap_ref
+released_profile	integrated
+released_parameters	SiLU=4 RMS=2 outstanding=32 attention_wave=0 prefill_ffn_overlap=1
+kernel_source_status	W4/W8 required hardware files match across both frozen snapshots
+kernel/control_cache_quantized_w4_layer.cpp	snapshot-source; original-bytes-preserved
+kernel/control_cache_quantized_w8_layer.cpp	snapshot-source; original-bytes-preserved
+kernel/compute_core_quantized_w4_unified.cpp	snapshot-source; original-bytes-preserved
+kernel/compute_core_quantized_w8_unified.cpp	snapshot-source; original-bytes-preserved
+kernel/mm_stream_8x128_int4x4_block.cpp	snapshot-source; original-bytes-preserved
+kernel/mm_stream_4x128_int8x8_block.cpp	snapshot-source; original-bytes-preserved
+kernel/compute_stream.cpp	snapshot-source; original-bytes-preserved
+kernel/quantized_decode_rows.cpp	snapshot-source; original-bytes-preserved
+kernel/quantized_layer_integration_closed_loop.cpp	snapshot-source; original-bytes-preserved
+kernel/quantized_layer_integration_w8_closed_loop.cpp	snapshot-source; original-bytes-preserved
+include/	snapshot-source; complete transitive header closure
+host/	snapshot-source; XRT Host closure
+common/include/	snapshot-source; Host utility closure
+tests/	snapshot-source; native and CoSim test closure
+tcl/	snapshot-source with portable output-default edits only
+scripts/quantized_layer_profiles.sh	snapshot-source; profile helper bytes preserved
+scripts/build_vitis_quantized_w4_layer.sh	portable wrapper; kernel and profile ABI unchanged
+scripts/build_vitis_quantized_w8_layer.sh	portable wrapper; kernel and profile ABI unchanged
+scripts/run_vitis_hls.sh	portable launcher; toolchain selected by environment
+scripts/run_quantized_layer_numeric_reference.sh	portable launcher; no fixed site path
+scripts/run_quantized_layer_performance_eval.sh	portable launcher; output isolated under COWAVE_QUANTIZED_LAYER_OUTPUT_DIR
+scripts/run_vitis_quantized_layer_hwemu_tmux.sh	portable launcher; XCLBINUTIL/XILINX_XRT selected by environment
+config/cowave-int4-4-8-128.cfg	snapshot-source; W4 connection profile
+config/cowave-int8-4-4-128.cfg	snapshot-source; W8 connection profile
+scripts/cowave_quantized_layer.sh	public phase dispatcher
+scripts/run_native_regression.sh	public native C++ regression entry
+scripts/verify_source.sh	public source, syntax, portability and profile check

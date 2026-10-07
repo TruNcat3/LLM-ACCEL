@@ -6,11 +6,17 @@
 > Dated PASS/queued/next language below is historical evidence, not a live
 > release status.
 
-# Controller-Resident Coarse-Task Runtime
+# Historical resident coarse-task runtime
 
 [Documentation index](README.md) | [Architecture](architecture.md) |
-[Experiments](experiments.md) | [Setup](environment.md) |
-[Reproduction](usage.md)
+[Design entry](designs/fix16.md) | [Experiments](experiments.md) |
+[Setup](environment.md) | [Reproduction](usage.md) |
+[Reference/history](reference.md)
+
+> This page preserves command blocks and result anchors from earlier
+> snapshots. It is not the current design entry. Use the maintained
+> [resident coarse-task contract](coarse-task-runtime.md) for stable behavior
+> and the [evaluation map](experiments.md) for current evidence.
 
 ## Motivation
 

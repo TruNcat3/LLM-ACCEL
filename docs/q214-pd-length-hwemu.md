@@ -1,10 +1,11 @@
-# Q2.14 Multi-Length Prefill/Decode Hardware-Emulation Results
+# Historical Q2.14 prefill/decode diagnostic
 
 [Documentation index](README.md) | [Experiments](experiments.md) |
-[Setup](environment.md) | [Raw evidence](../results/q214-pd-20260811/) |
-[Repository](../README.md)
+[Design entry](designs/fix16.md) | [Setup](environment.md) |
+[Raw evidence](../results/q214-pd-20260811/) | [Reference/history](reference.md)
 
-This diagnostic profile is part of CoWave (the `LLM-ACCEL` repository). Its
+This diagnostic profile is part of `cowave-fix16-2-8-64` in the CoWave
+(`LLM-ACCEL`) repository. Its
 exact U50 platform path is retained below because it is part of the archived
 reproduction identity.
 

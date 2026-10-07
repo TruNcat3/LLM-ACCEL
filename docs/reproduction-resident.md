@@ -1,10 +1,11 @@
-# Fix16 Resident Reproduction
+# `cowave-fix16-2-8-64` reproduction
 
 [Usage navigator](usage.md) | [Environment](environment.md) |
-[Implementation map](implementations.md) | [Experiments](experiments.md) |
+[Design entry](designs/fix16.md) | [Implementation catalog](implementations.md) |
+[Experiments](experiments.md) |
 [Release workflow](release-workflow.md)
 
-This page contains the complete command history for the Fix16 resident family:
+This page contains the complete command history for the root resident family:
 the controller, two 8x64 compute CUs, controller-owned KV state, and the
 coarse Task 18/19/20 runtime. Operator diagnostics, Q2.14 length sweeps, and
 publication-package checks are evidence scopes of this family; they are

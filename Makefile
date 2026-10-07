@@ -88,6 +88,8 @@ endif
 
 help:
 	@echo "CoWave build and validation entry points"
+	@echo "  python3 scripts/cowave.py list  # stable designs and configurations"
+	@echo "  make test_design_catalog"
 	@echo "  Implementation families: docs/implementations.md"
 	@echo "  Source map and configurations: docs/repository-map.md"
 	@echo "  Reproduction routes: docs/usage.md"
@@ -232,7 +234,7 @@ test_publication_tree:
 verify_quantized_layer_evidence:
 	bash results/quantized-layer-w4-20260930/verify.sh
 
-test_publication_release: test_environment_contract \
+test_publication_release: test_design_catalog test_quantized_layer_source verify_quantized_current_evidence test_environment_contract \
 		test_coarse_task_program \
 		test_host_task_program_trace_contract \
 		test_qwen3b_e2e_plan \
@@ -251,6 +253,19 @@ test_publication_release: test_environment_contract \
 		verify_quantized_layer_evidence \
 		test_publication_tree
 	@echo "PUBLICATION RELEASE GATES PASS"
+
+.PHONY: test_design_catalog
+test_design_catalog:
+	python3 tests/test_design_catalog.py
+	python3 scripts/cowave.py render --check
+	python3 scripts/render_cowave_results.py --check
+
+.PHONY: test_quantized_layer_source verify_quantized_current_evidence
+test_quantized_layer_source:
+	$(MAKE) -C cases/quantized-layer check
+
+verify_quantized_current_evidence:
+	python3 results/quantized-layer-20261007/verify.py
 
 verify_result_checksums:
 	scripts/verify_result_checksums.sh

@@ -1,0 +1,5 @@
+precision	candidate	config_label	status	cosim_status	hwemu_status	archive_status	prefill_cycles	decode_cycles	prefill	block_size	completion
+w4	integrated_rms2_overlap_ref	integrated-rms2-silu4-prefill-overlap	pass	PASS	PASS	PASS	2288540	187844	66	8	2026-10-06T07:19:33+08:00
+w4	integrated_rms2_overlap_wave	integrated-rms2-silu4-prefill-overlap-wave	pass	PASS	PASS	PASS	2284511	187557	66	8	2026-10-07T04:02:37+08:00
+w8	integrated_rms2_overlap_ref	integrated-rms2-silu4-prefill-overlap	pass	PASS	PASS	PASS	3592954	187220	66	4	2026-10-04T15:41:57+08:00
+w8	integrated_rms2_overlap_wave	integrated-rms2-silu4-prefill-overlap-wave	pass	PASS	PASS	PASS	3582758	186332	66	4	2026-10-05T08:42:54+08:00

@@ -6,12 +6,12 @@
 > Labels such as `next`, `current`, or `in progress` retain their dated
 > historical meaning here.
 
-# Experimental Results
+# Historical experimental record
 
 [Documentation index](README.md) | [Implementation map](implementations.md) |
 [Evidence index](../results/README.md) |
 [Setup](environment.md) | [Reproduction](usage.md) |
-[Repository](../README.md)
+[Evaluation](experiments.md) | [Reference/history](reference.md)
 
 ## 1. Reporting policy
 

@@ -1,65 +1,72 @@
-# Usage and Reproduction
+# Usage and reproduction
 
-[Documentation index](README.md) | [Implementation map](implementations.md) |
-[Architecture](architecture.md) | [Experiments](experiments.md) |
-[Environment](environment.md) | [Repository map](repository-map.md) |
-[Release workflow](release-workflow.md) | [Repository](../README.md)
+[Documentation index](README.md) | [Environment](environment.md) |
+[Design entries](README.md#designs) | [Evaluation](experiments.md) |
+[Reference/history](reference.md)
 
-This is the route map for reproducing every public CoWave implementation
-family in this checkout. The repository name remains `LLM-ACCEL` in command
-paths and artifact names for compatibility with the published tooling.
+This page is the short command route. Use the linked family README or scoped
+guide for the complete recipe, profile parameters, and expected checks. Keep
+the source/configuration identity and timing boundary beside every result.
 
-## Start here
+## Before any route
 
-1. Read [Environment Setup](environment.md), run the vendor-free publication
-   preflight directly, and source the setup helper only for HLS/HW-Emu work.
-2. Select one implementation family below. Fix16 diagnostics and small-shape
-   tests are evidence scopes of the Fix16 resident family, not additional
-   families.
-3. Keep the command's result package and timing boundary with the result. Use
-   [Experiments](experiments.md) and the [evidence index](../results/README.md)
-   to interpret historical claims.
-
-| Family | Canonical source and route | Representative check | Evidence boundary |
-| --- | --- | --- | --- |
-| **Fix16 resident** | [`kernel/`](../kernel/), [`host/`](../host/), [resident reproduction](reproduction-resident.md) | bounded CSim, RTL CoSim, or P8 HW-Emu | Controller-resident Tasks 18/19/20; HW-Emu CU trace is modeled device time |
-| **Streaming split** | [`cases/streaming-split/`](../cases/streaming-split/), [case README](../cases/streaming-split/README.md) | `sw_emu` seven-operation host | Earlier control/cache plus fixed compute core; full-layer numbers are analytical projections |
-| **Quantized matrix blocks** | [`cases/quantized-block/`](../cases/quantized-block/), [case README](../cases/quantized-block/README.md) | planner contract or bounded CSim/RTL CoSim | Isolated INT4/INT8 blocks; no full-layer or board claim |
-
-The [public implementation map](implementations.md) defines the names and
-legacy aliases used by older result packages. The [architecture](architecture.md)
-and [design space](design-space.md) pages explain how the three families differ.
-
-## Environment preflight
-
-From the repository root:
+From the repository root, inspect the publication tree first:
 
 ```bash
 scripts/check_environment.sh publication
 ```
 
-`publication` checks source/evidence tooling without vendor binaries. Use
-`hls` before CSim, RTL CoSim, HLS synthesis, or host compilation, and use
-`hw-emu` before Vitis linking or an emulation run:
+For HLS, CSim, RTL CoSim, Vitis link, or HW-Emu, source the vendor setup and
+run the corresponding preflight:
 
 ```bash
 source scripts/setup_environment.sh
-scripts/check_environment.sh hls
-scripts/check_environment.sh hw-emu
+scripts/check_environment.sh hls       # HLS, CSim, RTL CoSim
+scripts/check_environment.sh hw-emu    # linked HW-Emu image/run
 ```
 
-The supported reference stack is Vitis/Vivado/Vitis HLS 2022.2, XRT 2022.2,
-and the published U50 evaluation platform
-`xilinx_u50_gen3x16_xdma_5_202210_1`. A physical U50 is optional for all
-software, HLS, CoSim, and HW-Emu routes. Set `VITIS_ENV_SCRIPT`, `XILINX_XRT`,
-`DEVICE`, and `XPLATFORM` for another installation; do not copy a
-machine-private setup path into a reproduction record. See
-[Environment Setup](environment.md) for resource guards and platform checks.
+The reference stack is Vitis/Vivado/Vitis HLS 2022.2, XRT 2022.2, and the U50
+platform `xilinx_u50_gen3x16_xdma_5_202210_1`. See [environment](environment.md)
+for custom paths and resource guards. A physical U50 is not required for
+publication checks, HLS, CoSim, or HW-Emu.
 
-## Route A: Fix16 resident
+## Route map
 
-The short validation ladder is deliberately tool-local before it reaches a
-linked system:
+| Design | Direct entry | Smallest useful check | Boundary |
+| --- | --- | --- | --- |
+| [`cowave-fix16-2-8-64`](designs/fix16.md) | [Resident guide](reproduction-resident.md) | CSim or finite-FIFO RTL CoSim | Controller-resident Tasks 18/19/20; HW-Emu interval is modeled device time |
+| [`cowave-streaming-split`](designs/streaming-split.md) | [Case README](../cases/streaming-split/README.md) | Case `sw_emu` host checks | Independent `cc` + V8-2_s; full-layer values are analytical projections |
+| [`cowave-int4-4-8-128`](designs/quantized.md) | [Public quantized-layer README](../cases/quantized-layer/README.md) | Case-defined host/CSim/HW-Emu check | Complete-layer W4A4 source and its own result identity |
+| [`cowave-int8-4-4-128`](designs/quantized.md) | [Public quantized-layer README](../cases/quantized-layer/README.md) | Case-defined host/CSim/HW-Emu check | Complete-layer W8A8 source and its own result identity |
+| `cowave-quantized-blocks` | [Component README](../cases/quantized-block/README.md) | CSim or deadlock-enabled CoSim | Isolated W4A4/W8A8 streams; no integrated model claim |
+
+The [implementation catalog](implementations.md) defines the names and legacy
+aliases. The canonical profile numbers count compute CUs and logical rows/
+output columns; controller/status kernels and DSP packing are excluded from
+that count. Root Makefile targets and kernel ABI retain the historical `8x64`
+paths.
+
+## CoWave command helper
+
+The repository-level helper exposes a short, dry-run-friendly route for the
+catalogued designs and configurations:
+
+```bash
+python3 scripts/cowave.py list
+python3 scripts/cowave.py show DESIGN CONFIG
+python3 scripts/cowave.py build DESIGN CONFIG --phase host --dry-run \
+  --prefill 66 --weights random --output /tmp/cowave-build
+```
+
+`build` accepts `--phase controller-xo|compute-xo|link|host|emconfig|run|all`,
+defaults to the documented 200 MHz HW-Emu configuration, and accepts an
+explicit output directory. A dry run resolves the design/configuration and
+prints the command plan without launching a long accelerator job; use
+`python3 scripts/cowave.py build --help` for the parser's current phase list.
+
+## Root resident route
+
+The historical root build path remains the compatibility route:
 
 ```bash
 make hls_csim_compute
@@ -68,7 +75,7 @@ make hls_csim_closed_loop_8x64_resident_layer
 scripts/run_hls_resident_layer_cosim.sh
 ```
 
-For a linked image, export the profile-matched XOs and build HW-Emu:
+For a profile-matched linked image, use the existing Makefile targets:
 
 ```bash
 make vitis_8x64_xo VITIS_8X64_MODEL_PROFILE=qwen-layer
@@ -78,135 +85,73 @@ make vitis_8x64_qwen_host vitis_8x64_emconfig TARGET=hw_emu \
   VITIS_8X64_MODEL_PROFILE=qwen-layer
 ```
 
-The resident convenience flow also supports `run`, `run-composed`,
-`run-block`, `run-block-stack`, `run-block-sequence`, `run-stack`, and
-`run-generate`. Use the detailed [resident reproduction guide](reproduction-resident.md)
-for their complete argument recipes, profiles, pipeline parameters, expected
-checkpoints, and historical variants.
+The resident guide covers bounded layer/block checks, coarse-task generation,
+checkpoint localization, archiving, and the long Qwen2.5-3B launcher. Start
+with a bounded profile; the default 36-layer launcher is not a quick check.
 
-For the full Qwen2.5-3B launcher, always bound the layer count in a first
-reproduction. The launcher default is `L=36` and is a long RTL HW-Emu run, not
-a quick check:
+## Streaming split route
 
-```bash
-# Requires a profile-matched full-shape build; see the resident guide.
-VITIS_8X64_E2E_PROMPT_TOKENS=8 \
-VITIS_8X64_E2E_MAX_NEW_TOKENS=2 \
-VITIS_8X64_E2E_PREFILL_BLOCK_SIZE=8 \
-VITIS_8X64_E2E_LAYERS=1 \
-  scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh
-```
-
-`L=2` is the next bounded scaling gate. The unqualified launcher invokes the
-36-layer extension only when that long-run evidence is explicitly intended.
-
-## Route B: streaming split
-
-The case is self-contained. Its README is the canonical recipe and includes
-the complete host builds, connectivity file, and expected output:
+The case README is canonical and includes the complete host builds,
+connectivity, expected output, and `sw_emu` invocation:
 
 ```bash
 cd cases/streaming-split
 source ../../scripts/setup_environment.sh
 ../../scripts/check_environment.sh hls
-mkdir -p build
 ```
 
-Continue with the [streaming-split reproduction](../cases/streaming-split/README.md).
-The route compiles `control_cache_core` and
-`qkv_tile_kernel_cc_qwen_small_core_v8_2_s`, links `conn_v8_2x2.cfg` at
-300 MHz, and runs `host_v8_2x2` plus the variable-depth `host_accum` test in
-`sw_emu`. Its reported full-layer estimate is not a linked HW-Emu or board
-measurement. Detailed design and optimization history are in
-[`cases/streaming-split/docs/design.md`](../cases/streaming-split/docs/design.md).
+The [case design record](../cases/streaming-split/docs/design.md) contains
+operator details and optimization history. This route does not reuse resident
+Task 18/19/20 or KV-ownership claims.
 
-## Route C: quantized matrix blocks
+## Quantized full layer
 
-This family is an isolated W4A4/W8A8 matrix-block study. Start with the
-resource planner, which does not launch a simulator:
+The main quantized route builds the public complete-layer source for either
+canonical profile. Follow the case README for the profile/configuration and
+the source identity recorded with each result:
+
+```bash
+python3 scripts/cowave.py list
+python3 scripts/cowave.py build cowave-int4-4-8-128 integrated-rms2-silu4-prefill-overlap \
+  --phase host --dry-run --prefill 66 --weights random --output /tmp/cowave-int4
+```
+
+The W8A8 command uses `cowave-int8-4-4-128` with the matching configuration.
+The 2026-10-07 W4/W8 package records P66+D1 evidence for its exact source and
+configuration; the September 30 W4 archive is historical and must not be
+silently attributed to the new source.
+
+## Quantized matrix blocks
+
+The component route runs planner, CSim, synthesis, and deadlock-enabled CoSim:
 
 ```bash
 make test_quantized_cu_planner
 make quantized_cu_plan QUANT_KERNEL=w4a4 QUANT_KERNEL_COUNT=auto
 make quantized_cu_plan QUANT_KERNEL=w8a8 QUANT_KERNEL_COUNT=auto
-```
-
-For the bounded arithmetic and finite-stream evidence, use the case README's
-[Reproduce](../cases/quantized-block/README.md#reproduce) section. The
-regression launcher accepts `csim`, `synth`, `cosim`, or `all`:
-
-```bash
 scripts/run_quantized_block_regression.sh csim
 ```
 
-The selected single-bank candidates have CSim and deadlock-enabled RTL CoSim
-evidence. They are not connected to the Fix16 controller, HBM scheduler, or a
-full-model runtime; do not combine their resource estimates with resident
-performance claims.
+Use the [quantized-block README](../cases/quantized-block/README.md) for
+`synth`, `cosim`, accumulator variants, and packet source maps. This component
+family is independent of both complete-layer profiles.
 
-To reanalyze the completed quantized full-layer development comparison using
-only the archived inputs and Python standard library:
+## Reading a result
 
-```bash
-bash results/quantized-layer-w4-20260930/verify.sh
-```
+`P8` is eight active rows from one sequence, not batch eight. `G2` includes one
+real one-row decode forward after the prompt sample. HW-Emu CPU wall time is
+simulator runtime. Published modeled cycles use the named profiler interval
+and frequency; they are not board latency. HLS resource and Fmax values are
+estimates. A CPU fixed-point oracle is an out-of-band correctness check, not
+part of accelerator useful work.
 
-This rebuilds metrics and numerical comparisons from saved traces and dumps.
-It does not launch or rebuild the full-layer accelerator; see the
-[progress report](quantized-layer-progress.md) for its source-release boundary.
-
-## Evidence and historical releases
-
-Each result package records its source snapshot, generated-artifact identity,
-raw logs, timing boundary, and checksums. These checks are read-only and do
-not launch synthesis or simulation:
+For read-only package checks:
 
 ```bash
-scripts/check_environment.sh publication
 make test_publication_tree
 make verify_result_checksums
 ```
 
-The historical Fix16 Q2.14 packages can be re-audited independently:
-
-```bash
-make verify_q214_pd_release
-make verify_q214_resident_release
-# Optional strict comparison with the archived source snapshot.
-Q214_VERIFY_CURRENT_SOURCE=1 make verify_q214_resident_release
-```
-
-Use [operator and publication diagnostics](reproduction-diagnostics.md) for
-the Q2.14 P/D sweep, profile interpretation, release archive, and checksum
-workflow. Use [resident reproduction](reproduction-resident.md) for the
-complete coarse-task and Qwen3B command history. Historical source-level
-context remains available in
-[`docs/coarse-task-runtime-history.md`](coarse-task-runtime-history.md).
-
-## Reading a result
-
-`P8` names exactly eight active query rows from one sequence; the resident
-protocol supports smaller blocks, but P8 is not batch eight. `G2` produces two
-sampled outputs: the first follows the prompt forward and the second follows
-one real D1 decode forward; `G1` is a prefill/TTFT-only gate.
-`intermediate_host_copy=0` and
-`kv_cache_owner=controller` are residency checks, not performance values.
-
-HW-Emu CPU wall time is simulator runtime. Published Fix16 cycle rows come
-from the explicitly named CU/profile scope, with
-`cycles = running_time_us * frequency_MHz`; they are neither physical-board
-latency nor per-CU occupancy unless the package says so. HLS resource and Fmax
-values are estimates, and the streaming/quantized families have their own
-boundaries.
-
-For the complete release gate, source the environment and run:
-
-```bash
-source scripts/setup_environment.sh
-scripts/check_environment.sh hls
-make test_publication_release
-```
-
-This compiles host-only contracts and validates archived evidence; it does not
-start Vitis synthesis or XSim. Release maintenance and future publication
-workflow are intentionally kept separate from the reproduction routes.
+Use [diagnostics](reproduction-diagnostics.md) for Q2.14 and archive-specific
+verification, and [reference/history](reference.md) for the complete command
+records that are intentionally kept out of this short route.

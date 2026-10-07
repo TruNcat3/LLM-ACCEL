@@ -1,4 +1,4 @@
-# Streaming Split
+# cowave-streaming-split
 
 [Repository](../../README.md) | [Repository map](../../docs/repository-map.md) |
 [Implementation catalog](../../docs/implementations.md) |

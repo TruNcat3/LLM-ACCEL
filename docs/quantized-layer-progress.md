@@ -1,14 +1,32 @@
 # Quantized full-layer development study
 
-[Documentation](README.md) | [Implementation map](implementations.md) |
-[Experiments](experiments.md) | [Archived evidence](../results/quantized-layer-w4-20260930/)
+[Documentation](README.md) | [Implementation catalog](implementations.md) |
+[Quantized design](designs/quantized.md) | [Experiments](experiments.md) |
+[Archived evidence](../results/quantized-layer-w4-20260930/)
 
 This September 30, 2026 snapshot reports a completed W4A4 full-layer comparison.
 The archive includes RTL transitions, Host logs, numerical dumps, derived
-metrics and the original analysis tools. The full-layer hardware source/build
-closure has not yet been promoted into the public tree. The executable
-[quantized matrix-block case](../cases/quantized-block/README.md) remains a
-separate component study.
+metrics and the original analysis tools. The public full-layer source is now
+available in [`cases/quantized-layer/`](../cases/quantized-layer/), with its
+own README, source manifest, and build/evidence identity. That source is not
+the frozen source snapshot recorded by this result package and does not inherit
+these measurements. The executable [quantized matrix-block case](../cases/quantized-block/README.md)
+remains a separate component study.
+
+For current source and current evidence, start with the
+[quantized design entry](designs/quantized.md), the
+[public source README](../cases/quantized-layer/README.md), and the
+[`quantized-layer-20261007` evidence package](../results/quantized-layer-20261007/).
+The sections below intentionally retain the September 30 values and historical
+feature labels for reproducibility; they are not a status report for the new
+source tree.
+
+The current package records complete-layer P66+D1 rows for both canonical
+profiles and both named configurations. The base/wave rows are W4A4
+2,288,540/187,844 and 2,284,511/187,557 Prefill/Decode cycles; W8A8
+3,592,954/187,220 and 3,582,758/186,332. Read the package manifest for the
+configuration flags and source identity. These are package measurements, not
+board timing or a full-model projection.
 
 ## Design and configuration map
 
@@ -57,7 +75,10 @@ with zero raw tolerance and zero differing values.
 Cycles come from the saved controller/four-compute-CU RTL `ap_idle` transitions
 and the observed 3,334 ps clock. Each phase spans the earliest CU start through
 the latest CU end; P+D sums the two intervals and excludes the Host gap.
-Efficiency divides useful matrix MAC by cycles times **4,096 MAC/cycle**.
+The archived package declares **4,096 logical MAC/cycle** for this historical
+profile. That denominator is a package contract; it must not be rederived by
+counting a DSP packing factor twice or used as the canonical profile peak for
+the newer source.
 It includes time spent waiting and performing non-matrix work in the interval,
 and is neither PE occupancy nor a physical resource-utilization measurement.
 Host intermediate arithmetic is absent from these runs; the post-inference
@@ -72,11 +93,11 @@ assumption that more logical MAC lanes alone increase end-to-end throughput.
 
 | Experiment | Question | Status at this snapshot |
 | --- | --- | --- |
-| Same four profiles in W8A8 | How does the complete schedule scale with precision and row shape? | Baseline in full-layer HW Emu; matched matrix incomplete |
+| Same four profiles in W8A8 | How does the complete schedule scale with precision and row shape? | At this snapshot, baseline in full-layer HW Emu and matched matrix incomplete; current package records the W8 rows |
 | AXI outstanding 16 to 32 | Can additional memory requests better sustain the pipeline? | W4 finite-FIFO CoSim passed with deadlock detection; full-layer HW Emu running |
-| SiLU two/four lanes | Does nonlinear service rate limit matrix/vector overlap? | Component evidence completed; matched full-layer comparisons pending |
+| SiLU two/four lanes | Does nonlinear service rate limit matrix/vector overlap? | At this snapshot, matched full-layer comparisons pending; current package records the selected SiLU4 rows |
 | RMS tree reduction, two/four lanes | Can parallel normalization reduce cycles within the HLS timing budget? | Standalone RTL checks completed; integrated reference running before lane comparisons |
-| Attention wave pipeline with the combined changes | Do component gains survive their scheduling dependencies? | Combined full-layer comparison pending |
+| Attention wave pipeline with the combined changes | Do component gains survive their scheduling dependencies? | At this snapshot, comparison pending; current package records the selected `-wave` rows |
 
 No completed full-layer speedup is assigned to these follow-ups. Resource
 estimates remain HLS evidence; actual utilization and timing will be checked

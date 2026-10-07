@@ -6,7 +6,7 @@
     .title{font-size:22px;font-weight:700;fill:#f0f6fc}.sub{font-size:14px;fill:#8b949e}.label{font-size:15px;font-weight:600;fill:#c9d1d9}.value{font-size:17px;font-weight:700;fill:#f0f6fc}.tick{font-size:12px;fill:#8b949e}.positive{font-size:15px;font-weight:600;fill:#3fb950}.grid{stroke:#30363d;stroke-width:1}.l1{fill:#58a6ff}.l2{fill:#3fb950}.accent{fill:#d2a8ff}
   </style>
   <text class="title" x="36" y="40">Fix16 resident P8/G2 scales across controller-resident layers</text>
-  <text class="sub" x="36" y="64">Vitis 2022.2 HW Emu · common four-CU interval · modeled at 200 MHz</text>
+  <text class="sub" x="36" y="64">cowave-fix16-2-8-64 / resident-q214 · HW Emu · common four-CU interval · 200 MHz model</text>
   <line class="grid" x1="36" y1="330" x2="924" y2="330"/>
   <text class="label" x="80" y="96">Cycles per layer</text>
   <rect class="l1" x="80" y="126" width="256" height="52" rx="7"/>

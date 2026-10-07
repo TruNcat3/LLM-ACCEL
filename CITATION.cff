@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use CoWave (LLM-ACCEL) in academic work, please cite Teng Wang and this repository."
 title: "CoWave: Controller-Orchestrated Streaming for LLM Acceleration"
 type: software
-version: 0.10.0
-date-released: 2026-08-30
+version: 0.11.0
+date-released: 2026-10-07
 authors:
   - family-names: "Wang"
     given-names: "Teng"
@@ -16,8 +16,9 @@ license: "PolyForm-Noncommercial-1.0.0"
 abstract: >-
   CoWave (the LLM-ACCEL repository) is a synthesizable HLS and RTL hardware-emulation research
   prototype that separates model-aware decoder scheduling and memory state
-  from two regular stream-only 8x64 compute arrays. It explores block-level
-  streaming, host-composed controller-resident subgraphs, 1--8-row block
+  from regular streaming matrix/vector compute arrays. Published designs
+  include two-CU Fix16 8x64 and four-CU W4A4 8x128 / W8A8 4x128 systems.
+  It explores block-level streaming, controller-resident subgraphs, blocked
   prefill, online attention, resident KV-cache management, and cross-wave
   load/compute/collect overlap for Qwen-style decoder layers.
 keywords:

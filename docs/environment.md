@@ -1,106 +1,83 @@
-# Environment Setup
+# Environment
 
 [Documentation index](README.md) | [Usage](usage.md) |
-[Repository map](repository-map.md) | [Release workflow](release-workflow.md) |
-[Repository](../README.md)
+[Design entries](README.md#designs) | [Reference/history](reference.md)
 
-This page is the required starting point for reproduction. It separates the
-software needed to inspect published evidence from the substantially heavier
-environment needed to synthesize or emulate the accelerator. The same shell
-contract serves the Fix16 resident root, the streaming-split case, and the
-quantized matrix-block case; each family has its own source and evidence
-boundary in [Usage](usage.md).
+Use this page once before selecting a family route. Publication checks inspect
+source and immutable evidence without vendor tools; HLS/CoSim/HW-Emu routes
+need the vendor stack. The same shell setup serves the root resident,
+streaming-split, and quantized cases, while each case keeps its own source and
+evidence boundary.
 
-## Learn the workflow
+## Learn the tool flow
 
-Our companion [Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
-provides introductory examples and explanations in Chinese:
+The companion [Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
+covers Kernel, Host, emulation, multi-kernel connectivity, and Makefile flow.
+Its examples reference older tool releases and are instructional; it is not a
+CoWave dependency.
 
-| Topic | Tutorial |
-| --- | --- |
-| Kernel, Host, emulation and hardware build overview | [Overall workflow](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/overall) |
-| Replicating kernels and connecting multiple kernel types | [Multi-kernel examples](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/multi-kernels) |
-| Application-side control and runtime calls | [Host programming](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/host) |
-| Build targets and dependency rules | [Makefile walkthrough](https://github.com/Reconfigurable-Computing/Vitis_workflow/tree/main/Makefile) |
+## Reference stack
 
-Use the tutorial to learn the flow, then use this page and the selected
-CoWave recipe for reproduction. Its installation examples reference Ubuntu
-18.04 and Vitis 2020.2; CoWave's archived measurements use the reference stack
-below. The tutorial is a learning resource, not a build dependency.
-
-## 1. Reference stack
-
-The released measurements were produced with the following compatible stack:
-
-| Component | Reference configuration | Required for |
+| Component | Reference | Needed for |
 | --- | --- | --- |
-| Host OS | Ubuntu 20.04, x86-64 | All recorded builds |
-| Vitis / Vivado / Vitis HLS | 2022.2 | HLS, XO export, linking, HW Emu |
-| XRT | 2022.2 / 2.14 | Host compilation, HW Emu, board runtime |
-| Vitis platform | `xilinx_u50_gen3x16_xdma_5_202210_1` | Reference evaluation platform for linking and emulation |
-| Target card | Alveo U50 | Optional physical-board validation only |
+| Host OS | Ubuntu 20.04 x86-64 | Archived builds and host checks |
+| Vitis / Vivado / Vitis HLS | 2022.2 | HLS, XO export, link, HW-Emu |
+| XRT | 2022.2 / 2.14 | Host compilation, HW-Emu, board runtime |
+| Platform | `xilinx_u50_gen3x16_xdma_5_202210_1` | Reference link and emulation identity |
+| Target card | Alveo U50 | Physical-board validation only; optional for software/HLS/HW-Emu |
 
-The FPGA card is not required for CSim, RTL CoSim, synthesis, or HW Emu. A
-different tool release or platform may work, but it creates a new evidence
-configuration and must not be presented as a reproduction of the archived
-2022.2 results. The U50 is CoWave's reference evaluation platform for those
-artifacts, not the design identity; exact platform and device names remain
-necessary for reproducing the published configuration.
+A different tool release or platform may work, but it is a different evidence
+configuration and must not be described as reproducing an archived result.
 
-## 2. Reproduction levels
+## Preflight levels
 
-Choose the smallest preflight mode matching the intended work:
+Run the smallest mode that matches the intended route:
 
-| Mode | What it checks | Default resource guard |
+| Mode | Checks | Default guard |
 | --- | --- | --- |
-| `publication` | Shell, compiler, Git, Python, Perl, ripgrep, checksums | 2 GiB memory and 2 GiB `/tmp` |
-| `hls` | Publication tools plus Vitis/Vivado/HLS 2022.2 and development headers; covers root and case-local HLS/CoSim | 50 GiB memory and 20 GiB `/tmp` |
-| `hw-emu` | HLS stack plus XRT, U50 reference evaluation platform, `emconfigutil`, `xclbinutil`, and `tmux`; needed by Fix16 system runs | 80 GiB memory and 100 GiB `/tmp` |
-| `board` | XRT management tools and a render device node | 4 GiB memory and 2 GiB `/tmp` |
+| `publication` | Shell, compiler, Git, Python, Tcl, Perl, ripgrep, checksums | 2 GiB memory and `/tmp` |
+| `hls` | Publication tools plus Vitis/Vivado/HLS and headers | 50 GiB memory, 20 GiB `/tmp` |
+| `hw-emu` | HLS stack, XRT, U50 platform tools, `tmux` | 80 GiB memory, 100 GiB `/tmp` |
+| `board` | XRT management tools and render node | 4 GiB memory and `/tmp` |
 
-Every mode also checks the core shell and publication utilities. The table
-lists the additional contract that distinguishes each level.
+```bash
+scripts/check_environment.sh publication
 
-The `hw-emu` guard is deliberately sized for the standard Qwen2.5-3B build.
-Small profiles and operator diagnostics may use less. Individual long-running
-launchers retain their own authoritative guards and may refuse a run even after
-a relaxed preflight. Quantized planner and CSim checks do not need `hw-emu`.
+source scripts/setup_environment.sh
+scripts/check_environment.sh hls
+scripts/check_environment.sh hw-emu
+```
 
-## 3. Install prerequisites
+`hls` covers root and case-local CSim, CoSim, and synthesis. `hw-emu` is
+needed for linked system runs. Quantized planning and CSim do not need
+`hw-emu`. A launcher can impose a stricter guard than this preflight.
 
-Install the AMD/Xilinx 2022.2 tools, XRT, and (for Vitis link/HW-Emu) the U50
-reference evaluation platform using
-their licensed installers and platform packages. The repository does not
-redistribute vendor binaries, board firmware, or model checkpoints.
+## Install prerequisites
 
-The non-vendor host packages correspond to the following Ubuntu packages or
-equivalent tools:
+Install the licensed AMD/Xilinx 2022.2 tools, XRT, and (for link/HW-Emu) the
+U50 platform package. The repository does not redistribute vendor binaries,
+board firmware, model checkpoints, or weights.
+
+Equivalent host packages include:
 
 ```text
-build-essential  git  make  g++  python3  perl  ripgrep  tmux
+build-essential git make g++ python3 tcl perl ripgrep tmux
 ocl-icd-opencl-dev
 ```
 
-OpenCL development headers must provide `CL/cl2.hpp`. XRT must provide its
-headers and runtime libraries. Board use additionally requires the XRT kernel
-drivers and a platform/firmware installation compatible with the card. The
-quantized planner itself is shell/AWK-only, but its HLS and CoSim recipes use
-the same Vitis HLS 2022.2 environment.
+OpenCL development headers must provide `CL/cl2.hpp`; XRT must provide headers
+and runtime libraries. Physical board use additionally needs compatible XRT
+drivers and firmware.
 
-## 4. Configure the shell
+## Configure the shell
 
-For a standard installation, the repository setup helper locates common
-2022.2 and XRT paths automatically:
+The helper resolves common 2022.2 and XRT paths:
 
 ```bash
 source scripts/setup_environment.sh
 ```
 
-This step is needed before HLS, CoSim, Vitis link, or HW-Emu. A publication-
-only audit does not need vendor tools; run
-`scripts/check_environment.sh publication` directly as shown in Section 5.
-
-For a custom installation, set explicit paths first:
+For a custom install, set paths before sourcing:
 
 ```bash
 export VITIS_ENV_SCRIPT=/path/to/Vitis/2022.2/settings64.sh
@@ -110,102 +87,45 @@ export XPLATFORM=/path/to/xilinx_u50_gen3x16_xdma_5_202210_1.xpfm
 source scripts/setup_environment.sh
 ```
 
-The helper must be sourced; executing it cannot modify the parent shell. It
-exports the resolved environment script, tool roots, device name, and platform
-path. Public launchers use the same resolver and do not depend on a
-machine-private setup path. `XPLATFORM` is required for Vitis link and
-`sw_emu`; HLS-only quantized checks still benefit from the same tool setup.
+The helper must be sourced. `XPLATFORM` is required for Vitis link and
+`sw_emu`; HLS-only quantized checks still use the same tool setup.
 
-## 5. Run preflight
+## Generated data
 
-Run one check before the corresponding workflow:
-
-```bash
-# Inspect documentation and checksum-protected evidence.
-scripts/check_environment.sh publication
-
-# Compile Host code, run CSim/CoSim, or synthesize HLS.
-scripts/check_environment.sh hls
-
-# Build or execute the linked multi-kernel hardware emulator.
-scripts/check_environment.sh hw-emu
-
-# Inspect a physically installed card and XRT driver access.
-scripts/check_environment.sh board
-```
-
-A preflight returns nonzero if a required command, version, header, platform,
-device node, or resource guard is missing. Warnings identify differences from
-the reference system without hiding a hard failure.
-
-For diagnostic use only, resource thresholds may be overridden:
+The root Makefile writes generated products under `vitis_8x64/` and
+`reports/`; full-shape wrappers use `/tmp` by default. Redirect large builds
+before launching:
 
 ```bash
-LLM_ACCEL_MIN_AVAILABLE_GIB=32 \
-LLM_ACCEL_MIN_TMP_GIB=40 \
-  scripts/check_environment.sh hw-emu
-
-# Skip only the capacity check; all tool and platform checks still run.
-LLM_ACCEL_SKIP_RESOURCE_CHECK=1 scripts/check_environment.sh hls
+export VITIS_8X64_QWEN3B_WORK_ROOT=/fast-scratch/$USER/cowave-qwen3b
+export VITIS_8X64_QWEN3B_TMP_ROOT=/fast-scratch/$USER/cowave-qwen3b/tmp
 ```
 
-Lowering a preflight threshold does not override a launcher's own safety guard.
+Generated XO/xclbin, waveform, executable, checkpoint, model-weight, and
+temporary project files are intentionally excluded from Git. A result package
+records source and generated-artifact identities rather than storing these
+large files in the repository.
 
-## 6. Generated data and storage
+## Board boundary and failures
 
-The default Makefile writes profile-specific generated products under
-`vitis_8x64/` and `reports/`. Full-shape wrappers place large temporary trees
-under `/tmp` by default. Override these before launching when `/tmp` is not the
-desired high-capacity filesystem:
-
-```bash
-export VITIS_8X64_QWEN3B_WORK_ROOT=/fast-scratch/$USER/llm-accel-qwen3b
-export VITIS_8X64_QWEN3B_TMP_ROOT=/fast-scratch/$USER/llm-accel-qwen3b/tmp
-```
-
-The Qwen build launcher forwards both paths, the selected device, thread
-count, and resource thresholds explicitly into its tmux worker. This avoids a
-long-lived tmux server silently reusing stale environment values. `TMPDIR` is
-also bound to `VITIS_8X64_QWEN3B_TMP_ROOT`, so the 100-GiB capacity guard is
-checked on the filesystem that actually owns build scratch data.
-
-Generated XO, xclbin, waveform, executable, checkpoint, and build-tree files
-are intentionally excluded from Git. A released evidence package records the
-source and generated-artifact identities needed to audit a result.
-
-## 7. Board-specific boundary
-
-The `board` preflight proves only that XRT commands and a render node exist. It
-does not prove that the card shell, management controller, clocks, HBM, or a
-particular xclbin are healthy. Before physical execution, separately inspect:
+The board preflight proves only XRT command and device access:
 
 ```bash
 xbmgmt examine
 xbutil examine
 ```
 
-Do not use board output as a replacement for the archived HW-Emu evidence.
-Physical timing, power, and throughput require their own result package and
-measurement boundary.
+It does not prove shell health, HBM, clocks, routing, or a particular xclbin.
+Physical timing/power/throughput require a separate result package.
 
-## 8. Common failures
+Common failures are usually a mismatched Vitis release in `PATH`, an unresolved
+U50 `.xpfm`, missing OpenCL/XRT headers, or insufficient memory/scratch space.
+Set `VITIS_ENV_SCRIPT` explicitly, verify `XPLATFORM`, and inspect the actual
+filesystem behind `VITIS_8X64_QWEN3B_TMP_ROOT` before retrying. Resource
+threshold overrides are diagnostic only:
 
-- **A 2021.x or 2023.x executable appears first in `PATH`.** Set
-  `VITIS_ENV_SCRIPT` explicitly, source the setup helper again, and rerun the
-  `hls` preflight.
-- **The U50 reference evaluation platform is unresolved.** Set `XPLATFORM` to
-  the installed `.xpfm`;
-  a device name alone is not sufficient for a reproducible link.
-- **Host compilation cannot find OpenCL/XRT.** Install the OpenCL development
-  package and verify `XILINX_XRT` before rebuilding.
-- **HLS or HW Emu refuses to start.** Check both available memory and the
-  filesystem holding the selected work root. Do not bypass a resource guard
-  while another Vivado/XSim job is consuming the machine.
-- **Board preflight lacks a render node.** Fix XRT driver/device permissions
-  before debugging kernels or model data.
+```bash
+LLM_ACCEL_SKIP_RESOURCE_CHECK=1 scripts/check_environment.sh hls
+```
 
-After the selected preflight passes, continue with
-[Usage and Reproduction](usage.md). It routes to the Fix16 resident,
-streaming-split, and quantized matrix-block families, and links to the
-scoped [resident](reproduction-resident.md) and
-[diagnostic](reproduction-diagnostics.md) command guides.
+After this page passes, continue with [Usage and reproduction](usage.md).

@@ -5,7 +5,7 @@
 [Experiments](../docs/experiments.md) | [Setup](../docs/environment.md) |
 [License](../LICENSE)
 
-This directory contains nine immutable evidence packages. Each package keeps
+This directory contains ten immutable evidence packages. Each package keeps
 the evidence appropriate to its stage, such as HW-Emu profiles and Host
 excerpts where applicable, HLS/RTL reports, derived rows, source identity, and
 the SHA-256 manifest needed to audit its claim without retaining a generated
@@ -19,29 +19,33 @@ resident mainline, diagnostics, protocol tests and component evidence.
 “Common four-CU interval” means the same run-local profiler Running
 Time for controller, both compute CUs, and status sink; it does not resolve
 per-CU occupancy or Host gaps.
-The W4 full-layer development archive instead measures each phase from the
-earliest start through the latest end across its controller and four compute
-CUs, using RTL pin transitions. Its hardware source release is pending.
+The full-layer quantized archives measure each phase from the earliest start
+through the latest end across the controller and four compute CUs, using RTL
+pin transitions. Their source manifests identify the frozen development
+snapshots. The matching October W4/W8 hardware source closure is published in
+[`cases/quantized-layer/`](../cases/quantized-layer/); portable build scripts are
+new release entry points, not the original experiment binaries.
 
 | Package | Hardware family | Evidence scope | Workload | Evidence source and measured boundary | Supported claim |
 | --- | --- | --- | --- | --- | --- |
-| [`quantized-layer-w4-20260930/`](quantized-layer-w4-20260930/) | Development quantized full-layer system; hardware source release pending | Matched four-profile comparison | P66+D1, one layer, one sequence, four W4 compute CUs | RTL phase intervals; P+D excludes the Host gap; saved traces/dumps and replayable analysis | 171,520 values exact per profile; Integrated reduces total cycles by 14.28% from its matched Baseline; no trained-model or board-performance claim |
-| [`q214-resident-fix-20260818/`](q214-resident-fix-20260818/) | Fix16 resident | Released single-layer gate | Standard Qwen-shaped P8, Tasks 18/19/20 | Vitis 2022.2 HW-Emu common four-CU interval; Host setup/embedding/LM head and CPU oracle excluded | 16,384-value exact numerical closure; 651,621 modeled cycles at 200 MHz projection; no intermediate Host copy |
-| [`qwen3b-e2e-20260820/`](qwen3b-e2e-20260820/) | Fix16 resident | Released bounded generation | P8/G2/L1, one sequence, one real D1 forward | Vitis 2022.2 HW-Emu common four-CU interval; Host embedding/sampling/validation excluded | Six-task P8 plus real D1 closure; 4,096 values exact; 1,190,693 modeled cycles |
-| [`qwen3b-e2e-l2-20260821/`](qwen3b-e2e-l2-20260821/) | Fix16 resident | Released bounded generation | P8/G2/L2, one sequence, two decoder layers | Vitis 2022.2 HW-Emu common four-CU interval; Host embedding/sampling/validation excluded | Ten-task cross-layer closure; 4,096 values exact; 2,319,441.4 modeled cycles |
-| [`q214-pd-20260811/`](q214-pd-20260811/) | Fix16 resident | Operator diagnostics | Q2.14 P/D contexts 64, 256, 512, 1024 | Host-orchestrated aggregate `cc8_ctrl` Running Time for sequential operator calls; same interval is reported for listed CUs, while Host gaps, fixture migration, and CPU golden checks are excluded | Context scaling, precision checks, and modeled useful-MAC efficiency of the diagnostic datapath |
-| [`coarse-task-20260816/`](coarse-task-20260816/) | Fix16 resident | Small-shape protocol tests | Small two-layer Task 18/19/20 and serial prompt/decode composition | RTL CoSim, HW-Emu, HLS; common four-CU modeled interval; 300-MHz XSim cycles projected to 200 MHz; Host embedding/sampling excluded | Cross-task/cross-layer HBM residency and controller-owned KV; not Qwen throughput |
-| [`block-prefill-20260817/`](block-prefill-20260817/) | Fix16 resident | Small-shape protocol tests | Small P8, P16, P11 tail, and P8/G2 block contracts | RTL CoSim, HW-Emu, HLS; common four-CU modeled interval; 300-MHz XSim cycles projected to 200 MHz | One-to-eight-row block semantics, causal KV state, and finite-stream closure |
-| [`qwen3b-checkpoint-20260830/`](qwen3b-checkpoint-20260830/) | Fix16 resident | Checkpoint diagnostics | P8 with per-task Host readback | Vitis 2022.2 HW-Emu with intentional checkpoint D2H after each task; no performance interval | Layers 0--2 bit-exact; first one-unit divergence at layer 3 Attention; no checkpoint-accuracy or throughput claim |
-| [`quantized-single-bank-20260907/`](quantized-single-bank-20260907/) | Quantized matrix blocks | Published component candidate | Controller-facing W4A4/W8A8 single-bank kernels | Vitis HLS 2022.2 CSynth plus bounded deadlock-enabled RTL CoSim; resource rows are local/four-CU sums, not system timing | `II=1`, 3/3 CoSim transactions, and local resource estimates; controller integration, full-layer performance, and deployable system release remain open |
+| [`quantized-layer-20261007/`](quantized-layer-20261007/) | `cowave-int4-4-8-128` / `cowave-int8-4-4-128` | Four completed integrated RMS2/SiLU4 prefill-overlap cases, with ref/wave flag pairs | P66+D1, one layer, B1, four compute CUs; W4 8-row blocks and W8 4-row blocks | RTL `ap_clk`/`ap_idle`/`ap_done` pin intervals; modeled 200 MHz target; P+D excludes the Host gap; compact replayable pin input and standard-library verifier | 171,520 C-equivalent values exact per case; W4 peak 4,096 and W8 peak 2,048 MAC/cycle; no checkpoint, board, routed-timing, or 36-layer claim |
+| [`quantized-layer-w4-20260930/`](quantized-layer-w4-20260930/) | `cowave-int4-4-8-128`; historical September source snapshot | Matched four-profile comparison | P66+D1, one layer, one sequence, four W4 compute CUs | RTL phase intervals; P+D excludes the Host gap; saved traces/dumps and replayable analysis | 171,520 values exact per profile; Integrated reduces total cycles by 14.28% from its matched Baseline; no trained-model or board-performance claim |
+| [`q214-resident-fix-20260818/`](q214-resident-fix-20260818/) | `cowave-fix16-2-8-64` | Released single-layer gate | Standard Qwen-shaped P8, Tasks 18/19/20 | Vitis 2022.2 HW-Emu common four-CU interval; Host setup/embedding/LM head and CPU oracle excluded | 16,384-value exact numerical closure; 651,621 modeled cycles at 200 MHz projection; no intermediate Host copy |
+| [`qwen3b-e2e-20260820/`](qwen3b-e2e-20260820/) | `cowave-fix16-2-8-64` | Released bounded generation | P8/G2/L1, one sequence, one real D1 forward | Vitis 2022.2 HW-Emu common four-CU interval; Host embedding/sampling/validation excluded | Six-task P8 plus real D1 closure; 4,096 values exact; 1,190,693 modeled cycles |
+| [`qwen3b-e2e-l2-20260821/`](qwen3b-e2e-l2-20260821/) | `cowave-fix16-2-8-64` | Released bounded generation | P8/G2/L2, one sequence, two decoder layers | Vitis 2022.2 HW-Emu common four-CU interval; Host embedding/sampling/validation excluded | Ten-task cross-layer closure; 4,096 values exact; 2,319,441.4 modeled cycles |
+| [`q214-pd-20260811/`](q214-pd-20260811/) | `cowave-fix16-2-8-64` | Operator diagnostics | Q2.14 P/D contexts 64, 256, 512, 1024 | Host-orchestrated aggregate `cc8_ctrl` Running Time for sequential operator calls; same interval is reported for listed CUs, while Host gaps, fixture migration, and CPU golden checks are excluded | Context scaling, precision checks, and modeled useful-MAC efficiency of the diagnostic datapath |
+| [`coarse-task-20260816/`](coarse-task-20260816/) | `cowave-fix16-2-8-64` | Small-shape protocol tests | Small two-layer Task 18/19/20 and serial prompt/decode composition | RTL CoSim, HW-Emu, HLS; common four-CU modeled interval; 300-MHz XSim cycles projected to 200 MHz; Host embedding/sampling excluded | Cross-task/cross-layer HBM residency and controller-owned KV; not Qwen throughput |
+| [`block-prefill-20260817/`](block-prefill-20260817/) | `cowave-fix16-2-8-64` | Small-shape protocol tests | Small P8, P16, P11 tail, and P8/G2 block contracts | RTL CoSim, HW-Emu, HLS; common four-CU modeled interval; 300-MHz XSim cycles projected to 200 MHz | One-to-eight-row block semantics, causal KV state, and finite-stream closure |
+| [`qwen3b-checkpoint-20260830/`](qwen3b-checkpoint-20260830/) | `cowave-fix16-2-8-64` | Checkpoint diagnostics | P8 with per-task Host readback | Vitis 2022.2 HW-Emu with intentional checkpoint D2H after each task; no performance interval | Layers 0--2 bit-exact; first one-unit divergence at layer 3 Attention; no checkpoint-accuracy or throughput claim |
+| [`quantized-single-bank-20260907/`](quantized-single-bank-20260907/) | `cowave-quantized-blocks` | Published component candidate | Controller-facing W4A4/W8A8 single-bank kernels | Vitis HLS 2022.2 CSynth plus bounded deadlock-enabled RTL CoSim; resource rows are local/four-CU sums, not system timing | `II=1`, 3/3 CoSim transactions, and local resource estimates; controller integration, full-layer performance, and deployable system release remain open |
 
 The **Streaming split** family has no published full-system measurement in this
 directory. Its analytical projections and source boundary are documented in
 [`cases/streaming-split/docs/design.md`](../cases/streaming-split/docs/design.md)
 and must not be mixed with measured Fix16 resident rows. The quantized
-matrix-block package remains component evidence. The W4 full-layer development
-package provides separate controller/compute HW-Emu measurements, with its
-hardware source release and physical implementation still pending.
+matrix-block package remains component evidence. The CoWave package provides
+separate W4/W8 controller/compute HW-Emu measurements and links to its published
+source closure. Physical implementation remains unverified.
 
 ## Measurement policy
 
@@ -64,8 +68,9 @@ hardware source release and physical implementation still pending.
 - Modeled useful-MAC efficiency divides shape-counted useful MAC by the
   measured modeled interval and the declared peak: 1,024 MAC/cycle for the
   two-compute-CU Fix16 resident system, or 4,096 MAC/cycle for the four-compute-CU
-  W4 full-layer development system. It does not measure PE occupancy, power,
-  PCIe latency, or physical utilization.
+  W4 full-layer development system, or 2,048 MAC/cycle for the four-CU W8
+  CoWave configuration. It does not measure PE occupancy, power, PCIe latency,
+  or physical utilization.
 - HLS CSynth tables are local resource and timing estimates, not post-route
   utilization or timing closure. Four-CU rows in the quantized matrix-block package are
   arithmetic resource sums and not an integrated system implementation.
@@ -74,7 +79,8 @@ hardware source release and physical implementation still pending.
   shape, arithmetic, and protocol; they are not trained-checkpoint accuracy.
 - No package claims a 36-layer measured run or a physical-board result. The L2
   package is a bounded two-layer composition; the checkpoint package stops at
-  the first observed layer-3 Attention divergence.
+  the first observed layer-3 Attention divergence. CoWave's C-equivalent
+  reference is not checkpoint accuracy.
 
 ## Integrity
 

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "release_date": "2026-10-07",
+  "source_archives": {
+    "w4": {
+      "archive_id": "quantized_layer_combinations_20261005_082444_v4FXjs",
+      "source_manifest_sha256": "e5937047f2558aeada5372f7641ca7bcbed610d402d40fb0d3cf6d39421e9661",
+      "source_manifest_lines": 719,
+      "run_config_sha256": "0e79695f17ff7a510f2569f1e6623f72a26db8037c35f4d08976259c2969e9bc",
+      "source_verified": "source_verified.log completed with all listed checks OK",
+      "completion": "W4 ref and wave candidate/archive pass; ooo16 is excluded from this package"
+    },
+    "w8": {
+      "archive_id": "quantized_layer_combinations_20261003_225644_r6FNxq",
+      "source_manifest_sha256": "17bfb13a147ca03949e1924b368999c6387d69626b8e83126b947a6c28909103",
+      "source_manifest_lines": 718,
+      "run_config_sha256": "7c3d8222cac9070369ca811a0a3a2873e31f17131f8238f4bf3656dc907fc96c",
+      "source_verified": "source_verified.log completed with all listed checks OK",
+      "completion": "W8 ref and wave candidate/archive pass; all three W8 candidates completed but only ref/wave are selected"
+    }
+  },
+  "source_consistency": {
+    "within_precision": "ref and wave have the same source manifest hash and reference source hash",
+    "cross_precision": "W4 and W8 full manifest hashes intentionally differ; the only manifest path present only in W4 is scripts/quantized_layer_w4_followup_cases.tsv",
+    "selected_manifest": "source_manifest.selected.sha256 contains the common source rows used by the selected design, host, CoSim, analysis, and verifier paths",
+    "public_source_closure": "../../cases/quantized-layer/ (relative to the package root); source.sha256 and source_origins.tsv are the portable public source entry",
+    "hardware_source_consistency": "The W4 and W8 required hardware source files are byte-identical to both frozen snapshots. The old full manifests differ only in development-only file membership, including the W4-only follow-up case list.",
+    "identity_policy": "The original archive identities and configuration labels are retained; the published case closure is the new source entry, while archived binary hashes remain provenance for completed runs."
+  },
+  "profile_flags": {
+    "w4-ref": "cflags-w4-ref.txt",
+    "w4-wave": "cflags-w4-wave.txt",
+    "w8-ref": "cflags-w8-ref.txt",
+    "w8-wave": "cflags-w8-wave.txt"
+  },
+  "profile_cflags_sha256": {
+    "w4-ref": "93057ef61a0e51465a6da5e139767a947ca07dd7756c8960254b2d503c1585e0",
+    "w4-wave": "8374bd2bf174f018372d220224d6d62ebe85946d350fcc45afcbb362a295a3d4",
+    "w8-ref": "eb9ab84f7e7a24386b4a54e2e6c336bd0a897fb24f80d590a58599bac0ee2fe9",
+    "w8-wave": "068c1db0d6235c7bac46bee522ac5bfa6cf26a4f9a4c6de4315ec5792b16fea8"
+  },
+  "model_and_tool_contract": {
+    "board_target": "xcu50-fsvh2104-2-e",
+    "vitis": "2022.2",
+    "simulation_clock_ps": 3334,
+    "target_clock_mhz": 200,
+    "model_shape": "P66+D1, B1, L1, H2048/I11008, Q16/KV2/HD128",
+    "precision": "W4A4 or W8A8 matrix operands with signed Fix16 stored outputs",
+    "compute_cus": 4,
+    "hls_scope": "pre-platform CSynth estimate; not post-route closure"
+  }
+}

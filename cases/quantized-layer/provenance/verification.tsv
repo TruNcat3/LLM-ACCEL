@@ -1,0 +1,13 @@
+precision	candidate	profile	silu_lanes	rms_lanes	weight_read_outstanding	attention_wave	prefill_ffn_overlap	evidence_status	evidence_snapshot
+w4	integrated_rms2_overlap_ref	integrated	4	2	32	0	1	completed_archive_pass	quantized_layer_combinations_20261005_082444_v4FXjs
+w4	integrated_rms2_overlap_wave	integrated	4	2	32	1	1	completed_archive_pass	quantized_layer_combinations_20261005_082444_v4FXjs
+w4	integrated_rms2_overlap_ooo16	integrated	4	2	16	0	1	excluded_incomplete_from_release	quantized_layer_combinations_20261005_082444_v4FXjs
+w8	integrated_rms2_overlap_ref	integrated	4	2	32	0	1	completed_archive_pass	quantized_layer_combinations_20261003_225644_r6FNxq
+w8	integrated_rms2_overlap_wave	integrated	4	2	32	1	1	completed_archive_pass	quantized_layer_combinations_20261003_225644_r6FNxq
+w8	integrated_rms2_overlap_ooo16	integrated	4	2	16	0	1	excluded_not_selected_from_release	quantized_layer_combinations_20261003_225644_r6FNxq
+release_scope	source closure							W4/W8 full-layer source plus portable entries	not_a_measurement
+native_regression	make test-native							PASS; local Vitis HLS C++ headers	/tmp/cowave-quantized-layer-native
+host_compile	make host PRECISION=w4|w8							PASS; W4 and W8 local Host link	/tmp/cowave-quantized-layer-host
+cosim_entry	make cosim PRECISION=w4|w8 COSIM_STAGE=prepare|cosim|all							archived full-layer PASS; portable entry not replayed	../../results/quantized-layer-20261007/evidence/run_status.tsv
+hwemu_entry	make hwemu PRECISION=w4|w8							archived full-layer PASS; portable entry not replayed	../../results/quantized-layer-20261007/evidence/run_status.tsv
+evidence_package	../../results/quantized-layer-20261007							published W4/W8 ref+wave evidence	../../results/quantized-layer-20261007

@@ -1,105 +1,97 @@
 # Repository and source map
 
-[Documentation](README.md) | [Implementation catalog](implementations.md) |
-[Usage](usage.md) | [Release workflow](release-workflow.md)
+[Documentation](README.md) | [Design catalog](implementations.md) |
+[Usage](usage.md) | [Reference/history](reference.md)
 
-The root source implements Fix16 resident. Alternative implementations live
-under `cases/`; all families share the public documentation and evidence
-index. Existing source paths also identify historical build manifests, so the
-catalog supplies the hierarchy without changing those build identities.
+The source tree has one root resident implementation and independent case
+families. Historical build paths are retained for compatibility; the
+canonical names and configuration labels are maintained by the
+[implementation catalog](implementations.md).
 
 ```text
 LLM-ACCEL/
-├── README.md, CITATION.cff, LICENSE       research entry and attribution
-├── docs/                                design, reproduction, interpretation
-├── kernel/, include/, host/, common/     Fix16 resident implementation
-├── cases/
-│   ├── streaming-split/                  alternative control/compute split
-│   └── quantized-block/                  quantized matrix components
-├── Makefile, conn_*.cfg, tcl/, scripts/   build and experiment entry points
-├── tests/                               root contracts and bounded fixtures
-├── results/                             immutable evidence packages
-└── CHECKSUMS.sha256                      public-tree content manifest
+|- docs/                                  design, evaluation, reproduction
+|- kernel/, include/, host/, common/      cowave-fix16-2-8-64 root source
+|- cases/
+|  |- streaming-split/                    cowave-streaming-split
+|  |- quantized-block/                    W4A4/W8A8 component blocks
+|  `- quantized-layer/                    public full-layer quantized source
+|- Makefile, conn_*.cfg, tcl/, scripts/   build and evaluation entry points
+|- tests/                                  root contracts and bounded fixtures
+|- results/                                immutable evidence packages
+`- CHECKSUMS.sha256                       public-tree manifest
 ```
 
-## Resident source
+## Root resident source
 
 | Responsibility | Source entry | Contract |
 | --- | --- | --- |
-| Model dimensions and formats | [model_config.hpp](../include/model_config.hpp), [datatypes.hpp](../include/datatypes.hpp), [hardware.hpp](../include/hardware.hpp) | Separate compiled capacity, numeric formats and actual runtime workload |
-| Host program and buffers | [host_qwen_8x64.cpp](../host/host_qwen_8x64.cpp), [host_coarse_task_program.hpp](../include/host_coarse_task_program.hpp) | Coarse task descriptors, initial input/final output, embedding and vocabulary head |
-| Smoke / operator harness | [host_8x64.cpp](../host/host_8x64.cpp) | Bounded integration diagnostics, not automatically a full-model execution |
-| Model-aware controller | [control_cache_8x64.cpp](../kernel/control_cache_8x64.cpp), [controller header](../include/control_cache_8x64.hpp) | HBM residency, wave dispatch, online attention, KV and layer subgraphs |
-| Compute service | [compute_core_8x64_unified.cpp](../kernel/compute_core_8x64_unified.cpp), [compute_stream.cpp](../kernel/compute_stream.cpp) | Unified matrix/vector task execution and stream ordering |
-| Matrix engine | [mm_stream_8x64_fused_mac.cpp](../kernel/mm_stream_8x64_fused_mac.cpp), [mm_controller.cpp](../kernel/mm_controller.cpp) | Tiled products, reduction and projection scheduling |
-| Vitis boundaries | [controller wrapper](../kernel/control_cache_8x64_nk.cpp), [compute wrapper](../kernel/compute_core_8x64_nk.cpp), [stream ABI](../include/vitis_stream_8x64.hpp) | Packed inter-kernel task/data words |
-| Completion sink | [cc8_status_sink.cpp](../kernel/cc8_status_sink.cpp) | Consume status output so finite streams drain |
-| Closed-loop RTL fixture | [closed_loop_8x64_cosim.cpp](../kernel/closed_loop_8x64_cosim.cpp), [testbench](../tests/closed_loop_8x64_cosim_tb.cpp) | Test instrumentation and finite FIFO closure, not another production CU |
-| Pipeline configuration | [stream_depth_config.hpp](../include/stream_depth_config.hpp), [weight_pipeline_config.hpp](../include/weight_pipeline_config.hpp) | FIFO capacity, load II and wave-overlap options |
-| OpenCL helpers | [common/include](../common/include/) | Host support shared by root flows |
+| Formats and model dimensions | [`model_config.hpp`](../include/model_config.hpp), [`datatypes.hpp`](../include/datatypes.hpp), [`hardware.hpp`](../include/hardware.hpp) | Capacity, numeric types, and workload are separate axes |
+| Host and buffers | [`host_qwen_8x64.cpp`](../host/host_qwen_8x64.cpp), [`host_coarse_task_program.hpp`](../include/host_coarse_task_program.hpp) | Task descriptors, initial input/final output, embedding, vocabulary head |
+| Controller/cache | [`control_cache_8x64.cpp`](../kernel/control_cache_8x64.cpp), [`control_cache_8x64.hpp`](../include/control_cache_8x64.hpp) | HBM residency, wave dispatch, online attention, KV, layer subgraphs |
+| Compute service | [`compute_core_8x64_unified.cpp`](../kernel/compute_core_8x64_unified.cpp), [`compute_stream.cpp`](../kernel/compute_stream.cpp) | Matrix/vector tasks and stream ordering |
+| Matrix engine | [`mm_stream_8x64_fused_mac.cpp`](../kernel/mm_stream_8x64_fused_mac.cpp), [`mm_controller.cpp`](../kernel/mm_controller.cpp) | Tiled products, reduction, projection scheduling |
+| Vitis wrappers and ABI | [`control_cache_8x64_nk.cpp`](../kernel/control_cache_8x64_nk.cpp), [`compute_core_8x64_nk.cpp`](../kernel/compute_core_8x64_nk.cpp), [`vitis_stream_8x64.hpp`](../include/vitis_stream_8x64.hpp) | Packed task/data words; historical kernel ABI remains stable |
+| Completion and tests | [`cc8_status_sink.cpp`](../kernel/cc8_status_sink.cpp), [`closed_loop_8x64_cosim.cpp`](../kernel/closed_loop_8x64_cosim.cpp) | Status drainage and finite-FIFO fixtures; not extra production CUs |
+| Pipeline configuration | [`stream_depth_config.hpp`](../include/stream_depth_config.hpp), [`weight_pipeline_config.hpp`](../include/weight_pipeline_config.hpp) | FIFO capacity, load II, and overlap options |
 
-For the actual tensor ownership and task ordering, read
-[architecture](architecture.md) and [coarse-task runtime](coarse-task-runtime.md).
-The source map identifies modules; it does not replace their ABI definitions.
+Read [architecture](architecture.md) for ownership and
+[coarse-task runtime](coarse-task-runtime.md) for task ordering. The source
+map identifies modules; it does not replace their ABI headers or build
+manifests.
 
-## Alternatives and components
+## Independent case sources
 
-[The case index](../cases/README.md) is the entry for both alternative families.
+The [case index](../cases/README.md) is the entry for alternative families.
 
-- Streaming split keeps its own control/cache kernel, compute kernel, packet
-  header, Host tests, connectivity and Tcl flows together.
-- Quantized matrix blocks keep their own kernels, task/packet headers, bounded
-  testbenches and HLS Tcl variants together. The root regression wrapper and
-  CU planner dispatch these case-local sources.
+- `cases/streaming-split/` keeps its `cc`, V8-2_s kernel, packet headers,
+  Host tests, connectivity, and Tcl flows together.
+- `cases/quantized-block/` keeps the W4A4/W8A8 component kernels, task/packet
+  headers, testbenches, Tcl variants, regression wrapper, and planner together.
+- `cases/quantized-layer/` is a separate public full-layer source closure with
+  its own README and configuration/build identity. It must not be reconstructed
+  by combining the component case with a dated result archive.
 
-A case-local include or source file is not automatically part of the resident
-binary. Use the actual build script and source manifest to determine that
-closure.
-
-The [quantized full-layer development archive](../results/quantized-layer-w4-20260930/)
-contains measurement inputs and analysis tools. Its hardware source identities
-refer to the frozen development snapshot; they do not make the root or
-matrix-block case a source closure for rebuilding that system. See the
-[progress report](quantized-layer-progress.md) for the release boundary.
+Case-local files are not automatically part of the root binary. Use the
+family README, source manifest, and command helper to establish closure.
 
 ## Configuration ownership
 
 | Setting | Authority |
 | --- | --- |
-| Root model profile | [Makefile](../Makefile), [common_hls_model_profile.tcl](../tcl/common_hls_model_profile.tcl), [model_config.hpp](../include/model_config.hpp) |
-| Root FIFO/HLS overrides | [common_hls_depth_config.tcl](../tcl/common_hls_depth_config.tcl) and the two pipeline headers above |
-| Root CU replication and HBM mapping | [standard connectivity](../conn_u50_8x64_dual.cfg), [full-resident connectivity](../conn_u50_8x64_dual_full_resident.cfg) |
-| Runtime arguments / number of layers actually executed | Selected Host and launcher; see [usage](usage.md) |
-| Vendor tool paths and reference platform | [Environment setup](environment.md) |
-| Quantized accumulator / replication choices | [Quantized case](../cases/quantized-block/README.md) and [CU planner](../scripts/plan_quantized_cus.sh) |
-| Streaming-split reduction/control flags | [Case design](../cases/streaming-split/docs/design.md) |
+| Catalog names/configurations | [`designs/catalog.json`](../designs/catalog.json) and generated [`implementations.md`](implementations.md) |
+| Root model profile | [`Makefile`](../Makefile), [`common_hls_model_profile.tcl`](../tcl/common_hls_model_profile.tcl), [`model_config.hpp`](../include/model_config.hpp) |
+| Root FIFO/HLS overrides | [`common_hls_depth_config.tcl`](../tcl/common_hls_depth_config.tcl) and pipeline headers above |
+| Root replication/HBM mapping | [`conn_u50_8x64_dual.cfg`](../conn_u50_8x64_dual.cfg), [`conn_u50_8x64_dual_full_resident.cfg`](../conn_u50_8x64_dual_full_resident.cfg) |
+| Quantized block accumulator/replication | [`quantized-block/README.md`](../cases/quantized-block/README.md), [`plan_quantized_cus.sh`](../scripts/plan_quantized_cus.sh) |
+| Quantized full-layer configurations | [`quantized-layer/README.md`](../cases/quantized-layer/README.md) and catalog config labels |
+| Streaming-split flags | [`cases/streaming-split/docs/design.md`](../cases/streaming-split/docs/design.md) |
+| Vendor tools/platform | [Environment](environment.md) |
 
-A new profile needs a matching Host, compute/controller XO set and connectivity.
-A directory name or successful software compilation does not prove ABI matching.
+A profile needs matching Host, controller/compute XO set, and connectivity. A
+directory name or successful software compile does not prove ABI compatibility.
 
 ## Script families
 
-| Responsibility | Representative entry points |
+| Responsibility | Representative entry |
 | --- | --- |
-| Environment | [setup_environment.sh](../scripts/setup_environment.sh), [check_environment.sh](../scripts/check_environment.sh) |
-| Root HLS / bounded CoSim | [run_vitis_hls.sh](../scripts/run_vitis_hls.sh), [resident CoSim](../scripts/run_hls_resident_layer_cosim.sh), Makefile `hls_*` targets |
-| Resident and model-stack HW Emu | [resident builder](../scripts/build_vitis_8x64_resident_layer_hwemu.sh), [model builder](../scripts/run_vitis_8x64_qwen3b_e2e_build_tmux.sh), [model runner](../scripts/run_vitis_8x64_qwen3b_e2e_hwemu_tmux.sh) |
-| Diagnostic runs | [P/D context sweep](../scripts/run_vitis_8x64_pd_length_sweep_hwemu.sh), [checkpoint runner](../scripts/run_vitis_8x64_qwen3b_checkpoint_hwemu_tmux.sh) |
-| Case evaluation | [quantized regression](../scripts/run_quantized_block_regression.sh); streaming case-local flows |
-| Long-run status | [E2E status](../scripts/status_vitis_8x64_qwen3b_e2e.sh), [archive watcher](../scripts/watch_vitis_8x64_e2e_archive_tmux.sh) |
-| Evidence extraction and publication | `report_*`, `archive_*`, `verify_*`, `install_*`; see [release workflow](release-workflow.md) |
+| Environment | [`setup_environment.sh`](../scripts/setup_environment.sh), [`check_environment.sh`](../scripts/check_environment.sh) |
+| Catalog helper | [`cowave.py`](../scripts/cowave.py) |
+| Root HLS/CoSim | Makefile `hls_*`, [`run_hls_resident_layer_cosim.sh`](../scripts/run_hls_resident_layer_cosim.sh) |
+| Root resident HW-Emu | [`build_vitis_8x64_resident_layer_hwemu.sh`](../scripts/build_vitis_8x64_resident_layer_hwemu.sh), Qwen3B build/run wrappers |
+| Diagnostics | Q2.14 context sweep and checkpoint runners |
+| Case evaluation | [`run_quantized_block_regression.sh`](../scripts/run_quantized_block_regression.sh), streaming case-local scripts |
+| Evidence/release | `report_*`, `archive_*`, `verify_*`, `install_*`; see [release workflow](release-workflow.md) |
 
-The older `run_hls_*_nohup.sh` and `run_vitis_8x64_*_nohup.sh` names are
-launch wrappers, not architecture versions. Use the recipe for the desired
-evidence boundary instead of selecting a script only by its name.
+Script names containing `8x64`, `nohup`, or a dated profile identify command
+compatibility or a historical run; they are not architecture versions.
 
 ## Documents and artifacts
 
-Stable design belongs in architecture, design-space and runtime pages.
-Commands belong in usage and its scoped recipes. Measured interpretation
-belongs in experiments; raw logs, tables, source identities and checksums
-belong in immutable [result packages](../results/README.md).
-
-Generated HLS/Vivado projects, executables, XO/xclbin files, WDB files and model
-weights are external artifacts. Their identities can be recorded in a result
-manifest without storing the large files in Git.
+Stable mechanism belongs in [architecture](architecture.md), stable choices in
+[design space](design-space.md), commands in [usage](usage.md) and scoped
+guides, and measured interpretation in [experiments](experiments.md). Raw logs,
+tables, source identities, and checksums belong in immutable
+[result packages](../results/README.md). Generated HLS/Vivado projects,
+executables, XO/xclbin files, waveforms, checkpoints, and model weights remain
+external artifacts.

@@ -1,74 +1,82 @@
 # CoWave documentation
 
-[Repository](../README.md) | [Implementation map](implementations.md) |
-[Repository map](repository-map.md) | [Evidence](../results/README.md)
+[Repository](../README.md) | [Implementation catalog](implementations.md) |
+[Evidence index](../results/README.md) | [Reference and history](reference.md)
 
-The documentation has four layers: the root explains the research; design
-pages explain the architecture; reproduction pages specify executable flows;
-result packages preserve evidence. Implementation families, build profiles and
-test workloads are separate concepts.
+This is the short route through the repository. Read the pages in order when
+learning the design; use the family README or reproduction guide linked in the
+same row when running it. The [implementation catalog](implementations.md) is
+the authoritative source for names, configuration labels, legacy aliases, and
+evidence stages.
 
-Start with [Summary and example](summary-example.md) for a compact overview and
-a publication-only validation example.
+Start with [Summary and example](summary-example.md) for a compact overview
+and a publication-only validation example.
 
-## Read the research
+## Overview
 
-| Read in this order | Question answered |
+The root [README](../README.md) gives the research question and the selected
+results. The catalog separates an implementation family from a build
+configuration, workload, and immutable result package. Existing source and
+result paths remain valid compatibility identifiers.
+
+## Architecture
+
+[Architecture](architecture.md) explains the shared controller/stream-compute
+mechanism, HBM/KV ownership, packet boundaries, backpressure, and numeric
+differences. It does not repeat case-local commands or historical result
+tables.
+
+## Designs
+
+These pages are the canonical design entry points. Each has a direct
+reproduction link and states its source and evidence boundary:
+
+| Design | Source and direct reproduction |
 | --- | --- |
-| [Implementation catalog](implementations.md) | Which families exist, which profiles belong to them, and what do old names mean? |
-| [Architecture](architecture.md) | What is the common idea, and how does the resident implementation realize it? |
-| [Design space](design-space.md) | What alternatives exist for each compute, storage and scheduling decision? |
-| [Coarse-task runtime](coarse-task-runtime.md) | How do Host requests compose resident layer subgraphs and KV state? |
-| [Experiments](experiments.md) | What is demonstrated, at what dimensions and timing boundary? |
+| [`cowave-fix16-2-8-64`](designs/fix16.md) | Root `kernel/`, `include/`, `host/`; [resident recipe](reproduction-resident.md) |
+| [`cowave-streaming-split`](designs/streaming-split.md) | [`cases/streaming-split/`](../cases/streaming-split/); [case README](../cases/streaming-split/README.md) |
+| [`cowave-int4-4-8-128`](designs/quantized.md) | W4A4 complete-layer source; [quantized-layer README](../cases/quantized-layer/README.md) |
+| [`cowave-int8-4-4-128`](designs/quantized.md) | W8A8 complete-layer source; [quantized-layer README](../cases/quantized-layer/README.md) |
+| `cowave-quantized-blocks` | Isolated W4A4/W8A8 matrix probes; [component README](../cases/quantized-block/README.md) |
 
-## Find and reproduce an implementation
+The profile numbers count compute CUs and logical matrix dimensions. They do
+not count controller/status kernels, and DSP packing never multiplies the
+logical product count a second time. `Fix16` means signed `ap_fixed` source
+types, not IEEE FP16. The root build and kernel ABI retain their historical
+`8x64` paths.
 
-For an introduction to the tools, start with our
-[Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
-(Chinese), then follow [CoWave's environment setup](environment.md) for the
-2022.2 reproduction configuration.
+## Design space
 
-| Family / purpose | Source orientation | Execution entry |
-| --- | --- | --- |
-| Fix16 resident | [Root source map](repository-map.md#resident-source) | [Resident reproduction](reproduction-resident.md) |
-| Streaming split | [Case overview](../cases/streaming-split/README.md) | Case-local reproduction instructions |
-| Quantized matrix blocks | [Case overview](../cases/quantized-block/README.md) | Matrix regression and resource-planning instructions |
-| Operator / precision diagnostics | [Context-sweep definition](q214-pd-length-hwemu.md) | [Diagnostic recipes](reproduction-diagnostics.md) |
-| Small-shape protocol tests | [Runtime validation](coarse-task-runtime.md) | [Bounded reproduction](reproduction-resident.md) |
+[Design space](design-space.md) records candidates and tradeoffs: partitioning,
+array shape, packet granularity, attention state, scheduling, numeric formats,
+and quantized packing. The page states what is selected, what remains a
+component candidate, and which alternatives are not measured.
 
-Begin with [environment setup](environment.md). Each recipe identifies its
-source/profile and test scope. The publication-only checks inspect archived
-evidence; HLS/RTL and HW Emu reproduction require the vendor toolchain.
+## Evaluation
 
-## Read the evidence
+[Experiments](experiments.md) is the release-first evidence map. It uses one
+common vocabulary for prompt rows, context, layers, timing boundaries, logical
+work, and modeled efficiency. Immutable raw packages are indexed by
+[`results/README.md`](../results/README.md). The [dated quantized study](quantized-layer-progress.md)
+keeps its September 30 snapshot identity separate from the public
+`cases/quantized-layer/` source.
 
-[results/README.md](../results/README.md) indexes every immutable package.
-The [experimental report](experiments.md) explains which measurements can be
-compared and links to detailed tables. Historical and diagnostic data remain
-available in the [detailed experimental record](experiment-details.md) and
-[runtime history](coarse-task-runtime-history.md).
+## Getting started
 
-The [quantized full-layer progress report](quantized-layer-progress.md)
-separates the completed W4A4 comparison from ongoing W8A8, AXI, SiLU and RMS
-experiments. Its archived measurements can be reanalyzed without Vitis;
-promotion of the full-layer hardware source is a separate release step.
+1. Run the [environment preflight](environment.md).
+2. Pick a design above and follow its direct reproduction link, or use the
+   [usage route map](usage.md) for root, streaming-split, and quantized paths.
+3. Record the source/configuration identity, workload fields, timing boundary,
+   and result package with any measurement.
 
-A workload needs explicit prompt tokens, active query rows, sequence batch,
-layers and KV context. HW-Emu cycles differ from simulator wall time; modeled
-useful-MAC efficiency differs from PE occupancy. See the
-[catalog's notation](implementations.md#workload-notation) before comparing
-old P/D labels.
+The introductory [Vitis workflow tutorial](https://github.com/Reconfigurable-Computing/Vitis_workflow)
+remains the learning resource for Kernel, Host, emulation, and build flow.
+It is not a CoWave build dependency.
 
-## Maintain the repository
+## Reference and history
 
-- [Repository map](repository-map.md): module ownership, source locations,
-  build configuration and script categories.
-- [Release workflow](release-workflow.md): synchronize a reviewed development
-  snapshot, validate its source/evidence relationship, and publish a coherent
-  public update.
-- [Citation](../CITATION.cff) and [licenses](../LICENSE): authorship and reuse.
-
-Update stable design contracts when the implementation changes; keep run-local
-status in experiment evidence. Do not use a dated “next step” as the public
-definition of a design. Setup and commands belong in reproduction pages, and
-a measurement belongs to one explicitly identified experiment.
+[Reference and history](reference.md) points to the maintained coarse-task
+contract, source map, diagnostics, resident command history, Q2.14 report,
+long experiment record, and release workflow. Historical labels and numbered
+sections remain only where a cited result or command needs them; new design
+prose uses the catalog names and explicit workload fields.

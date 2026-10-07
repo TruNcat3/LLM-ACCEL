@@ -1,13 +1,15 @@
-# Diagnostics and Evidence Reproduction
+# Diagnostics and evidence reproduction
 
-[Usage navigator](usage.md) | [Fix16 resident recipes](reproduction-resident.md) |
+[Usage navigator](usage.md) | [`cowave-fix16-2-8-64` recipes](reproduction-resident.md) |
 [Environment](environment.md) | [Release workflow](release-workflow.md) |
-[Q2.14 report](q214-pd-length-hwemu.md)
+[Q2.14 report](q214-pd-length-hwemu.md) | [Reference/history](reference.md)
 
-This page collects bounded Fix16 operator diagnostics, historical Q2.14
-prefill/decode checks, and read-only evidence verification. These are scopes of
-the Fix16 resident family. The streaming-split and quantized matrix-block
-families keep their complete commands in their case READMEs.
+This page collects bounded `cowave-fix16-2-8-64` operator diagnostics,
+historical Q2.14 prefill/decode checks, and read-only evidence verification.
+These are scopes of the resident family, not additional designs. The
+streaming-split and quantized families keep their complete commands in their
+case READMEs; the complete-layer quantized profiles use
+[`cases/quantized-layer/README.md`](../cases/quantized-layer/README.md).
 
 ## Run the 8-row diagnostic prefill block
 
@@ -198,7 +200,8 @@ and SHA-256 identities for those external artifacts.
 
 ## Quantized candidate boundary
 
-The quantized route is intentionally separate from these Fix16 diagnostics:
+The isolated `cowave-quantized-blocks` route is intentionally separate from
+these Fix16 diagnostics:
 
 ```bash
 make test_quantized_cu_planner
@@ -207,6 +210,8 @@ scripts/run_quantized_block_regression.sh csim
 
 Use the [quantized matrix-block README](../cases/quantized-block/README.md)
 for W4A4/W8A8 HLS, single-bank variants, DSP diagnostics, synthesis, RTL
-CoSim, planner overrides, packet shapes, and resource estimates. Those tests
+CoSim, planner overrides, packet shapes, and resource estimates. Use the
+[public quantized-layer README](../cases/quantized-layer/README.md) for the
+complete-layer profiles and their current P66+D1 evidence. Component tests
 have no scale application, controller integration, full-model accuracy claim,
 or board measurement.

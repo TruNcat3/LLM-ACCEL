@@ -1,3 +1,10 @@
 # Preserve tool-generated publication evidence byte for byte. HLS/Vitis
 # reports contain significant verbatim formatting, including trailing spaces.
 results/**/raw/** -whitespace
+
+# Preserve the exact validated header bytes on first publication. These four
+# upstream headers end with a blank line; other whitespace checks stay active.
+cases/quantized-layer/include/compute_core_quantized_w4_unified.hpp whitespace=-blank-at-eof
+cases/quantized-layer/include/compute_core_quantized_w8_unified.hpp whitespace=-blank-at-eof
+cases/quantized-layer/include/quantized_layer_integration_w8_closed_loop.hpp whitespace=-blank-at-eof
+cases/quantized-layer/include/quantized_vector_closed_loop.hpp whitespace=-blank-at-eof

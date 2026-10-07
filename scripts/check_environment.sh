@@ -58,7 +58,7 @@ printf 'LLM-ACCEL environment preflight\n'
 printf '  mode=%s\n' "${mode}"
 printf '  repository=%s\n' "$PWD"
 
-for tool in bash make g++ git awk sed perl sha256sum rg python3; do
+for tool in bash make g++ git awk sed perl sha256sum rg python3 tclsh; do
     require_command "${tool}"
 done
 

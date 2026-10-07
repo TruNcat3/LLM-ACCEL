@@ -38,17 +38,19 @@ enumerates the publication source closure. Source equivalence is checked by
 The publication Makefile is a separate release entry point; it must not be
 represented as the historical build command unless it actually was one.
 
-Fix16 resident, Streaming split and Quantized matrix blocks remain separate
-source families. In particular, development W4A4/W8A8 full-layer controllers
-cannot be published as if the existing quantized block case already contained
-and validated them.
+The canonical families remain separate: `cowave-fix16-2-8-64`,
+`cowave-streaming-split`, `cowave-int4-4-8-128`, and
+`cowave-int8-4-4-128`. The public full-layer quantized source now lives in
+[`cases/quantized-layer/`](../cases/quantized-layer/) and has its own source
+closure. It must not be represented as the component `quantized-block` case,
+and it must not inherit the source identity of the September 30 W4 archive.
 
-An evidence-only development update may publish completed measurements before
-hardware source promotion, provided it explicitly identifies the missing
-source/build closure, retains the frozen source identities, and supplies the
-inputs and tools needed to reanalyze the reported result. Such an update does
-not add an executable implementation family or a hardware-reproduction claim.
-The [W4 full-layer comparison](quantized-layer-progress.md) follows this scope.
+Historical evidence-only updates may predate a matching public source closure;
+when they do, they must explicitly identify the missing source/build identity,
+retain frozen source identities, and supply the inputs and tools needed to
+reanalyze the result. The dated [W4 full-layer comparison](quantized-layer-progress.md)
+is such a historical record; the newer public quantized-layer evidence has its
+own package identity.
 
 ## Preserve and install evidence
 
@@ -81,10 +83,11 @@ equivalence, and checksum-only repeatability.
 
 ## Update the public narrative
 
-Update the implementation catalog and source map if ownership or integration
-changes. Put reproducible commands in the family recipe; put measured numbers
-in the result package and experimental report. Add every package to
-[results/README.md](../results/README.md).
+Update [`designs/catalog.json`](../designs/catalog.json) and the generated
+[implementation catalog](implementations.md), plus the source map, if
+ownership or integration changes. Put reproducible commands in the family
+recipe; put measured numbers in the result package and experimental report.
+Add every package to [results/README.md](../results/README.md).
 
 The root README shows selected strong or distinctive results with explicit
 scope. It should link to the complete evidence matrix rather than accumulating

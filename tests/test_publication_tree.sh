@@ -32,6 +32,12 @@ required_files=(
     docs/assets/resource-utilization.svg
     include/host_coarse_task_program.hpp
     tests/coarse_task_program_tb.cpp
+    designs/catalog.json
+    scripts/cowave.py
+    docs/designs/fix16.md
+    docs/designs/quantized.md
+    docs/designs/streaming-split.md
+    cases/quantized-layer/README.md
 )
 for path in "${required_files[@]}"; do
     if [ ! -s "${path}" ]; then
@@ -65,11 +71,10 @@ for path in "${required_executables[@]}"; do
 done
 
 for heading in \
-    '## Research contributions' \
-    '## Architecture at a glance' \
-    '## Implementation map' \
-    '## Key results' \
-    '## Reproduce the core validation' \
+    '## Architecture' \
+    '## Choose a design' \
+    '## Selected results' \
+    '## Get started' \
     '## Citation' \
     '## License'
 do
@@ -80,12 +85,12 @@ do
 done
 
 for public_name in \
-    'Fix16 resident' \
-    'Streaming split' \
-    'Quantized matrix blocks'
+    'cowave-fix16-2-8-64' \
+    'cowave-int4-4-8-128' \
+    'cowave-int8-4-4-128'
 do
-    if ! rg -F -q "**${public_name}**" README.md ||
-       ! rg -F -q "**${public_name}**" docs/implementations.md; then
+    if ! rg -F -q "${public_name}" README.md ||
+       ! rg -F -q "${public_name}" docs/implementations.md; then
         echo "README/catalog is missing implementation family: ${public_name}" >&2
         exit 65
     fi
@@ -98,7 +103,9 @@ for evidence_scope in 'Fix16 operator diagnostics' 'Small-shape protocol tests';
     fi
 done
 
-if ! rg -F -q 'Selected Fix16 resident results · current mainline overview' docs/assets/results-overview.svg ||
+if ! rg -F -q 'cowave-int4-4-8-128' docs/assets/results-overview.svg ||
+   ! rg -F -q 'cowave-int8-4-4-128' docs/assets/results-overview.svg ||
+   ! rg -F -q 'cowave-fix16-2-8-64' docs/assets/results-overview.svg ||
    ! rg -F -q 'Fix16 resident P8/G2' docs/assets/e2e-scaling.svg ||
    ! rg -F -q 'Fix16 operator diagnostics · query-block' docs/assets/pd-efficiency.svg ||
    ! rg -F -q 'Fix16 resident · whole-system' docs/assets/resource-utilization.svg; then
@@ -106,8 +113,8 @@ if ! rg -F -q 'Selected Fix16 resident results · current mainline overview' doc
     exit 65
 fi
 
-if ! rg -F -q '[Implementation map](docs/implementations.md)' README.md ||
-   ! rg -F -q '[Implementation map](implementations.md)' docs/README.md ||
+if ! rg -F -q '(docs/implementations.md)' README.md ||
+   ! rg -F -q '(implementations.md)' docs/README.md ||
    ! rg -F -q '## Legacy Label Migration' docs/implementations.md; then
     echo "Canonical implementation catalog is not linked or complete" >&2
     exit 65
@@ -128,7 +135,7 @@ if rg -F -q '[R1]' docs/assets/e2e-scaling.svg docs/assets/resource-utilization.
 fi
 
 readme_lines="$(wc -l < README.md)"
-if [ "${readme_lines}" -gt 260 ]; then
+if [ "${readme_lines}" -gt 160 ]; then
     echo "Root README exceeded the concise publication budget: ${readme_lines} lines" >&2
     exit 65
 fi
@@ -152,14 +159,13 @@ if [ "$(rg -c '^!\[' README.md)" -ne 1 ] ||
     exit 65
 fi
 
-if [ "$(rg -o '>Fix16<' docs/assets/results-overview.svg | wc -l)" -ne 4 ] ||
-   rg -q '>R1<' docs/assets/results-overview.svg ||
+if rg -q '>R1<' docs/assets/results-overview.svg ||
    ! rg -F -q 'workload D1' docs/assets/pd-efficiency.svg; then
-    echo "Consolidated root figure must contain exactly four Fix16 panels and retain workload D1" >&2
+    echo "Figures must distinguish design names from workload D1" >&2
     exit 65
 fi
 
-for metric in '119.652' '58.424%' '189.285' '92.424%' '1.948x' '+2.67%' '+1.520 pp' '80.0%'; do
+for metric in '119.652' '58.424%' '189.285' '92.424%'; do
     if ! rg -F -q "${metric}" docs/assets/results-overview.svg; then
         echo "Consolidated result figure is missing released metric: ${metric}" >&2
         exit 65
@@ -204,7 +210,9 @@ fi
 mapfile -t markdown_files < <(
     find . -type f -name '*.md' -not -path './.git/*' -print | sort
 )
-if rg -n -P '\p{Han}' "${markdown_files[@]}" CITATION.cff; then
+# Match the Han script itself. New PCRE Unicode tables include the middle-dot
+# punctuation used in English navigation in Han's script extensions.
+if rg -n -P '\p{sc=Han}' "${markdown_files[@]}" CITATION.cff; then
     echo "Publication prose must remain English" >&2
     exit 65
 fi

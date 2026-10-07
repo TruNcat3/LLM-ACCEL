@@ -4,7 +4,7 @@
 [Repository map](../../docs/repository-map.md) | [Design space](../../docs/design-space.md) |
 [Environment](../../docs/environment.md) | [Usage](../../docs/usage.md)
 
-This case is the third public implementation family. It contains isolated
+This case is `cowave-quantized-blocks`, a component study. It contains isolated
 controller-facing integer matrix blocks for resource and protocol study. The
 blocks are not connected to the Fix16 resident controller, its HBM scheduler,
 or its end-to-end runtime.
