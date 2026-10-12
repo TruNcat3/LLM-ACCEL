@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "quantized-layer-w4-integrated-rms2-ooo16",
+  "template": "quantized-layer-w4",
+  "parameters": {"profile": "integrated", "rms_lanes": 2, "silu_lanes": 4, "weight_read_outstanding": 16, "attention_wave": 0, "prefill_ffn_overlap": 1},
+  "workload": {"prefill_tokens": 66, "block_size": 8, "weights": "zero"},
+  "target": "hw_emu",
+  "frequency_mhz": 200
+}

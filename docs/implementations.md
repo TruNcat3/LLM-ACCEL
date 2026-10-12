@@ -39,6 +39,10 @@ A base name identifies geometry and arithmetic. A configuration adds mechanisms 
 
 Quantized entries select the existing `integrated` profile plus the explicit overrides above. The frozen resolver, headers and per-case CFLAGS define the remaining parameters (FIFO depths, accumulators, packing, etc.); see the [source provenance and reproduction recipe](../cases/quantized-layer/README.md). The Fix16 entry groups resident-Q2.14 evidence with its individual historical source manifests; it does not imply that all runs used identical binaries.
 
+## Configuration and instance generation
+
+Released designs can be materialized through [`tools/designs/instantiate.py`](../tools/designs/instantiate.py). The flow is configuration JSON → fixed template registry → frozen source instance → phase build wrapper. The initial templates are `quantized-layer-w4` (4 × 8 × 128) and `quantized-layer-w8` (4 × 4 × 128). This boundary centralizes existing profile controls while deliberately rejecting unsupported arbitrary CU/PE/port combinations. The catalog resolver remains the compatibility interface for named released points.
+
 ```bash
 python3 scripts/cowave.py list
 python3 scripts/cowave.py show cowave-int4-4-8-128 integrated-rms2-silu4-prefill-overlap

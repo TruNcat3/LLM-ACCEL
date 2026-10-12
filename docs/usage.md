@@ -188,3 +188,26 @@ make verify_result_checksums
 Use [diagnostics](reproduction-diagnostics.md) for Q2.14 and archive-specific
 verification, and [reference/history](reference.md) for the complete command
 records that are intentionally kept out of this short route.
+# Configuration-driven design instances
+
+The public case now exposes the same reproducible configuration boundary as
+the development workspace. A JSON configuration is validated against a fixed
+template registry, then materialized into an immutable source instance before
+HLS/Vitis is called:
+
+```bash
+python3 -B tools/designs/instantiate.py validate \
+  configs/designs/quantized-layer-w4-pipeline.json
+python3 -B tools/designs/instantiate.py instantiate \
+  configs/designs/quantized-layer-w4-pipeline.json \
+  --output /tmp/cowave-instances/w4-pipeline
+python3 -B tools/designs/instantiate.py verify \
+  /tmp/cowave-instances/w4-pipeline
+```
+
+The first templates keep the released geometries: W4A4 is four `8x128`
+compute CUs and W8A8 is four `4x128` compute CUs. Profile controls are
+validated; arbitrary CU counts, PE shapes and stream/port topologies are not
+accepted by this first template set. The generated instance records the
+resolved configuration, source hashes, template identity and a phase-compatible
+`build` wrapper. Existing catalog `point` and `build` commands remain valid.

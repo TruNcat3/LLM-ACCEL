@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "quantized-layer-w4": {
+      "precision": "w4",
+      "geometry": {"compute_cus": 4, "rows": 8, "columns": 128},
+      "case_root": "cases/quantized-layer",
+      "build_script": "scripts/build_vitis_quantized_w4_layer.sh",
+      "connection": "config/cowave-int4-4-8-128.cfg"
+    },
+    "quantized-layer-w8": {
+      "precision": "w8",
+      "geometry": {"compute_cus": 4, "rows": 4, "columns": 128},
+      "case_root": "cases/quantized-layer",
+      "build_script": "scripts/build_vitis_quantized_w8_layer.sh",
+      "connection": "config/cowave-int8-4-4-128.cfg"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "queue_id": "quantized-w4-replay-20261012",
+  "main_base": "pipeline",
+  "comparison_base": "integrated-rms2-ooo16",
+  "families": ["layer", "batch", "request", "attention"],
+  "gates": ["CSim", "CSynth", "deadlock-enabled RTL CoSim", "production numerical comparison", "IP export", "HW Emu"],
+  "note": "Pipeline is the deployable mainline; integrated-rms2-ooo16 is a timing-focused resource-overflow comparison."
+}
