@@ -8,7 +8,9 @@
 // One descriptor describes one independent decode sequence.  The descriptor
 // is intentionally separate from quantized_layer_task_word_t: the latter is a
 // per-wave compute ABI and remains unchanged for existing xclbins.
-constexpr unsigned int QUANTIZED_BATCH_DECODE_MAX = 8;
+#ifndef QUANTIZED_BATCH_DECODE_MAX
+#define QUANTIZED_BATCH_DECODE_MAX 8
+#endif
 constexpr unsigned int QUANTIZED_BATCH_DECODE_DESCRIPTOR_BITS = 512;
 using quantized_batch_decode_word_t = ap_uint<512>;
 
@@ -28,8 +30,17 @@ constexpr unsigned int QUANTIZED_BATCH_DECODE_KV_LAYER_WORDS =
 constexpr unsigned int QUANTIZED_BATCH_DECODE_FULL_KV_WORDS =
     NUM_LAYERS * QUANTIZED_BATCH_DECODE_KV_LAYER_WORDS;
 
+static_assert(QUANTIZED_BATCH_DECODE_MAX == 1 ||
+                  QUANTIZED_BATCH_DECODE_MAX == 8,
+              "batch decode capacity must be one or eight descriptor slots");
+#if defined(QUANTIZED_LAYER_INTEGRATED_DECODE_B1) && \
+    QUANTIZED_LAYER_INTEGRATED_DECODE_B1
+static_assert(QUANTIZED_BATCH_DECODE_MAX == 1,
+              "single-request integrated decode requires one descriptor slot");
+#else
 static_assert(QUANTIZED_BATCH_DECODE_MAX == 8,
               "batch decode ABI has eight descriptor slots");
+#endif
 static_assert(QUANTIZED_BATCH_DECODE_HIDDEN_WORDS > 0,
               "batch decode hidden rows must contain a word");
 static_assert(QUANTIZED_BATCH_DECODE_KV_WORDS > 0,

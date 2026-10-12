@@ -176,9 +176,9 @@ quantized_layer_profile_apply() {
         profile="${requested_profile}"
     fi
     case "${profile}" in
-        legacy|attention|attention_wave|pipeline|integrated) ;;
+        legacy|attention|attention_wave|pipeline|integrated|integrated_b1) ;;
         *) quantized_layer_profile_die \
-            "QUANTIZED_LAYER_PROFILE must be legacy, attention, attention_wave, pipeline, or integrated"; return 2 ;;
+            "QUANTIZED_LAYER_PROFILE must be legacy, attention, attention_wave, pipeline, integrated, or integrated_b1"; return 2 ;;
     esac
     variant=baseline
     [[ "${profile}" == legacy ]] || variant=combined4
@@ -246,7 +246,7 @@ quantized_layer_profile_apply() {
     esac
     if [[ "${attention_wave_requested}" == 1 && "${profile}" == legacy ]]; then
         quantized_layer_profile_die \
-            "QUANTIZED_LAYER_ATTENTION_WAVE override is only valid with attention, attention_wave, pipeline, or integrated"; return 2
+            "QUANTIZED_LAYER_ATTENTION_WAVE override is only valid with attention, attention_wave, pipeline, integrated, or integrated_b1"; return 2
     fi
     if [[ "${QUANTIZED_LAYER_PREFILL_FFN_OVERLAP_REQUESTED:-1}" == 0 ]]; then
         requested_prefill_ffn_overlap=""
@@ -261,9 +261,9 @@ quantized_layer_profile_apply() {
     esac
     if [[ "${prefill_ffn_overlap_requested}" == 1 &&
           "${prefill_ffn_overlap}" == 1 &&
-          "${profile}" != pipeline && "${profile}" != integrated ]]; then
+          "${profile}" != pipeline && "${profile}" != integrated && "${profile}" != integrated_b1 ]]; then
         quantized_layer_profile_die \
-            "QUANTIZED_LAYER_PREFILL_FFN_OVERLAP=1 is only valid with pipeline or integrated profile"; return 2
+            "QUANTIZED_LAYER_PREFILL_FFN_OVERLAP=1 is only valid with pipeline, integrated, or integrated_b1 profile"; return 2
     fi
 
     # Every value is emitted for every profile. This prevents a stale macro
@@ -291,6 +291,8 @@ quantized_layer_profile_apply() {
     values[QUANTIZED_DECODE_ROWS_ADAPTER_ACTIVATION_FIFO_DEPTH]=2
     values[QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING]=16
     values[QUANTIZED_BATCH_WEIGHT_MAX_READ_BURST]=16
+    values[QUANTIZED_BATCH_DECODE_MAX]=8
+    values[QUANTIZED_LAYER_INTEGRATED_DECODE_B1]=0
     values[CU_NL_LANES_CONFIG]="${silu_lanes}"
     values[CU_RMS_LANES_CONFIG]="${rms_lanes}"
     [[ "${precision}" == w8 ]] && values[QUANTIZED_ALIGNMENT_W8]=1
@@ -305,11 +307,11 @@ quantized_layer_profile_apply() {
         values[QUANTIZED_ATTENTION_WAVE_PIPELINE]=0
     fi
     [[ "${profile}" == attention_wave ]] && values[QUANTIZED_ATTENTION_WAVE_PIPELINE]=1
-    if [[ "${profile}" == pipeline || "${profile}" == integrated ]]; then
+    if [[ "${profile}" == pipeline || "${profile}" == integrated || "${profile}" == integrated_b1 ]]; then
         values[QUANTIZED_BLOCK_PIPELINE]=1
         values[QUANTIZED_ASYNC_COMPUTE]=1
     fi
-    if [[ "${profile}" == integrated ]]; then
+    if [[ "${profile}" == integrated || "${profile}" == integrated_b1 ]]; then
         values[AP_INT_MAX_W]=4096
         values[QUANTIZED_LAYER_INTEGRATED_DECODE]=1
         values[QUANTIZED_DECODE_ROWS_MERGED]=1
@@ -323,6 +325,10 @@ quantized_layer_profile_apply() {
         [[ "${precision}" == w8 ]] && values[QDR_BLOCK_OPS]=0
         values[QUANTIZED_DECODE_ROWS_ADAPTER_ACTIVATION_FIFO_DEPTH]=8
         values[QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING]=32
+    fi
+    if [[ "${profile}" == integrated_b1 ]]; then
+        values[QUANTIZED_BATCH_DECODE_MAX]=1
+        values[QUANTIZED_LAYER_INTEGRATED_DECODE_B1]=1
     fi
     [[ "${weight_outstanding_requested}" == 1 ]] && \
         values[QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING]="${weight_outstanding}"
@@ -357,7 +363,10 @@ quantized_layer_profile_apply() {
         CU_NL_LANES_CONFIG
         CU_RMS_LANES_CONFIG
     )
-    [[ "${profile}" == integrated ]] && names+=(AP_INT_MAX_W)
+    if [[ "${profile}" == integrated_b1 ]]; then
+        names+=(QUANTIZED_BATCH_DECODE_MAX QUANTIZED_LAYER_INTEGRATED_DECODE_B1)
+    fi
+    [[ "${profile}" == integrated || "${profile}" == integrated_b1 ]] && names+=(AP_INT_MAX_W)
     [[ "${precision}" == w8 ]] && names+=(QUANTIZED_ALIGNMENT_W8)
     for name in "${names[@]}"; do
         value="${values[${name}]}"

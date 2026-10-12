@@ -128,7 +128,7 @@ for precision in "${precisions[@]}"; do
         matrix=kernel/mm_stream_4x128_int8x8_block.cpp
         block=4
     fi
-    [[ "$profile" != integrated ]] || matrix=kernel/quantized_decode_rows.cpp
+    [[ "$profile" != integrated && "$profile" != integrated_b1 ]] || matrix=kernel/quantized_decode_rows.cpp
     for shape in small standard; do
         model_flags=()
         [[ "$shape" != small ]] || model_flags=(-DQWEN_TEST_SMALL)

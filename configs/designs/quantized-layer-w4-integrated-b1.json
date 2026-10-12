@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "quantized-layer-w4-integrated-b1",
+  "template": "quantized-layer-w4",
+  "parameters": {
+    "profile": "integrated_b1",
+    "rms_lanes": 2,
+    "silu_lanes": 4,
+    "weight_read_outstanding": 32,
+    "attention_wave": 0,
+    "prefill_ffn_overlap": 1
+  },
+  "workload": {"prefill_tokens": 66, "block_size": 8, "weights": "zero"},
+  "target": "hw_emu",
+  "frequency_mhz": 200
+}

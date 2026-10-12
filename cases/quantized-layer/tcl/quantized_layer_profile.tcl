@@ -52,8 +52,8 @@ proc quantized_layer_profile_resolve {precision} {
     } else {
         set profile $requested_profile
     }
-    if {$profile ni {legacy attention attention_wave pipeline integrated}} {
-        error "QUANTIZED_LAYER_PROFILE must be legacy, attention, attention_wave, pipeline, or integrated"
+    if {$profile ni {legacy attention attention_wave pipeline integrated integrated_b1}} {
+        error "QUANTIZED_LAYER_PROFILE must be legacy, attention, attention_wave, pipeline, integrated, or integrated_b1"
     }
     set variant baseline
     if {$profile ne "legacy"} { set variant combined4 }
@@ -69,15 +69,15 @@ proc quantized_layer_profile_resolve {precision} {
         error "QUANTIZED_LAYER_ATTENTION_WAVE must be 0 or 1"
     }
     if {$requested_attention_wave ne "" && $profile eq "legacy"} {
-        error "QUANTIZED_LAYER_ATTENTION_WAVE override is only valid with attention, attention_wave, pipeline, or integrated"
+        error "QUANTIZED_LAYER_ATTENTION_WAVE override is only valid with attention, attention_wave, pipeline, integrated, or integrated_b1"
     }
     if {$requested_prefill_ffn_overlap ne "" &&
         $requested_prefill_ffn_overlap ni {0 1}} {
         error "QUANTIZED_LAYER_PREFILL_FFN_OVERLAP must be 0 or 1"
     }
     if {$requested_prefill_ffn_overlap eq "1" &&
-        $profile ni {pipeline integrated}} {
-        error "QUANTIZED_LAYER_PREFILL_FFN_OVERLAP=1 is only valid with pipeline or integrated profile"
+        $profile ni {pipeline integrated integrated_b1}} {
+        error "QUANTIZED_LAYER_PREFILL_FFN_OVERLAP=1 is only valid with pipeline, integrated, or integrated_b1 profile"
     }
 
     set values [dict create \
@@ -103,6 +103,8 @@ proc quantized_layer_profile_resolve {precision} {
         QUANTIZED_DECODE_ROWS_ADAPTER_ACTIVATION_FIFO_DEPTH 2 \
         QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING 16 \
         QUANTIZED_BATCH_WEIGHT_MAX_READ_BURST 16 \
+        QUANTIZED_BATCH_DECODE_MAX 8 \
+        QUANTIZED_LAYER_INTEGRATED_DECODE_B1 0 \
         CU_NL_LANES_CONFIG $requested_silu_lanes \
         CU_RMS_LANES_CONFIG $requested_rms_lanes]
     if {$precision eq "w8"} { dict set values QUANTIZED_ALIGNMENT_W8 1 }
@@ -120,11 +122,11 @@ proc quantized_layer_profile_resolve {precision} {
     if {$profile eq "attention_wave"} {
         dict set values QUANTIZED_ATTENTION_WAVE_PIPELINE 1
     }
-    if {$profile in {pipeline integrated}} {
+    if {$profile in {pipeline integrated integrated_b1}} {
         dict set values QUANTIZED_BLOCK_PIPELINE 1
         dict set values QUANTIZED_ASYNC_COMPUTE 1
     }
-    if {$profile eq "integrated"} {
+    if {$profile in {integrated integrated_b1}} {
         foreach {name value} {
             AP_INT_MAX_W 4096
             QUANTIZED_LAYER_INTEGRATED_DECODE 1
@@ -140,6 +142,10 @@ proc quantized_layer_profile_resolve {precision} {
             QUANTIZED_BATCH_WEIGHT_MAX_READ_BURST 16
         } { dict set values $name $value }
         dict set values QDR_BLOCK_OPS [expr {$precision eq "w4" ? 1 : 0}]
+    }
+    if {$profile eq "integrated_b1"} {
+        dict set values QUANTIZED_BATCH_DECODE_MAX 1
+        dict set values QUANTIZED_LAYER_INTEGRATED_DECODE_B1 1
     }
     if {$requested_weight_outstanding ne ""} {
         dict set values QUANTIZED_BATCH_WEIGHT_READ_OUTSTANDING $requested_weight_outstanding
@@ -167,6 +173,10 @@ proc quantized_layer_profile_cflags {precision} {
     set resolved [quantized_layer_profile_resolve $precision]
     set flags {}
     foreach name [dict keys [dict get $resolved values]] {
+        if {$name in {QUANTIZED_BATCH_DECODE_MAX QUANTIZED_LAYER_INTEGRATED_DECODE_B1} &&
+            [dict get $resolved profile] ne "integrated_b1"} {
+            continue
+        }
         lappend flags "-D${name}=[dict get [dict get $resolved values] $name]"
     }
     return [join $flags " "]
