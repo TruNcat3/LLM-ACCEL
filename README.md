@@ -16,6 +16,10 @@ New to Vitis? Start with our [Vitis workflow tutorial](https://github.com/Reconf
 
 Choose parameters with the [design-point generator](docs/usage.md#design-point-generator).
 It resolves configurations, source/evidence links and reproducible commands from one catalog.
+For a frozen source instance, use the configuration-driven
+[`tools/designs/instantiate.py`](tools/designs/instantiate.py) flow; the
+published W4 replay manifest keeps `pipeline` as the deployable mainline and
+`integrated-rms2-ooo16` as a resource-focused comparison.
 
 ## Architecture
 
@@ -90,6 +94,12 @@ cd LLM-ACCEL
 python3 scripts/cowave.py list
 make test_design_catalog
 make verify_result_checksums
+
+# Materialize a new W4 source instance without starting a build.
+python3 -B tools/designs/instantiate.py instantiate \
+  configs/designs/quantized-layer-w4-pipeline.json \
+  --output /tmp/cowave-w4-pipeline-instance
+python3 -B tools/designs/instantiate.py verify /tmp/cowave-w4-pipeline-instance
 
 # Resolve a quantized build without running vendor tools.
 python3 scripts/cowave.py build cowave-int4-4-8-128 \
