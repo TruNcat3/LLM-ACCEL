@@ -19,16 +19,18 @@ def write_json(path, value): path.write_text(json.dumps(value, indent=2, sort_ke
 def fail(msg): raise ValueError(msg)
 
 def validate(raw):
-    if set(raw) != {"schema_version", "id", "template", "parameters", "workload", "target", "frequency_mhz"} or raw["schema_version"] != 1: fail("invalid configuration keys or schema")
+    if not isinstance(raw, dict) or set(raw) != {"schema_version", "id", "template", "parameters", "workload", "target", "frequency_mhz"} or raw["schema_version"] != 1 or not isinstance(raw["id"], str) or not raw["id"]: fail("invalid configuration keys or schema")
     registry = json.loads(REGISTRY.read_text())
     template = registry["templates"].get(raw["template"])
     if template is None: fail("unsupported template")
     p, w = raw["parameters"], raw["workload"]
-    if set(p) != PARAM_KEYS or set(w) != {"prefill_tokens", "block_size", "weights"}: fail("unknown or missing parameter/workload key")
+    if not isinstance(p, dict) or not isinstance(w, dict) or set(p) != PARAM_KEYS or set(w) != {"prefill_tokens", "block_size", "weights"}: fail("unknown or missing parameter/workload key")
     if p["profile"] not in {"legacy", "attention", "attention_wave", "pipeline", "integrated"}: fail("unsupported profile")
     if p["rms_lanes"] not in (1, 2, 4) or p["silu_lanes"] not in (1, 2, 4): fail("invalid lane count")
     if p["weight_read_outstanding"] not in (16, 32) or p["attention_wave"] not in (0, 1) or p["prefill_ffn_overlap"] not in (0, 1): fail("invalid profile control")
     if p["profile"] == "legacy" and (p["attention_wave"] or p["prefill_ffn_overlap"]): fail("legacy cannot enable overlap controls")
+    if p["attention_wave"] and p["profile"] == "legacy": fail("attention_wave requires a non-legacy profile")
+    if p["prefill_ffn_overlap"] and p["profile"] not in {"pipeline", "integrated"}: fail("prefill_ffn_overlap requires pipeline or integrated profile")
     if not 1 <= w["prefill_tokens"] <= 2047 or w["weights"] not in {"zero", "random"}: fail("invalid workload")
     if w["block_size"] != (8 if template["precision"] == "w4" else 4): fail("block size does not match template")
     if raw["target"] != "hw_emu" or raw["frequency_mhz"] != 200: fail("only hw_emu at 200 MHz is supported")
@@ -79,5 +81,5 @@ def main():
         elif a.cmd == "instantiate": materialize(a.config.resolve(), a.output.resolve()); print(json.dumps({"status": "ok", "output": str(a.output.resolve())}, sort_keys=True))
         else: verify(a.instance.resolve()); print('{"status": "ok"}')
         return 0
-    except (ValueError, OSError, KeyError, json.JSONDecodeError) as e: print(f"instantiate: {e}", file=__import__("sys").stderr); return 2
+    except (ValueError, OSError, KeyError, TypeError, json.JSONDecodeError) as e: print(f"instantiate: {e}", file=__import__("sys").stderr); return 2
 if __name__ == "__main__": raise SystemExit(main())
