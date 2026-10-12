@@ -16,6 +16,7 @@ LLM-ACCEL/
 |  |- streaming-split/                    cowave-streaming-split
 |  |- quantized-block/                    W4A4/W8A8 component blocks
 |  `- quantized-layer/                    public full-layer quantized source
+|- configs/, templates/, tools/             configuration → template → instance generation
 |- Makefile, conn_*.cfg, tcl/, scripts/   build and evaluation entry points
 |- tests/                                  root contracts and bounded fixtures
 |- results/                                immutable evidence packages
@@ -60,6 +61,8 @@ family README, source manifest, and command helper to establish closure.
 | Setting | Authority |
 | --- | --- |
 | Catalog names/configurations | [`designs/catalog.json`](../designs/catalog.json) and generated [`implementations.md`](implementations.md) |
+| Instance configurations | [`configs/designs/`](../configs/designs/) and [`templates/designs/registry.json`](../templates/designs/registry.json) |
+| Instance materialization | [`tools/designs/instantiate.py`](../tools/designs/instantiate.py); generated source identities are local to each instance |
 | Root model profile | [`Makefile`](../Makefile), [`common_hls_model_profile.tcl`](../tcl/common_hls_model_profile.tcl), [`model_config.hpp`](../include/model_config.hpp) |
 | Root FIFO/HLS overrides | [`common_hls_depth_config.tcl`](../tcl/common_hls_depth_config.tcl) and pipeline headers above |
 | Root replication/HBM mapping | [`conn_u50_8x64_dual.cfg`](../conn_u50_8x64_dual.cfg), [`conn_u50_8x64_dual_full_resident.cfg`](../conn_u50_8x64_dual_full_resident.cfg) |
