@@ -5,5 +5,10 @@
   "comparison_base": "integrated-rms2-ooo16",
   "families": ["layer", "batch", "request", "attention"],
   "gates": ["CSim", "CSynth", "deadlock-enabled RTL CoSim", "production numerical comparison", "IP export", "HW Emu"],
-  "note": "Pipeline is the deployable mainline; integrated-rms2-ooo16 is a timing-focused resource-overflow comparison."
+  "resource_policy": {
+    "hard": ["BRAM_18K", "DSP"],
+    "policy": ["LUT", "FF"],
+    "capacity_basis": "matching HLS report raw device availability; platform/interconnect reservation is not yet deducted"
+  },
+  "note": "Pipeline is the deployable mainline; integrated-rms2-ooo16 is a timing-focused resource-overflow comparison and cannot pass the BRAM hard gate in its current full-system form."
 }

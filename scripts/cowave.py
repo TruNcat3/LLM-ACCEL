@@ -487,6 +487,7 @@ def render(catalog):
         "`cowave-<arithmetic>-<compute CUs>-<logical rows>-<output columns>`", "",
         "For example, `cowave-int4-4-8-128` has four compute CUs, each with an 8×128 logical matrix array. Controller/status kernels are not counted. Rows are physical query capacity, not sequence batch or prompt length. Longer prompts are processed in blocks.", "",
         "`fix16` means signed fixed point, not IEEE FP16. `int4` and `int8` mean W4A4 and W8A8 matrix operands; vector, scaling and KV arithmetic are specified separately. DSP packing is already included in logical array capacity. It is not an extra throughput multiplier.", "",
+        "Resource admission treats BRAM18K and DSP as hard limits from the matching HLS report. LUT/FF are reported separately as policy warnings because Vivado may merge or remove logic; passing the HLS hard-resource check still does not prove platform-reserved fit or routed timing.", "",
         "## Designs and reproduction", "",
         "| Design | Logical MAC/cycle | Implementation scope | Capability | Read / reproduce |", "| --- | ---: | --- | --- | --- |",
     ]
